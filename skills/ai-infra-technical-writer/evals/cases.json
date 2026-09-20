@@ -16,6 +16,12 @@
       "id": "ai-infra-technical-writer-3",
       "input": "只解释 hidden_states 是什么，三句话即可。",
       "acceptance": "简短解释，不强制长文结构。"
+    },
+    {
+      "id": "ai-infra-technical-writer-4",
+      "input": "读取 fixtures/scheduler-task.md，完成其中的完整教程任务。",
+      "fixture": "fixtures/scheduler-task.md",
+      "acceptance": "toy-r1 为唯一实现依据；两次 Prefill 分别处理 ABC 和 DE，中间 chunk 不输出 unused；之后 Decode 处理 y1 并输出 y2；最终 processed=6、output=[y1,y2]、done=True，不再为 y2 执行一次模型计算。不得把 processed 说成真实 KV 容量，不编造 NPU 或网络实现，不把 toy-r2 草案写成现有行为。文章满足完整教程与读者要求，允许少量篇幅偏差但不得退化为提纲。"
     }
   ]
 }
