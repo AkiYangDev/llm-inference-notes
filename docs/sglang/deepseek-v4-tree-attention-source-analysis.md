@@ -1377,4 +1377,346 @@ speculative KV commit
 如果未来真正允许：
 
 ~~~text
-topk >
+topk > 1
+~~~
+
+每个 candidate node 都必须保证：
+
+~~~text
+Candidate identity
+        │
+        ├─ position
+        ├─ SWA visible ancestors
+        ├─ compressed-KV visible ancestors
+        ├─ indexer candidate history
+        └─ post-accept commit mapping
+~~~
+
+都属于同一条 root-to-node path。
+
+所以最准确的结论是：
+
+> **DeepSeek-V4 `topk=1` 是一个端到端 capability gate。Attention backend 是当前已经能从源码确认的阻塞点之一，但完整支持 topk>1 还要求 DSV4 的 KV、compression、indexer、state 与 commit pipeline 一起变成 tree-aware。**
+
+### DSpark 的 `topk=1` 又是另一层问题
+
+DSpark 在：
+
+[`speculative_hook.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/arg_groups/speculative_hook.py)
+
+会把：
+
+~~~text
+speculative_num_steps = 1
+speculative_eagle_topk = 1
+~~~
+
+固定下来。
+
+而 DSpark Worker 当前也明确依赖：
+
+~~~text
+Chain layout only
+~~~
+
+这属于 DSpark 算法/runtime layout 自己的 chain contract。
+
+所以不要把：
+
+~~~text
+DeepSeek-V4 EAGLE topk=1
+~~~
+
+和：
+
+~~~text
+DSpark topk=1
+~~~
+
+当成同一个 guard。
+
+两者最终都表现为 chain-only，但约束来源不同。
+
+---
+
+## 八、真正应该建立的是 Tree Verify 的五个 Correctness Invariant
+
+到这里，Tree Attention 可以不再被理解成“一张特殊 mask”，而应该被理解成一组必须同时成立的 invariant。
+
+### 1. Candidate Identity
+
+对于 Verify row `i`：
+
+~~~text
+draft_token[i]
+~~~
+
+必须就是这个 row 所代表的 candidate node。
+
+### 2. Position Identity
+
+对于 node `v`：
+
+~~~text
+position(v)
+=
+KVReadyPrefixLen + depth(v)
+~~~
+
+Sibling：
+
+~~~text
+same depth
+→ same position
+~~~
+
+### 3. Visibility Identity
+
+对于 node `v`：
+
+~~~text
+visible(v)
+=
+KV-ready committed prefix
+∪
+ancestors(v)
+∪
+{v}
+~~~
+
+注意这里严格冝的是：
+
+~~~text
+KV-ready prefix
+~~~
+
+而不是把当前 terminal bonus 误算进 prefix。
+
+因为当前 bonus 是下一轮 root。
+
+### 4. Traversal Identity
+
+~~~text
+retrieve_next_token
+retrieve_next_sibling
+retrieve_index
+~~~
+
+必须描述和 Attention Visibility 相同的 Tree。
+
+否则可能出现：
+
+~~~text
+Attention 按 Tree A 算 logits
+
+Accept 按 Tree B 遍历
+~~~
+
+这种最难发现的 silent correctness bug。
+
+### 5. KV / Row Identity
+
+同一个 Verify row `i` 的：
+
+~~~text
+draft_token[i]
+positions[i]
+tree visibility[i]
+retrieve_index[i]
+out_cache_loc[i]
+~~~
+
+必须共同指向同一个 candidate identity。
+
+可以把整个 contract 画成：
+
+~~~mermaid
+flowchart TD
+    A[Draft Expansion Pool] --> B[Candidate Selection]
+    B --> C[Compact Verify Rows]
+
+    C --> D[Token Identity]
+    C --> E[Parent Topology]
+
+    E --> F[Tree Position]
+    E --> G[Attention Visibility]
+    E --> H[Retrieve Links]
+
+    D --> I[EagleVerifyInput]
+    F --> I
+    G --> I
+    H --> I
+
+    I --> J[Target Verify Attention]
+
+    J --> K{Backend Representation}
+    K --> L[Direct Custom Mask]
+    K --> M[Per-query KV Page Table]
+    K --> N[Prefix/Suffix Cascade]
+    K --> O[Topology Metadata]
+
+    L --> P[Target Logits per Verify Row]
+    M --> P
+    N --> P
+    O --> P
+
+    P --> Q[Tree Traversal / Accept]
+    H --> Q
+
+    Q --> R[accept_index / accept_lens]
+    R --> S[KV Commit / Compact]
+    S --> T[New KV-ready Boundary]
+    T --> U[Terminal Bonus = Next Round Root]
+~~~
+
+这张图里最值得记住的是：
+
+~~~text
+Candidate Tree
+=
+Position Tree
+=
+Visibility Tree
+=
+Traversal Tree
+=
+KV Identity
+~~~
+
+它们不是五棵树。
+
+而是：
+
+> **同一棵 speculative future tree 在不同子系统中的五种投影。**
+
+---
+
+## 结语
+
+现在可以重新回答标题中的问题：
+
+> **Verify 为什么需要 Tree Attention？**
+
+因为 Draft Tree 中的 sibling candidate：
+
+~~~text
+物理上
+被打包进同一次 Target Forward
+~~~
+
+但：
+
+~~~text
+逻辑上
+属于彼此互斥的未来
+~~~
+
+普通 causal attention 只理解：
+
+~~~text
+“谁排在我前面”
+~~~
+
+Tree Attention 必须表达：
+
+~~~text
+“谁属于我的 causal ancestry”
+~~~
+
+因此真正的 Tree Attention correctness 不是一张 mask，而是：
+
+~~~text
+Candidate Layout
+        +
+Parent Topology
+        +
+Tree Position
+        +
+Ancestor Visibility
+        +
+Accept Traversal
+        +
+KV Mapping
+~~~
+
+共同保持一致。
+
+而这次 Strict Review 后还可以再加一句更精确的话：
+
+> **Tree Verify 每一轮都围绕一个 KV-ready boundary 运转：上一轮 terminal bonus 位于这个 boundary 上，下一轮成为 root 并 materialize KV；新的 terminal bonus 又成为下一个 frontier。Tree Position 与 Tree Attention 都必须以这个 KV-ready boundary，而不是“用户已经看见了多少 token”，作为真正的坐标原点。**
+
+这也是为什么 DeepSeek-V4 当前的：
+
+~~~text
+topk = 1
+~~~
+
+远不只是“少开几个 branch”。
+
+它把：
+
+~~~text
+Tree
+~~~
+
+退化成：
+
+~~~text
+Chain
+~~~
+
+于是很多难题同时退化：
+
+~~~text
+ancestor visibility
+→ ordinary causal visibility
+
+tree depth position
+→ linear position
+
+accepted tree path
+→ contiguous prefix
+
+branch-local KV
+→ linear KV
+
+tree compaction
+→ identity
+~~~
+
+未来如果真正要把 DeepSeek-V4 EAGLE 扩展到：
+
+~~~text
+topk > 1
+~~~
+
+验收标准不应该只是：
+
+~~~text
+server 能启动
+请求能返回
+~~~
+
+而应该是：
+
+> **从 candidate selection、Position、SWA/C4/C128 visibility、Target logits、Accept traversal 到 KV Commit，所有子系统都能证明自己看到的是同一棵 Tree。**
+
+这才是 DeepSeek-V4 multi-branch speculative decoding 真正的 correctness boundary。
+
+## 源码阅读入口
+
+| 目标 | 固定版本源码 |
+| --- | --- |
+| EAGLE Draft 多步候选生成 | [`eagle_worker_v2.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_worker_v2.py) |
+| Candidate path-score / parent 选择 | [`spec_utils.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/spec_utils.py) |
+| Candidate compact / TreeMaskMode | [`eagle_utils.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py) |
+| Verify Input 构造 | [`eagle_worker_common.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_worker_common.py) |
+| Tree Mask / Position / Retrieve kernel | [`spec_tree.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/ops/speculative/spec_tree.py) |
+| EagleVerifyInput | [`eagle_info.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_info.py) |
+| VerifyMask / FULL vs QLEN allocation | [`verify_mask.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/verify_mask.py) |
+| Triton Direct Custom Mask | [`triton_backend.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/triton_backend.py) |
+| FlashAttention Tree page-table / Cascade | [`flashattention_backend.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/flashattention_backend.py) |
+| Tree Builder Golden Test | [`test_build_eagle_tree.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/test/registered/spec/utils/test_build_eagle_tree.py) |
+| DeepSeek-V4 model-level EAGLE guard | [`deepseek_v4_hook.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/arg_groups/deepseek_v4_hook.py) |
+| DeepSeek-V4 CUDA DSV4 backend guard | [`deepseek_v4_backend.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/deepseek_v4_backend.py) |
+| DSpark chain-only resolution | [`speculative_hook.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/arg_groups/speculative_hook.py) |
