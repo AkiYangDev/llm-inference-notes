@@ -117,6 +117,8 @@ function refreshReading() {
       if (done) count++;
     });
     group.querySelector('[data-reading-summary]').textContent = `已读 ${count} / ${items.length} 篇`;
+    const meter = group.querySelector('.map-progress');
+    if (meter) { meter.setAttribute('aria-valuenow', String(count)); meter.querySelector('.map-progress-fill').style.transform = `scaleX(${items.length ? count/items.length : 0})`; }
     const next = items.find(item => readingState[item.dataset.readingItem] !== true);
     const link = group.querySelector('[data-continue-reading]');
     link.href = (next || items[0]).dataset.readingItem;
@@ -209,4 +211,14 @@ if (document.body.classList.contains('article-page') && !document.body.classList
   }
   window.addEventListener('scroll',()=>{clearTimeout(timer);timer=setTimeout(savePosition,450);},{passive:true});
   window.addEventListener('pagehide',savePosition);
+}
+
+// Pause ambient motion when the introduction is off screen or the tab is hidden.
+const heroArt = document.querySelector('.hero-art');
+if (heroArt) {
+  let heroVisible = true;
+  const updateMotion = () => heroArt.classList.toggle('motion-paused', document.hidden || !heroVisible);
+  if ('IntersectionObserver' in window) new IntersectionObserver(entries => { heroVisible = entries[0].isIntersecting; updateMotion(); }).observe(heroArt);
+  document.addEventListener('visibilitychange', updateMotion);
+  updateMotion();
 }

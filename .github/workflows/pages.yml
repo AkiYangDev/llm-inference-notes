@@ -26,6 +26,7 @@ jobs:
       - run: pip install -r site/requirements.txt
       - run: python scripts/check_docs.py
       - run: python site/build.py
+      - run: python scripts/check_site.py
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

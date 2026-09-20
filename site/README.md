@@ -59,3 +59,20 @@ SGLang 系列顺序为请求执行全链路、Scheduler、ModelRunner、Attentio
 文章首次提交与最近更新读取完整 Git 历史；首次提交不等同于首次公开发布日期。源码依据仅提取文章导读中明确记录的 `owner/repo @ 40位 commit`，更新文章标注后随构建同步，不自动跟随上游版本。
 
 点击代码行号可高亮并分享该行链接；文章结构改动可能使旧的代码块编号发生变化。正文源码引用保留固定版本链接。阅读位置保存在当前浏览器，重新打开时点击“继续上次阅读”恢复。Alt + 左右方向键切换系列前后篇，输入框、选中文本和弹窗打开时不触发。
+
+## Google Search Console
+
+网站已输出完整静态正文、canonical、Sitemap、RSS 与 JSON-LD。首页与正文允许索引，404 保持 noindex。发布前运行 `python scripts/check_site.py` 检查元数据、站内链接和 Sitemap。
+
+1. 在 Google Search Console 添加网址前缀属性 `https://akiyangdev.github.io/llm-inference-notes/`。
+2. 选择 HTML 标记验证，将 Google 提供的 content 值填入 `site/search-console.json` 的 `google_site_verification`，提交并等待部署后验证。空配置不会输出伪造标签。
+3. 提交 `https://akiyangdev.github.io/llm-inference-notes/sitemap.xml`。
+4. 使用网址检查查看首页和代表文章，按需请求编入索引。提交不保证收录或排名。
+
+这是 GitHub Pages 的项目子目录。有效的 robots.txt 必须位于域名根目录 `/robots.txt`；不要把本项目内的 robots.txt 当作有效全站规则。无 robots.txt 不等于禁止抓取，本项目通过 Search Console 提交 Sitemap。
+
+参考：[Google Sitemap 文档](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap)、[所有权验证](https://support.google.com/webmasters/answer/9008080)。
+
+## 动效
+
+首屏分层淡入，卡片与按钮轻量反馈，阅读地图按已读数量更新进度条，搜索框短促淡入。桌面光晕仅循环两轮，离开首屏或隐藏标签页时暂停；移动端取消光晕呼吸。减少动态效果设置关闭全部动效，正文不使用滚动显现。

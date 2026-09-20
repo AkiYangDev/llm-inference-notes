@@ -8,7 +8,7 @@ import json
 import re
 import shutil
 import markdown
-from publishing import history, evidence_panel, metadata, feeds, PAGES
+from publishing import history, evidence_panel, metadata, feeds, PAGES, verification_meta
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '_site'
@@ -36,6 +36,7 @@ def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=Non
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} · AkiYang</title><meta name="description" content="{esc(description)}">
 {metadata(title, description, kind, route, ORIGIN, BASE, dates)}
+{verification_meta(ROOT)}
 <link rel="canonical" href="{ORIGIN}{BASE}{route}"><meta name="color-scheme" content="light dark">
 <link rel="icon" href="{BASE}assets/favicon.svg" type="image/svg+xml">
 <script>try{{const t=localStorage.getItem('aki-theme');document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}}catch(e){{}}</script>
@@ -45,7 +46,7 @@ def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=Non
 <a class="brand" href="{BASE}" aria-label="AkiYang 首页"><span class="brand-icon" aria-hidden="true">A<span>.</span></span><span>AkiYang<span class="brand-caption">推理工程手记</span></span></a>
 <nav aria-label="主导航"><a class="nav-articles" href="{BASE}articles/"{' aria-current="page"' if kind == 'archive-page' else ''}>文章</a><a class="nav-series" href="{BASE}series/">阅读地图</a><a class="nav-skills" href="{BASE}skills/"{' aria-current="page"' if 'skill' in kind else ''}>Skills</a><a class="nav-github" href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章与 Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索</span><kbd>/</kbd></button><button class="theme-toggle icon-button" aria-label="切换深色模式" title="切换深色模式"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button></nav></div></header>
 {body}
-<footer class="footer wrap"><a href="{BASE}" class="footer-brand">AkiYang<span>推理工程手记</span></a><div><a href="{BASE}feed.xml">RSS 订阅</a><a href="{BASE}credits/">插画来源</a><a href="{REPO}">源代码 ↗</a><span>独立个人站 · 非 DeepSeek 官方</span></div></footer>
+<footer class="footer wrap"><a href="{BASE}" class="footer-brand">AkiYang<span>推理工程手记</span></a><div><a href="{BASE}feed.xml">RSS 订阅</a><a href="{BASE}sitemap.xml">站点地图</a><a href="{BASE}credits/">插画来源</a><a href="{REPO}">源代码 ↗</a><span>独立个人站 · 非 DeepSeek 官方</span></div></footer>
 <dialog id="search-dialog" aria-labelledby="search-title"><div class="dialog-top"><h2 id="search-title">搜索文章与 Skills</h2><button class="close-search icon-button" aria-label="关闭搜索">×</button></div><label for="search-input" class="sr-only">搜索标题、章节或正文</label><input id="search-input" type="search" placeholder="搜索标题、章节或正文…" autocomplete="off"><div id="search-results" aria-live="polite"></div><p class="dialog-hint">↑ ↓ 选择 · Enter 打开 · Esc 关闭</p></dialog>
 <dialog id="diagram-dialog" aria-labelledby="diagram-title"><div class="dialog-top"><h2 id="diagram-title">工程图</h2><div class="diagram-controls"><button class="zoom-out icon-button" aria-label="缩小工程图">−</button><button class="zoom-reset" aria-label="工程图适应窗口">适应窗口</button><button class="zoom-in icon-button" aria-label="放大工程图">+</button><button class="close-diagram icon-button" aria-label="关闭工程图">×</button></div></div><div id="diagram-view" tabindex="0" aria-label="工程图，可滚动查看"></div></dialog>
 <div class="toast" role="status" aria-live="polite"></div></body></html>'''
@@ -210,7 +211,7 @@ def reading_map(series, articles):
         for i, item in enumerate(group['items']):
             a = lookup[item['url']]
             nodes.append(f'''<li class="map-step" data-reading-item="{item['url']}"><a href="{item['url']}"><span class="map-number">{i+1:02d}</span><h3>{esc(item['label'])}</h3><p>{esc(item.get('description', a['excerpt']))}</p><span class="map-meta">约 {a['minutes']} 分钟 <span data-reading-status>未读</span></span></a></li>''')
-        blocks.append(f'''<section class="reading-map" id="{group['id']}" data-reading-group><div class="map-heading"><div><p class="eyebrow">SOURCE READING PATH</p><h2>{esc(group['title'])}</h2><p>{len(group['items'])} 篇 · 约 {total} 分钟 · 推荐阅读顺序</p></div><a class="text-link" data-continue-reading href="{group['items'][0]['url']}">开始阅读 →</a></div><ol class="map-steps">{''.join(nodes)}</ol><div class="map-footer"><span data-reading-summary aria-live="polite">已读 0 / {len(group['items'])} 篇</span><span>进度仅保存在当前浏览器</span></div></section>''')
+        blocks.append(f'''<section class="reading-map" id="{group['id']}" data-reading-group><div class="map-heading"><div><p class="eyebrow">SOURCE READING PATH</p><h2>{esc(group['title'])}</h2><p>{len(group['items'])} 篇 · 约 {total} 分钟 · 推荐阅读顺序</p></div><a class="text-link" data-continue-reading href="{group['items'][0]['url']}">开始阅读 →</a></div><ol class="map-steps">{''.join(nodes)}</ol><div class="map-progress" role="progressbar" aria-label="系列阅读进度" aria-valuemin="0" aria-valuemax="{len(group['items'])}" aria-valuenow="0"><div class="map-progress-fill"></div></div><div class="map-footer"><span data-reading-summary aria-live="polite">已读 0 / {len(group['items'])} 篇</span><span>进度仅保存在当前浏览器</span></div></section>''')
     return ''.join(blocks)
 
 

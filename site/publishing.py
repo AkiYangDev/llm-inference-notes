@@ -52,7 +52,9 @@ def metadata(title, description, kind, route, origin, base, dates=None):
     tags+=f'<link rel="alternate" type="application/rss+xml" title="AkiYang · 技术文章" href="{origin}{base}feed.xml">'
     tags+='<script type="application/ld+json">'+json.dumps(data,ensure_ascii=False).replace('<','\\u003c')+'</script>'
     if route=='404.html':tags+='<meta name="robots" content="noindex">'
-    else:PAGES[url]=dates
+    else:
+        tags+='<meta name="robots" content="index,follow,max-image-preview:large">'
+        PAGES[url]=dates
     return tags
 
 def feeds(out, articles, origin, base):
@@ -70,3 +72,12 @@ def feeds(out, articles, origin, base):
         ET.SubElement(item,'guid',isPermaLink='true').text=url
         if a.get('published'):ET.SubElement(item,'pubDate').text=format_datetime(datetime.fromisoformat(a['published']))
     ET.ElementTree(rss).write(out/'feed.xml',encoding='utf-8',xml_declaration=True)
+
+
+def verification_meta(root):
+    """Only render a real Search Console verification token supplied by the owner."""
+    config = root / 'site/search-console.json'
+    token = json.loads(config.read_text()).get('google_site_verification', '') if config.exists() else ''
+    if not isinstance(token, str) or (token and not re.fullmatch(r'[A-Za-z0-9_-]+', token)):
+        raise ValueError('Invalid Google verification token')
+    return f'<meta name="google-site-verification" content="{html.escape(token, quote=True)}">' if token else ''
