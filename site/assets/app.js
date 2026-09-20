@@ -1,37 +1,103 @@
 const base = new URL('../', import.meta.url);
-const theme = document.querySelector('.theme-toggle');
-function themeLabel(){theme.setAttribute('aria-label',document.documentElement.dataset.theme==='dark'?'切换浅色模式':'切换深色模式');}
+const $ = selector => document.querySelector(selector);
+const theme = $('.theme-toggle');
+const dark = () => document.documentElement.dataset.theme === 'dark';
+const toast = message => { const node = $('.toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2400); };
+function themeLabel() { const label = dark() ? '切换浅色模式' : '切换深色模式'; theme.setAttribute('aria-label', label); theme.title = label; }
 themeLabel();
-theme.addEventListener('click',()=>{const next=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=next;try{localStorage.setItem('aki-theme',next)}catch{}themeLabel()});
-const search=document.querySelector('#search-dialog'), input=document.querySelector('#search-input'), results=document.querySelector('#search-results');
-let index;
-async function searchArticles(){
-  try{index ||= await fetch(new URL('search.json',base)).then(r=>{if(!r.ok)throw Error();return r.json()});
-    const q=input.value.trim().toLowerCase();
-    const found=index.filter(a=>(a.title+' '+a.text).toLowerCase().includes(q));
+let updateDiagrams = () => {};
+theme.addEventListener('click', () => { const next = dark() ? 'light' : 'dark'; document.documentElement.dataset.theme = next; try { localStorage.setItem('aki-theme', next); } catch {} themeLabel(); updateDiagrams(); });
+const media = matchMedia('(prefers-color-scheme: dark)');
+media.addEventListener('change', event => { try { if (localStorage.getItem('aki-theme')) return; } catch {} document.documentElement.dataset.theme = event.matches ? 'dark' : 'light'; themeLabel(); updateDiagrams(); });
+
+const search = $('#search-dialog'), input = $('#search-input'), results = $('#search-results');
+let indexPromise, searchRevision = 0, searchTimer;
+function highlight(node, value, query) {
+  if (!query) { node.textContent = value; return; }
+  let cursor = 0, at;
+  const lower = value.toLowerCase(), needle = query.toLowerCase();
+  while ((at = lower.indexOf(needle, cursor)) !== -1) { node.append(document.createTextNode(value.slice(cursor, at))); const mark = document.createElement('mark'); mark.textContent = value.slice(at, at + query.length); node.append(mark); cursor = at + query.length; }
+  node.append(document.createTextNode(value.slice(cursor)));
+}
+async function searchArticles() {
+  const revision = ++searchRevision, query = input.value.trim(), needle = query.toLowerCase();
+  try {
+    if (!indexPromise) indexPromise = fetch(new URL('search.json', base), {cache:'no-cache'}).then(r => { if (!r.ok) throw Error(); return r.json(); }).catch(error => { indexPromise = null; throw error; });
+    const articles = await indexPromise;
+    if (revision !== searchRevision) return;
+    const found = [];
+    for (const article of articles) {
+      if (!needle || article.title.toLowerCase().includes(needle) || article.topic.toLowerCase().includes(needle)) found.push({article, heading:'', text:article.excerpt, anchor:'', score:3});
+      if (needle) for (const section of article.sections) { const headingMatch = section.heading.toLowerCase().includes(needle); if (headingMatch || section.text.toLowerCase().includes(needle)) found.push({article, ...section, score:headingMatch ? 2 : 1}); }
+    }
+    found.sort((a,b) => b.score - a.score);
     results.replaceChildren();
-    if(!found.length){results.textContent='没有找到相关文章，试试其他关键词。';return}
-    for(const a of found){const link=document.createElement('a');link.href=a.url;link.className='search-result';const title=document.createElement('strong');title.textContent=a.title;const sub=document.createElement('span');const pos=a.text.toLowerCase().indexOf(q);sub.textContent=q?a.text.slice(Math.max(0,pos-30),pos+110):a.topic+' · 约 '+a.minutes+' 分钟';link.append(title,sub);results.append(link)}
-  }catch{results.textContent='搜索暂时无法加载，请关闭窗口后从文章目录浏览。'}
+    if (!found.length) {
+      const empty = document.createElement('div'); empty.className = 'search-empty';
+      const mascot = document.createElement('img'); mascot.src = new URL('assets/whale-chibi.jpg', base); mascot.alt = ''; mascot.width = 100; mascot.height = 100;
+      const message = document.createElement('p'); message.textContent = '还没有找到相关内容，换一个关键词试试。'; empty.append(mascot, message); results.append(empty); return;
+    }
+    for (const result of found.slice(0, 15)) {
+      const link = document.createElement('a'); link.href = result.article.url + (result.anchor ? '#' + encodeURIComponent(result.anchor) : ''); link.className = 'search-result';
+      const title = document.createElement('strong'); highlight(title, result.article.title, query); link.append(title);
+      if (result.heading) { const heading = document.createElement('span'); heading.className = 'result-heading'; highlight(heading, result.heading + ' ↗', query); link.append(heading); }
+      const excerpt = document.createElement('span'); excerpt.className = 'result-excerpt'; const pos = result.text.toLowerCase().indexOf(needle); const start = Math.max(0, pos - 28); const snippet = (start ? '…' : '') + result.text.slice(start, start + 130) + (result.text.length > start + 130 ? '…' : ''); highlight(excerpt, snippet, query); link.append(excerpt);
+      link.addEventListener('click', () => search.close()); results.append(link);
+    }
+  } catch { if (revision === searchRevision) results.textContent = '搜索暂时无法加载，请稍后重试，或从文章目录浏览。'; }
 }
-function openSearch(){search.showModal();input.focus();searchArticles()}
-document.querySelector('.search-trigger').addEventListener('click',openSearch);
-document.querySelector('.close-search').addEventListener('click',()=>search.close());
-input.addEventListener('input',searchArticles);
-document.addEventListener('keydown',e=>{if(e.key==='/'&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)&&!document.activeElement.isContentEditable&&!search.open){e.preventDefault();openSearch()}});
-for(const dialog of document.querySelectorAll('dialog'))dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close()}});
-for(const block of document.querySelectorAll('.prose pre:not(.mermaid)')){
-  const button=document.createElement('button');button.className='copy-code';button.textContent='复制';button.setAttribute('aria-label','复制代码');
-  button.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(block.querySelector('code')?.textContent||'');button.textContent='已复制'}catch{button.textContent='请手动选择复制'}setTimeout(()=>button.textContent='复制',2000)});block.append(button);
+function openSearch() { if (search.open) return; search.showModal(); input.focus(); searchArticles(); }
+$('.search-trigger').addEventListener('click', openSearch);
+$('.archive-search')?.addEventListener('click', openSearch);
+$('.close-search').addEventListener('click', () => search.close());
+input.addEventListener('input', () => { clearTimeout(searchTimer); searchRevision++; searchTimer = setTimeout(searchArticles, 120); });
+search.addEventListener('keydown', event => {
+  const links = [...results.querySelectorAll('a')];
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!links.length) return; const i = links.indexOf(document.activeElement); const next = event.key === 'ArrowDown' ? (i + 1) % links.length : (i <= 0 ? links.length - 1 : i - 1); links[next].focus(); }
+  if (event.key === 'Enter' && document.activeElement === input && links.length) { event.preventDefault(); links[0].click(); }
+});
+document.addEventListener('keydown', event => { if (event.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable && !document.querySelector('dialog[open]')) { event.preventDefault(); openSearch(); } });
+for (const dialog of document.querySelectorAll('dialog')) dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
+async function copyText(text, button, success) { try { await navigator.clipboard.writeText(text); toast(success); if (button) { const previous = button.textContent; button.textContent = '已复制'; setTimeout(() => button.textContent = previous, 2000); } } catch { toast('复制未完成，请手动选择内容复制。'); } }
+$('.copy-link')?.addEventListener('click', event => copyText(location.href, event.currentTarget, '文章链接已复制'));
+for (const block of document.querySelectorAll('.prose pre:not(.mermaid)')) { const button = document.createElement('button'); button.className = 'copy-code'; button.textContent = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.addEventListener('click', () => copyText(block.querySelector('code')?.textContent || '', button, '代码已复制')); block.append(button); }
+for (const link of document.querySelectorAll('.mobile-toc a')) link.addEventListener('click', () => { const panel = link.closest('details'); panel.open = false; });
+if ($('.prose')) {
+  const progress = $('.reading-progress'), headings = [...document.querySelectorAll('.prose h2, .prose h3')], links = [...document.querySelectorAll('.toc a')];
+  let scheduled = false;
+  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (heading.getBoundingClientRect().top < 155) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
+  window.addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, {passive:true}); window.addEventListener('resize', update); update();
+  // Highlighting and diagrams load independently; failure of one does not delay the other.
+  (async () => { try { const {default:hljs} = await import('https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js'); const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/styles/github-dark.min.css'; document.head.append(css); document.querySelectorAll('.prose pre code').forEach(c => hljs.highlightElement(c)); } catch {} })();
+  (async () => {
+    const diagrams = [...document.querySelectorAll('.mermaid')].map(node => ({node, source:node.textContent}));
+    if (!diagrams.length) return;
+    try {
+      const {default:mermaid} = await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');
+      let rendering = false, pending = false, generation = 0;
+      updateDiagrams = async () => {
+        if (rendering) { pending = true; return; } rendering = true;
+        do {
+          pending = false; const isDark = dark();
+          mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'base',themeVariables:{primaryColor:isDark?'#263a59':'#eaf0ff',primaryTextColor:isDark?'#e6edf9':'#243554',primaryBorderColor:isDark?'#6e8fbb':'#9aafd9',lineColor:isDark?'#a4b6d0':'#6a7f9e',secondaryColor:isDark?'#1b2a42':'#f4f7fc',tertiaryColor:isDark?'#22314b':'#ffffff',edgeLabelBackground:isDark?'#19263a':'#f4f7fc',clusterBkg:isDark?'#17263c':'#f4f7fc',clusterBorder:isDark?'#405777':'#d0daec',fontFamily:'sans-serif',fontSize:'15px'},flowchart:{htmlLabels:false}});
+          for (const {node, source} of diagrams) {
+            try { const result = await mermaid.render('engineering-graph-' + (++generation), source); node.innerHTML = result.svg; const svg = node.querySelector('svg'); svg?.setAttribute('role','img'); svg?.setAttribute('aria-label','本节工程流程图'); }
+            catch { node.textContent = source; if (!node.parentElement.querySelector('.diagram-error')) { const p = document.createElement('p'); p.className = 'diagram-error'; p.textContent = '图表暂时无法绘制，以下保留原始描述。'; node.before(p); } }
+          }
+        } while (pending);
+        rendering = false;
+        // Re-align deep links after diagrams change the document height.
+        if (location.hash && !updateDiagrams.aligned) { const target = document.getElementById(decodeURIComponent(location.hash.slice(1))); target?.scrollIntoView({behavior:'instant',block:'start'}); updateDiagrams.aligned = true; }
+      };
+      await updateDiagrams();
+      for (const {node} of diagrams) { const button = document.createElement('button'); button.textContent = '放大查看'; button.className = 'expand-diagram'; button.addEventListener('click', () => { const svg = node.querySelector('svg'); if (!svg) return; $('#diagram-view').replaceChildren(svg.cloneNode(true)); $('#diagram-dialog').showModal(); zoom = 1; applyZoom(); }); node.parentElement.append(button); }
+    } catch { for (const {node} of diagrams) { const p = document.createElement('p'); p.className = 'diagram-error'; p.textContent = '图表暂时无法加载，以下保留 Mermaid 源码。'; node.before(p); } }
+  })();
 }
-if(document.querySelector('.prose')){
-  const progress=document.querySelector('.reading-progress');
-  const update=()=>{const doc=document.documentElement;progress.style.width=(doc.scrollTop/Math.max(1,doc.scrollHeight-doc.clientHeight)*100)+'%'};window.addEventListener('scroll',update,{passive:true});update();
-  const observer=new IntersectionObserver(entries=>{for(const e of entries)if(e.isIntersecting){document.querySelectorAll('.toc a').forEach(a=>a.classList.toggle('current',decodeURIComponent(a.hash.slice(1))===e.target.id))}},{rootMargin:'-100px 0px -60% 0px'});document.querySelectorAll('.prose h2').forEach(h=>observer.observe(h));
-  try{const {default:hljs}=await import('https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js');const css=document.createElement('link');css.rel='stylesheet';css.href='https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/styles/github-dark.min.css';document.head.append(css);document.querySelectorAll('.prose pre code').forEach(c=>hljs.highlightElement(c))}catch{}
-  const diagrams=[...document.querySelectorAll('.mermaid')];
-  if(diagrams.length){try{const {default:mermaid}=await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'base',themeVariables:{primaryColor:'#edf2ff',primaryTextColor:'#25385b',primaryBorderColor:'#9eafe0',lineColor:'#7686aa',secondaryColor:'#f5f7fc',tertiaryColor:'#fff',fontFamily:'sans-serif',fontSize:'15px'},flowchart:{htmlLabels:false}});await mermaid.run({nodes:diagrams});
-    for(const diagram of diagrams){const button=document.createElement('button');button.textContent='放大查看';button.className='expand-diagram';button.addEventListener('click',()=>{const view=document.querySelector('#diagram-view');view.replaceChildren(diagram.querySelector('svg').cloneNode(true));document.querySelector('#diagram-dialog').showModal()});diagram.parentElement.append(button)}
-  }catch{for(const diagram of diagrams){const p=document.createElement('p');p.className='diagram-error';p.textContent='图表暂时无法加载，以下保留 Mermaid 源码。';diagram.before(p)}}}
-}
-document.querySelector('.close-diagram').addEventListener('click',()=>document.querySelector('#diagram-dialog').close());
+let zoom = 1;
+function applyZoom() { const view = $('#diagram-view'), svg = view.querySelector('svg'); if (svg) svg.style.width = Math.max(100, view.clientWidth - 40) * zoom + 'px'; $('.zoom-out').disabled = zoom <= .5; $('.zoom-in').disabled = zoom >= 3; }
+$('.zoom-in').addEventListener('click', () => { zoom = Math.min(3, zoom + .25); applyZoom(); });
+$('.zoom-out').addEventListener('click', () => { zoom = Math.max(.5, zoom - .25); applyZoom(); });
+$('.zoom-reset').addEventListener('click', () => { zoom = 1; applyZoom(); });
+$('.close-diagram').addEventListener('click', () => $('#diagram-dialog').close());
+window.addEventListener('resize', () => { if ($('#diagram-dialog').open) applyZoom(); });
