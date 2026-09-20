@@ -48,3 +48,29 @@ assert len(urls) == len(pages) - 1
 items = ET.parse(ROOT / 'feed.xml').findall('./channel/item')
 assert len(items) == len(list((ROOT / 'articles').glob('*/*/index.html')))
 print(f'Site checks passed: {len(pages)} pages, {len(urls)} sitemap URLs, {len(items)} feed entries.')
+
+# Tag archives must contain exactly their members, and card links cannot nest.
+import hashlib
+articles = [a for a in json.loads((ROOT / 'search.json').read_text()) if a.get('kind') != 'skill']
+class Cards(HTMLParser):
+    def __init__(self, text):
+        super().__init__(); self.urls = []; self.active = []; self.depth = 0; self.in_tags = False; self.feed(text)
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == 'nav' and a.get('class') == 'tag-filters': self.in_tags = True
+        if tag == 'a':
+            assert not self.depth, 'Nested anchors break tag navigation'
+            self.depth += 1
+            if 'card-main' in a.get('class', '').split(): self.urls.append(a['href'])
+            if self.in_tags and a.get('aria-current') == 'page': self.active.append(a['href'])
+    def handle_endtag(self, tag):
+        if tag == 'a': self.depth -= 1
+        if tag == 'nav': self.in_tags = False
+for tag in {t for a in articles for t in a['tags']}:
+    slug = hashlib.sha256(tag.encode('utf-8')).hexdigest()[:12]
+    route = f'tags/{slug}/'
+    parsed = Cards((ROOT / route / 'index.html').read_text())
+    assert set(parsed.urls) == {a['url'] for a in articles if tag in a['tags']}, tag
+    assert parsed.active == [BASE + route], (tag, parsed.active)
+for page in pages: Cards(page.read_text())
+print('Tag membership, selected filter and non-nested navigation checks passed.')

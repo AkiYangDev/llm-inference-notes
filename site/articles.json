@@ -1,34 +1,83 @@
 {
   "docs/sglang/sglang-ascend-request-lifecycle.md": {
     "summary": "以 DeepSeek-V4 为例，从 HTTP 请求到调度、缓存、Ascend 设备执行与流式输出，建立完整推理链路的全局视角。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "Ascend",
+      "请求链路"
+    ]
   },
   "docs/sglang/sglang-scheduler-source-analysis.md": {
     "summary": "跟随请求进入等待队列、组成批次并交给 ModelRunner，理解 Scheduler 的状态管理与 Prefill / Decode 调度边界。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "Scheduler",
+      "请求调度"
+    ]
   },
   "docs/sglang/sglang-modelrunner-source-analysis.md": {
     "summary": "从 ForwardBatch 出发，追踪模型前向、执行路径选择与输出处理，理解 ModelRunner 如何连接调度与 DeepSeek 模型。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "ModelRunner",
+      "DeepSeek-V4"
+    ]
   },
   "docs/sglang/deepseek-v4-attention-source-analysis.md": {
     "summary": "追踪 DeepSeek-V4 Attention 中 Query 的生成和 KV Cache 的访问，连接张量变化、历史上下文与实际源码入口。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "DeepSeek-V4",
+      "Attention",
+      "KV Cache"
+    ]
   },
   "docs/sglang/deepseek-v4-moe-source-analysis.md": {
     "summary": "沿 Router、All-to-All、专家计算和结果合并，理解一个 Token 如何完成 MoE 前向，以及 Expert Parallel 的职责。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "DeepSeek-V4",
+      "MoE",
+      "Expert Parallel"
+    ]
   },
   "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md": {
     "summary": "结合源码与配置示例，梳理 TP、DP、EP 在 Attention 和 MoE 之间如何协作，辨清并行组与布局转换的适用边界。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "DeepSeek-V4",
+      "TP/DP/EP",
+      "分布式并行"
+    ]
   },
   "docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md": {
     "summary": "分析 DSpark Draft Model 的并行上下文、同步与布局规划，区分已确认的源码行为和 TP / DP 适配中待验证的假设。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "DSpark",
+      "TP/DP/EP",
+      "分布式并行"
+    ]
   },
   "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md": {
     "summary": "沿 Draft、Verify、Accept / Reject 与状态提交，追踪一轮 DSpark 投机推理，理解候选验证、接受结果与缓存状态如何衔接。",
-    "category": "源码解析"
+    "category": "源码解析",
+    "tags": [
+      "DeepSeek-V4",
+      "DSpark",
+      "投机推理"
+    ]
+  },
+  "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md": {
+    "summary": "追踪 Prefill 与 Decode 分离后的请求交接，梳理状态传输、目标资源准备与完成确认，理解独立调度两类负载的工程代价。",
+    "category": "源码解析",
+    "tags": [
+      "DeepSeek-V4",
+      "PD 分离",
+      "分布式推理"
+    ]
   }
 }

@@ -27,7 +27,7 @@ async function searchArticles() {
     if (revision !== searchRevision) return;
     const found = [];
     for (const article of articles) {
-      if (!needle || article.title.toLowerCase().includes(needle) || article.topic.toLowerCase().includes(needle)) found.push({article, heading:'', text:article.excerpt, anchor:'', score:3});
+      if (!needle || article.title.toLowerCase().includes(needle) || article.topic.toLowerCase().includes(needle) || (article.tags || []).some(tag => tag.toLowerCase().includes(needle))) found.push({article, heading:'', text:article.excerpt, anchor:'', score:3});
       if (needle) for (const section of article.sections) { const headingMatch = section.heading.toLowerCase().includes(needle); if (headingMatch || section.text.toLowerCase().includes(needle)) found.push({article, ...section, score:headingMatch ? 2 : 1}); }
     }
     found.sort((a,b) => b.score - a.score);
