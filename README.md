@@ -17,13 +17,14 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
-- [SGLang 推理执行链路解析：一次 Chat Completion 请求是如何跑到 Ascend NPU 上的](docs/sglang/sglang-ascend-request-lifecycle.md)：从请求接入、调度与 KV Cache，到 Ascend Attention 算子及流式输出。
+- [SGLang 推理执行链路解析：一次 Chat Completion 请求是如何跑到 Ascend NPU 上的](docs/sglang/sglang-ascend-request-lifecycle.md)：以 DeepSeek-V4 为例，连接请求调度、共享与压缩缓存、Ascend 算子及流式输出，并说明 DSPARK 的验证边界。
 
 ## 配套内容
 
 - [代码示例](examples/README.md)：文章配套的可运行示例。
 - [图表资源](assets/README.md)：架构图、调用链图和实验图表。
 - [写作模板](templates/README.md)：源码解析与部署实践模板。
+- [技术写作 Skill](skills/README.md)：源码取证、连续工程叙事、图解与文章评审规则。
 - [贡献与维护](CONTRIBUTING.md)：命名、证据要求与检查方式。
 
 文章按具体版本解释实现；原理示例、源码确认与实测结果分别标注。
