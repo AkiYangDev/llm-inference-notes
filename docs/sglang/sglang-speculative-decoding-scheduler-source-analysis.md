@@ -1447,4 +1447,246 @@ DRAFT_EXTEND_V2
 
 ```text
 verify-time input_ids
-verify-time ou
+verify-time out_cache_loc
+temporary EagleVerifyInput
+temporary verify seq_lens
+```
+
+它们都属于当前 forward transaction，不应该跨轮泄漏。
+
+---
+
+### 可以把 `_forward_isolation()` 理解成真正的 Transaction
+
+```text
+BEGIN
+
+ScheduleBatch(DECODE)
+       │
+       ├─ temporary Draft mutation
+       ├─ temporary TARGET_VERIFY mutation
+       ├─ temporary out_cache_loc
+       ├─ temporary spec_info
+       └─ temporary seq_lens view
+
+Worker returns GenerationBatchResult
+
+ROLLBACK
+all ScheduleBatch fields
+
+COMMIT ONLY:
+  next_draft_input
+  new_seq_lens relay
+  next bonus / topk / hidden state
+
+END
+```
+
+这个模型非常适合 Debug Spec V2。
+
+---
+
+## 六、FutureMap 的 `new_seq_lens + 1` 为什么只出现在 Mixed Tail 重建，而且它不是 DP Attention 的通用规则？
+
+这是第四个 Review 点，也是最容易因为代码局部看起来奇怪而误解的地方。
+
+`FutureMap.resolve_mixed_spec_tails()` 中有：
+
+```python
+fresh = self.new_seq_lens_buf[idx]
+
+seq_lens = batch.seq_lens.clone()
+seq_lens[-n:] = fresh + 1
+batch.seq_lens = seq_lens
+```
+
+同时：
+
+```python
+out_cache_loc[-n:] =
+    req_to_token[idx, fresh]
+```
+
+为什么这里突然：
+
+```text
+new_seq_lens + 1
+```
+
+？
+
+前面明明一直说：
+
+```text
+new_seq_lens
+=
+next KV-ready frontier
+```
+
+---
+
+### 先看 Mixed Chunk 在做什么
+
+当 chunked prefill 开启 mixed mode 时：
+
+```text
+new prefill requests
++
+running decode requests
+```
+
+会被塞进同一个：
+
+```text
+ForwardMode.MIXED
+```
+
+batch。
+
+running decode request 此时不是按 speculative Verify 的形态运行，而是被临时改写成：
+
+```text
+1-token EXTEND tail
+```
+
+`mix_with_running()` 明确写：
+
+```text
+a tail's prefix is its row length - 1
+```
+
+Spec 路径还写：
+
+```text
+Spec rows sit at the committed base
+```
+
+---
+
+### 对 speculative request 来说，那个“1 token tail”是什么？
+
+就是当前 pending bonus。
+
+假设 FutureMap fresh frontier 是：
+
+```text
+C
+```
+
+代表：
+
+```text
+[0, C)
+```
+
+已经 KV-ready。
+
+而：
+
+```text
+bonus
+```
+
+位于：
+
+```text
+position C
+```
+
+还没有 materialize KV。
+
+Mixed EXTEND 要做的正是：
+
+```text
+prefix:
+[0, C)
+
+extend token:
+bonus at C
+```
+
+所以 Extend 语义下的 full sequence length 必须是：
+
+```text
+C + 1
+```
+
+于是：
+
+```python
+seq_lens = fresh + 1
+```
+
+完全正确。
+
+与此同时：
+
+```python
+out_cache_loc =
+    req_to_token[idx, fresh]
+```
+
+就是 bonus 在位置 `C` 的写入 slot。
+
+可以画成：
+
+```text
+FutureMap new_seq_lens = C
+
+KV-ready:
+|====================|
+0                    C
+
+                     B
+                     ▲
+               pending bonus
+
+
+Mixed 1-token EXTEND:
+
+prefix_len = C
+
+input = B
+
+write position = C
+
+full seq_len = C + 1
+```
+
+所以这个 `+1` 的本质不是：
+
+> “FutureMap 的 seq_len 定义变了。”
+
+而是：
+
+> **同一个 KV-ready frontier 被转换成 one-token EXTEND 的 post-write length。**
+
+---
+
+### 为什么 Result Processor 还要专门 `kv_committed_len += 1`？
+
+因为这次 Mixed EXTEND 真的把 pending bonus 的 KV materialize 了。
+
+`process_batch_result_prefill()` 有唯一的特殊 owner：
+
+```python
+if (
+    not req.finished()
+    and batch.decoding_reqs
+    and req in batch.decoding_reqs
+    and not batch.spec_algorithm.is_none()
+):
+    req.kv.kv_committed_len += 1
+```
+
+源码注释：
+
+```text
+A mixed spec tail committed its pending bonus token;
+advance so the next spec prepare_for_decode
+reserves from the right base.
+```
+
+固定源码：
+
+[`SchedulerBatchResultProcessor.process_batch_result_prefill()`](https://github.com/sgl-project/sglan
