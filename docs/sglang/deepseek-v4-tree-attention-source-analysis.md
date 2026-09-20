@@ -546,4 +546,449 @@ retrieve_next_sibling =
 ~~~text
                    row0 pos5
                   /                   row1 pos6          row2 pos6
-     
+              |                  |
+          row3 pos7          row4 pos7
+              |                  |
+          row5 pos8          row6 pos8
+              |
+          row7 pos9
+~~~
+
+### Mask 正确而 Position 错，仍然会错
+
+假设 B 的 mask 已经保证它只看：
+
+~~~text
+prefix + root + B
+~~~
+
+但误把 B 的 position 编成：
+
+~~~text
+P + 2
+~~~
+
+而不是：
+
+~~~text
+P + 1
+~~~
+
+对于 RoPE 模型，Q/K rotation 已经变了。
+
+于是：
+
+~~~text
+Position 错
+  ↓
+RoPE phase 错
+  ↓
+QK score 错
+  ↓
+hidden state 错
+  ↓
+Target logits 错
+  ↓
+Accept 错
+~~~
+
+所以：
+
+~~~text
+Tree Mask
+回答：
+“我能看谁？”
+
+Tree Position
+回答：
+“我处在哪个未来时间步？”
+~~~
+
+两者缺一不可。
+
+---
+
+## 四、Root / Bonus 与 KV-ready Boundary：跨轮时其实存在一枚 Token 的 Frontier Gap
+
+这是这次严格 Review 后，正文最需要强化的一点。
+
+直觉上容易认为：
+
+~~~text
+上一轮 bonus 已经输出
+        ↓
+它一定已经在 KV Cache 里
+~~~
+
+但 EAGLE 的流水线不是这样。
+
+### `batch.seq_lens` 在这里更接近 KV-ready boundary
+
+`prepare_for_draft()` 对 paged tree layout 有一段非常直接的源码注释：
+
+~~~text
+base is batch.seq_lens
+(== KV-ready committed prefix at draft time;
+the bonus is the tree root written by verify,
+not part of [0:seq_lens])
+~~~
+
+固定源码：
+
+[`prepare_for_draft()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_worker_common.py)
+
+这句话非常关键。
+
+假设当前：
+
+~~~text
+batch.seq_lens = P
+~~~
+
+表示：
+
+~~~text
+positions [0, P)
+~~~
+
+已经是 KV-ready prefix。
+
+上一轮产生的 terminal bonus：
+
+~~~text
+R
+~~~
+
+虽然已经是下一枚逻辑 token，但它的 KV 还没有进入这个 prefix。
+
+所以下一轮：
+
+~~~text
+R
+~~~
+
+会成为 Verify Tree 的 root：
+
+~~~text
+position(R) = P
+~~~
+
+同时 `eagle_prepare_for_verify()` 从：
+
+~~~python
+start_offset=batch.seq_lens
+~~~
+
+开始给 Verify rows 分配写入位置。
+
+固定源码：
+
+[`eagle_prepare_for_verify()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py)
+
+也就是说：
+
+~~~text
+上一轮 terminal bonus
+        │
+        │ 已输出 / 已成为逻辑 frontier
+        ▼
+下一轮 root
+        │
+        │ position = old seq_len
+        ▼
+本轮 Target Verify
+        │
+        ▼
+此时才真正生成 root KV
+~~~
+
+### 为什么 `accept_lens` 同时能推进 KV-ready boundary
+
+用一个完整例子。
+
+当前 KV-ready prefix：
+
+~~~text
+[0, P)
+~~~
+
+上一轮 terminal bonus：
+
+~~~text
+R
+~~~
+
+本轮 Draft 在 R 后提出：
+
+~~~text
+D1
+D2
+D3
+~~~
+
+Target Verify 的**输入 rows**是：
+
+~~~text
+row0 = R
+row1 = D1
+row2 = D2
+row3 = D3
+~~~
+
+对应 Position：
+
+~~~text
+P
+P+1
+P+2
+P+3
+~~~
+
+而每个 row 的 logits 分别预测：
+
+~~~text
+row0(R)  → predicts D1
+row1(D1) → predicts D2
+row2(D2) → predicts D3
+row3(D3) → predicts new bonus B
+~~~
+
+如果 D1/D2/D3 都被接受，那么：
+
+~~~text
+num_correct_drafts = 3
+accept_lens = 4
+~~~
+
+用户侧本轮 accepted outputs 是：
+
+~~~text
+D1 D2 D3 B
+~~~
+
+但是本轮真正算出、可以进入 KV-ready prefix 的 Verify input rows 是：
+
+~~~text
+R D1 D2 D3
+~~~
+
+同样正好 4 个。
+
+所以：
+
+~~~python
+new_seq_lens =
+    batch.seq_lens + accept_lens
+~~~
+
+数值上完全正确：
+
+~~~text
+new KV-ready boundary
+=
+P + 4
+~~~
+
+它已经覆盖：
+
+~~~text
+R D1 D2 D3
+~~~
+
+但**没有**覆盖新 terminal bonus：
+
+~~~text
+B
+~~~
+
+B 再次停在新的 KV-ready boundary 上：
+
+~~~text
+position(B) = P + 4
+~~~
+
+等待下一轮作为 root 被真正 Forward。
+
+因此每轮都存在这样一个 frontier：
+
+~~~text
+KV-ready prefix
+|=======================|
+
+                        B
+                        ▲
+                  已输出的 terminal bonus
+                  但 KV 尚未 materialize
+~~~
+
+下一轮：
+
+~~~text
+|=======================| B
+                          │
+                          ▼
+                    Verify root
+                          │
+                          ▼
+                    materialize KV
+~~~
+
+这也是为什么“bonus”与“root”不是两个不同 token。
+
+更准确地说：
+
+> **当前轮 terminal bonus，就是下一轮 Tree root。**
+
+### 这也解释了上一篇中的一个看似奇怪现象
+
+上一篇我们看到：
+
+~~~text
+accept_lens
+=
+num_correct_drafts + 1
+~~~
+
+而 accepted KV relocation 同样处理 `accept_lens` 个 Verify rows。
+
+现在可以更准确地理解这两个同样的数字。
+
+它们对应的是两组**错开一格**的 token：
+
+~~~text
+本轮 accepted outputs：
+D1 D2 D3 B
+
+本轮 committed Verify/KV rows：
+R  D1 D2 D3
+~~~
+
+两边长度都等于：
+
+~~~text
+4
+~~~
+
+但 token identity 向前错了一格。
+
+这个 one-token shift 是整个 EAGLE pipeline 最值得记住的 invariant 之一。
+
+---
+
+## 五、FULL_MASK 与 QLEN_ONLY：语义一致，不代表所有 Backend 都读同一种 Mask
+
+现在终于可以精确回答第一个 Review 问题。
+
+当前 SGLang 定义：
+
+~~~python
+class TreeMaskMode(IntEnum):
+    FULL_MASK = 0
+    QLEN_ONLY = 1
+    QLEN_ONLY_BITPACKING = 2
+~~~
+
+固定源码：
+
+[`eagle_utils.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py)
+
+### FULL_MASK：显式包含 Prefix + Tree Block
+
+对于一个 request，FULL_MASK 的逻辑形状近似：
+
+~~~text
+[num_verify_tokens,
+ seq_len + num_verify_tokens]
+~~~
+
+例如：
+
+~~~text
+                 Prefix KV                  Candidate KV
+        ┌────────────────────────┬─────────────────────────┐
+        │ P0 P1 ... P{L-1}      │ 0 1 2 3 4 ...          │
+┌───────┼────────────────────────┼─────────────────────────┤
+│ Q0    │ 1  1 ... 1            │ tree ancestry           │
+│ Q1    │ 1  1 ... 1            │ tree ancestry           │
+│ Q2    │ 1  1 ... 1            │ tree ancestry           │
+└───────┴────────────────────────┴─────────────────────────┘
+~~~
+
+也就是说：
+
+~~~text
+Prefix:
+所有 candidate 都可见
+
+Candidate block:
+只允许 self + ancestors
+~~~
+
+FULL_MASK 的 size 大致是：
+
+~~~text
+B × N × (L + N)
+~~~
+
+所以长上下文下很贵。
+
+`verify_mask.py` 直接写道：
+
+~~~text
+FULL_MASK reaches 100s of MB at long context
+~~~
+
+### QLEN_ONLY：只物化 Candidate × Candidate Tree Block
+
+QLEN_ONLY 只保留：
+
+~~~text
+[N, N]
+~~~
+
+例如：
+
+~~~text
+        0 1 2 3 4
+
+0       1 0 0 0 0
+1       1 1 0 0 0
+2       1 0 1 0 0
+3       1 1 0 1 0
+4       1 0 1 0 1
+~~~
+
+Prefix 不在这块 Tensor 中显式展开。
+
+因此它把 mask storage 从：
+
+~~~text
+O(B × N × (L + N))
+~~~
+
+降成：
+
+~~~text
+O(B × N²)
+~~~
+
+### 但严格 Review 后，不能写成“所有 backend 都在 FULL 与 QLEN 两者中二选一读取”
+
+当前还有：
+
+[`VerifyMask`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/verify_mask.py)
+
+它除了：
+
+~~~text
+buffer
+mode
+max_bs
+~~~
+
+还带：
+
+~~~python
+is_read
+~~~
+
