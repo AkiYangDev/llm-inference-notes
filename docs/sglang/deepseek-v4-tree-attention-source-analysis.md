@@ -992,3 +992,389 @@ max_bs
 is_read
 ~~~
 
+这代表一个很重要的工程事实：
+
+> **tree builder 可能需要一个 buffer 来统一产生 tree-layout 副产物，但目标 Attention backend 不一定真的读取这块 mask。**
+
+例如当前 CUDA `DeepseekV4AttnBackend`：
+
+~~~text
+Verify metadata never extracts the mask.
+~~~
+
+然后：
+
+~~~python
+maybe_create_verify_mask(
+    ...,
+    is_read=False,
+)
+~~~
+
+固定源码：
+
+[`DeepseekV4AttnBackend.init_cuda_graph_state()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/deepseek_v4_backend.py)
+
+因为 `is_read=False`，`maybe_create_verify_mask()` 会选择更小的：
+
+~~~text
+QLEN_ONLY
+~~~
+
+但这里不能反过来说：
+
+~~~text
+“DSV4 正在用 QLEN_ONLY mask 做 multi-branch Tree Attention”
+~~~
+
+当前 DSV4 本来就禁止 `topk>1`，而且这块 mask 根本不被 Verify metadata 提取。
+
+因此最严谨的结论是：
+
+> **对于支持 EAGLE tree verify 的 backend，逻辑 contract 是一致的：完整 KV-ready prefix 可见、candidate 部分只见 ancestor path；但 FULL_MASK / QLEN_ONLY / page-table rewrite / retrieve topology 都只是不同实现 representation。不是所有 backend 都支持 Tree，也不是所有支持路径都直接读取同一种 mask。**
+
+### Triton 是最直观的 Direct-Mask 实现
+
+Triton Target Verify 直接：
+
+~~~python
+custom_mask = spec_info.custom_mask
+~~~
+
+随后把：
+
+~~~text
+custom_mask
+mask_indptr
+qo_indptr
+kv_indptr
+kv_indices
+~~~
+
+交给 `extend_attention_fwd()`。
+
+固定源码：
+
+[`triton_backend.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/triton_backend.py)
+
+它最接近：
+
+~~~text
+Tree
+ ↓
+FULL_MASK
+ ↓
+Attention Kernel
+~~~
+
+### 线性 / Hybrid backend 甚至可能传 Tree Topology 而不是 Bool Mask
+
+例如 Ascend hybrid linear attention 对 `topk > 1` 的 target verify 会携带：
+
+~~~text
+retrieve_next_token
+retrieve_next_sibling
+retrieve_parent_token
+~~~
+
+说明某些 state-space / linear 路径更适合直接消费 topology metadata。
+
+因此：
+
+~~~text
+Tree Attention semantics
+≠
+必须存在一张 bool Tree Mask
+~~~
+
+---
+
+## 六、FlashAttention Cascade：可以叫 Tree Attention，但必须说清它是怎样实现的
+
+这是第三个严格 Review 点。
+
+当前 FlashAttention backend 在：
+
+~~~python
+forward_batch.forward_mode.is_target_verify()
+and self.topk > 1
+and not is_swa_layer
+~~~
+
+时设置：
+
+~~~python
+use_cascade_attn = True
+~~~
+
+源码注释直接写：
+
+~~~text
+We do cascade attention for Target Verify with topk > 1
+~~~
+
+固定源码：
+
+[`flashattention_backend.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/flashattention_backend.py)
+
+但这里并没有一个名叫：
+
+~~~text
+tree_attention(...)
+~~~
+
+的单一 kernel。
+
+它实际上把 Tree Attention 分成两部分。
+
+### 第一部分：所有 Query 共享的 Common Prefix
+
+对于 topk>1，第一份 metadata：
+
+~~~text
+target_verify_metadata_topk_normal
+~~~
+
+只让 query attend：
+
+~~~text
+committed prefix
+~~~
+
+这里所有 tree node 的 prefix context 都完全相同，所以不需要为每个 branch 重复存整份 mask。
+
+### 第二部分：每个 Query 自己的 Ancestor Suffix
+
+源码从 `custom_mask` 中抽出 candidate block：
+
+~~~python
+mask =
+    spec_info.custom_mask[
+        mask_extraction_indices
+    ].view(
+        -1,
+        speculative_num_draft_tokens,
+    )
+~~~
+
+然后把：
+
+~~~text
+mask == True
+~~~
+
+的 candidate physical slots 排到每个 query 自己的 suffix page table 前面。
+
+源码中的注释例子非常直观。
+
+原始 candidate slots：
+
+~~~text
+[8, 9, 10]
+~~~
+
+Tree mask：
+
+~~~text
+query0 [1, 0, 0]
+query1 [1, 1, 0]
+query2 [1, 0, 1]
+~~~
+
+最后可以变成：
+
+~~~text
+query0:
+[8]
+len = 1
+
+query1:
+[8, 9]
+len = 2
+
+query2:
+[8, 10]
+len = 2
+~~~
+
+于是普通 Attention kernel 不需要理解“Tree”。
+
+它只看到：
+
+> **每个 query 有一份已经筛好的合法 suffix KV list。**
+
+所以这里的工程转换是：
+
+~~~text
+Tree Topology
+      ↓
+Tree Mask
+      ↓
+Per-query Ancestor KV List
+      ↓
+普通 FlashAttention
+~~~
+
+### Prefix 与 Suffix 不能直接相加
+
+第一段 Attention 得到：
+
+~~~text
+(O_prefix, LSE_prefix)
+~~~
+
+第二段得到：
+
+~~~text
+(O_tree, LSE_tree)
+~~~
+
+最终用：
+
+~~~python
+merge_state_v2_wrapper(...)
+~~~
+
+合并。
+
+因为两个 KV subset 的 softmax normalization 必须在同一个 partition function 下恢复。
+
+所以不能写成：
+
+~~~text
+O = O_prefix + O_tree
+~~~
+
+而必须结合 LSE。
+
+最终效果等价于：
+
+~~~text
+Attention(
+    query,
+    committed prefix
+    ∪
+    allowed ancestor suffix
+)
+~~~
+
+因此：
+
+> **把这条路径称为 Tree Attention 是准确的，只要明确它指的是语义；更精确的工程描述是“FlashAttention 用 prefix/suffix cascade + softmax-state merge 实现 Tree Attention”。**
+
+不要写成：
+
+> “FlashAttention 调用了一个 Tree Attention kernel。”
+
+那就不准确了。
+
+### SWA 是一个重要例外
+
+源码还明确：
+
+~~~text
+We don't use cascade attention for Sliding Window Attention
+~~~
+
+原因包括：
+
+~~~text
+不同 query 需要不同 window size，
+而 FA3 cascade interface 不能传一组不同 window sizes。
+~~~
+
+所以 SWA 层不走这条 common-prefix cascade，而使用展开后的 spec metadata。
+
+因此文章应该说：
+
+~~~text
+FlashAttention 非-SWA topk>1 Target Verify
+→ cascade Tree Attention
+
+FlashAttention SWA topk>1
+→ 另一套 expanded metadata / page-table 路径
+~~~
+
+而不能把整个 FlashAttention backend 全部概括成 cascade。
+
+---
+
+## 七、DeepSeek-V4 为什么仍然卡在 `topk=1`：不是一个 Assert，也不是单一 Attention 问题
+
+最后回到这篇标题里的 DeepSeek-V4。
+
+当前模型级 hook：
+
+[`deepseek_v4_hook.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/arg_groups/deepseek_v4_hook.py)
+
+明确：
+
+~~~python
+if cfg.speculative_algorithm == "EAGLE":
+    assert cfg.speculative_eagle_topk == 1
+~~~
+
+表面看起来：
+
+~~~text
+删掉 assert
+~~~
+
+似乎就能尝试 `topk>1`。
+
+严格 Review 后，这个理解是不够的。
+
+### 第一层：模型配置层已经把能力整体封死
+
+这个 guard 在 runtime 真正进入 EAGLE Tree Verify 前就拒绝。
+
+它表达的是：
+
+> **当前 Deepseek-V4 EAGLE 对外暴露的 capability contract 是 chain-only。**
+
+它不是某个 kernel 的局部 fallback。
+
+### 第二层：CUDA/HIP DSV4 Attention 本身也明确拒绝 Tree
+
+CUDA：
+
+[`DeepseekV4AttnBackend`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/deepseek_v4_backend.py)
+
+初始化直接：
+
+~~~python
+self.topk = get_spec().speculative_eagle_topk or 0
+
+assert self.topk in [0, 1], (
+    "MTP Topk > 1 not supported for DeepSeek V4"
+)
+~~~
+
+HIP radix backend 也有同样限制。
+
+因此至少可以确认：
+
+> **DSV4 Attention backend 是当前 DeepSeek-V4 multi-branch EAGLE 的一个真实 blocking layer。**
+
+不是只有上层 guard 没放开而已。
+
+### 但也不能反过来说“把 Attention 支持补上就全部解决”
+
+DeepSeek-V4 的 Target Attention 不只是普通 full KV。
+
+还涉及：
+
+~~~text
+SWA
+C4
+C128
+DSA / Indexer
+Compressor state
+paged KV ownership
+speculative KV commit
+~~~
+
+如果未来真正允许：
+
+~~~text
+topk >
