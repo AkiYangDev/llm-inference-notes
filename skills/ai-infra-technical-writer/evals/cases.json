@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "skill": "ai-infra-technical-writer",
+  "cases": [
+    {
+      "id": "ai-infra-technical-writer-1",
+      "input": "给我写一篇 DeepSeek 在 Ascend 上的执行链文章。只有公开主线源码，没有我容器内 dsv4 分支。",
+      "acceptance": "不能以公开路径冒充目标实现；区分可核实范围，提供有用正文或明确缺口。"
+    },
+    {
+      "id": "ai-infra-technical-writer-2",
+      "input": "把这句润色得专业一点：我们没有测量，但 TP32 肯定比 TP16 快两倍。",
+      "acceptance": "删除无证据确定性收益，不制造测试数据。"
+    },
+    {
+      "id": "ai-infra-technical-writer-3",
+      "input": "只解释 hidden_states 是什么，三句话即可。",
+      "acceptance": "简短解释，不强制长文结构。"
+    }
+  ]
+}
