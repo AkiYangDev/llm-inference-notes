@@ -1,64 +1,89 @@
 # AI Infra Technical Writer
 
-面向有后端开发经验、正在阅读和实践 AI Infra 的工程师，将源码分析写成连贯、可查证的技术文章。
+把源码研究写成读者能跟得上、结论能追溯的技术文章。
 
-适用于 SGLang、vLLM、DeepSeek、Ascend NPU、KV Cache、模型执行、分布式推理与性能分析。默认用中文写作，保留英文技术标识符；模型案例优先 DeepSeek，并核对具体代际与实现。
+面向有后端开发经验、正在研究大模型推理的工程师。默认中文写作，案例优先 DeepSeek；适用于 SGLang、vLLM、Ascend、KV Cache、并行通信和部署实践。读者、语言、模型和篇幅都服从当次任务。
 
-## 它解决什么问题
+[核心规则](SKILL.md) · [使用示例](examples/evidence-to-paragraph.md) · [评测记录](evals/RESULTS.md) · [来源说明](ATTRIBUTION.md)
 
-技术文章容易出现三种断点：类名列得很多，却没有解释数据如何流动；数学 shape 正确，却接不上真实算子布局；引用看似齐全，却混用了模型、版本或后端。
+## 为什么做这个 Skill
 
-这个 Skill 要求先取证，再围绕同一请求或 Tensor 展开叙事。长篇默认采用 5–7 个大章节，图表各自回答一个具体问题；准确性是硬约束，不能为了顺畅而省去决定结论的条件。
+技术文章经常出现这样的断点：类名都认识，连起来却不知道请求去了哪里；数学 shape 看起来正确，到了算子接口却对不上；一篇文章引用多个版本的代码，最后拼出一条实际不存在的调用链。
 
-## 核心规则
+这个 Skill 把写作过程组织为取证、叙事和检查。先确定目标版本与一条可达路径，再让同一个请求、Tensor 或 batch 贯穿解释。技术准确性是交付门槛；在这个前提下，优先让读者读得顺畅。
 
-- **证据先行**：确认版本、入口、调用方和分支条件，引用固定版本源码。
-- **主线连续**：追踪请求、batch、Tensor 和缓存状态的变化，先解释结果来源，再使用它。
-- **模型明确**：优先 DeepSeek；更换模型时重新核对层内结构、缓存、shape 和算子，不只替换名字。
-- **布局接通**：区分数学维度、打包布局、局部 head、padding 与算子实参。
-- **图文互补**：图解释关系与顺序，表解释精确映射，正文解释原因与变化。
-- **边界清楚**：公开源码分析、部署环境确认和实机测量各有证据范围；不编造成功结果或性能数字。
-
-## 使用方式
-
-将完整的 `ai-infra-technical-writer` 目录交给支持 Skill 的工具导入，保留 `SKILL.md` 与 `references/` 的相对路径。具体安装位置以所用工具为准。
-
-不支持 Skill 的工具，也可以让 Agent 读取 `SKILL.md`，并按任务读取它引用的参考文件。只有规则文件不够：源码类任务仍需要可访问的目标仓库，部署或性能文章仍需要相应日志与测量材料。
-
-可以直接使用以下请求：
-
-```text
-使用 ai-infra-technical-writer 撰写一篇 SGLang 请求执行链路文章。
-以 DeepSeek 为案例，先核对具体模型版本与 Ascend 后端源码。
-面向有后端经验的读者，用同一请求贯穿调度、模型、缓存和返回路径，
-提供可定位的来源与必要工程图，并最终输出 Markdown。
-```
-
-审核已有文章时：
-
-```text
-使用 ai-infra-technical-writer 审核这篇文章。
-先核对技术结论和适用范围，再检查连续阅读体验。
-指出有具体段落依据的问题；将源码核对、实机验证和编辑评分分开。
-```
-
-## 内容结构
-
-| 文件 | 作用 |
+| 写作难题 | 规则带来的具体约束 |
 |---|---|
-| [SKILL.md](SKILL.md) | 触发范围、工作流程与输出要求 |
-| [source-and-deployment.md](references/source-and-deployment.md) | 源码取证与部署文章边界 |
-| [execution-chain-review.md](references/execution-chain-review.md) | 调用链、设备边界、模型迁移与布局检查 |
-| [reading-experience.md](references/reading-experience.md) | 连续阅读、术语解释、图表与代码安排 |
-| [article-assessment.md](references/article-assessment.md) | 有依据的文章评分与审稿 |
-| [engineering-evidence-to-outcomes.md](references/engineering-evidence-to-outcomes.md) | 从真实工程证据形成分享与项目材料 |
+| 一屏类名，没有因果 | 解释输入、状态变化与输出去向 |
+| 通用原理冒充具体实现 | 区分教学假设、目标源码、真实测量 |
+| 换模型只换名字 | 重新核对模型层、缓存、shape 与后端 |
+| 图多却没有帮助 | 每张图回答一个问题，图文与来源相互对应 |
+| 润色后推测变成事实 | 保留证据类型、适用条件和未知项 |
+| 长文被拆成术语词典 | 长篇默认 5–7 个大章节，围绕工程问题连续展开 |
 
-## 示例与维护
+这些约束帮助 Agent 做出更好的写作选择，但不能保证每次输出都正确，也不能替代审稿或硬件测试。
 
-[DeepSeek-V4 / SGLang 执行链路文章](../../docs/sglang/sglang-ascend-request-lifecycle.md) 展示了这些规则如何用于请求、模型、缓存与设备算子的解释。
+## 怎样使用
 
-迭代时，从具体失败段落提炼规则，再用新的任务或独立审阅检验。新增规则应能迁移到其他文章；一次自评提高不等于质量已被客观证明，也不保证后续文章全部正确。
+获取仓库后，使用 `skills/ai-infra-technical-writer/` 完整目录，保留 `SKILL.md`、`references/` 的相对位置。在支持自定义 Skill 的 Agent 中按其安装机制加载该目录。其他环境可以直接要求 Agent 读取入口文件，再按任务读取配套参考资料。
 
-本目录发布的是可独立使用的核心规则与本项目维护的参考资料。个人安装包中的第三方扩展模块、示例集合和平台专用资源没有随此目录分发。源码优先取证、具体示例和图解等写作思路参考了 [vllm-technical-blog-writer](https://github.com/shen-shanshan/vllm-dev-skills/blob/master/skills/vllm-technical-blog-writer/GUIDE.md) 等资料。第三方模块保留各自的来源和许可，不包含在此公开目录中。
+本项目不提供跨平台一键安装器；不依赖其他个人 Skill，也不自带联网、源码访问或 NPU 能力。源码文章需要目标仓库或代码材料；部署与性能文章需要对应环境记录和测量。
+
+第一次使用可直接复制：
+
+```text
+请读取 skills/ai-infra-technical-writer/SKILL.md 并按其规则工作。
+围绕我提供的目标仓库与 commit，写一篇 SGLang 请求执行链文章。
+面向有后端经验的读者，以 DeepSeek 为例，用同一个请求解释
+调度、batch、模型执行、缓存与返回路径，输出完整 Markdown。
+先核对模型变体和后端；无法确认的调用边明确保留为缺口。
+```
+
+已有文章审稿：
+
+```text
+使用 ai-infra-technical-writer 审核下面的文章。
+先检查版本、调用关系、shape 与性能数字，再改善连续阅读体验。
+给出完整修改稿；将没有证据支持的结论改为可成立的表述，
+保留影响复现的条件，不把内部审稿过程写进正文。
+```
+
+只要审稿意见、短文或三句话解释时，直接说明即可，不需要套用长文结构。
+
+## 实际输出是什么样
+
+[证据到段落的完整小例子](examples/evidence-to-paragraph.md) 提供任务输入、证据材料、改写前文本、参考输出与检查依据。它是透明的教学示例，不是一次盲测，也不是性能收益证明。
+
+仓库内的 [SGLang → Ascend 请求执行链文章](../../docs/sglang/sglang-ascend-request-lifecycle.md) 展示较长篇幅的工程叙事，可观察同一个请求如何连接调度、模型与输出。本次 Skill 更新不等于对该文章全部技术结论重新验收。
+
+## 规则如何组织
+
+| 入口 | 按什么任务读取 |
+|---|---|
+| [SKILL.md](SKILL.md) | 工作流程、默认风格、准确性和阅读体验门槛 |
+| [源码与部署](references/source-and-deployment.md) | 版本、真实调用边、可复制命令与验证边界 |
+| [执行链核验](references/execution-chain-review.md) | 消息边界、设备提交、缓存状态和布局转换 |
+| [阅读体验](references/reading-experience.md) | 术语、段落、源码摘录与图示安排 |
+| [证据交接](references/evidence-handoff.md) | 接收研究材料时核查来源、适用条件和未知项 |
+| [职责与验收](references/role-and-acceptance.md) | 与研究、工程、性能分析分工 |
+| [文章评审](references/article-assessment.md) | 用具体段落支持评分，区分编辑判断与技术核验 |
+| [工程总结](references/engineering-evidence-to-outcomes.md) | 周报、技术分享与项目案例 |
+| [回归流程](references/regression-protocol.md) | 保存实际输出再判读，区分结构与行为验证 |
+
+只加载任务需要的参考资料。外部研究结果是待核对的材料，不能因为标记为 verified 就直接当作事实。
+
+## 目前验证到哪里
+
+本 Skill 的公开开发回归集包含 **3 个用例**，不是整套 Skills 的 21 个用例。本轮独立试用了其中 2 个短任务，结果和原始输出见 [评测记录](evals/RESULTS.md)。剩余用例未在本轮执行；没有完整长文盲测、受控新旧版本对照或 NPU 验证。
+
+因此当前定位是可使用、持续迭代的早期公开版本，不以自评分数宣传效果。后续优先增加固定源码材料下的完整文章评测，观察版本混用、调用断点和阅读负担，而非单纯增加规则数量。
+
+反馈时请附上任务输入、所用版本、具体问题段落和可公开的证据；不要上传凭据或内部日志。修改后重跑受影响用例，保留失败记录。
+
+## 来源与维护
+
+由 AkiYangDev 结合 AI 辅助持续整理。核心贡献在于面向 AI Infra 的证据边界、连续工程叙事、模型迁移检查和阅读体验约束；部分理念参考已有写作 Skills，见 [来源说明](ATTRIBUTION.md)。
+
+公开目录保留独立使用所需规则；个人安装版的第三方扩展、外部文章集合和平台资源不随此目录分发。当前目录未附统一开源许可证，不宣称所有内容均为独立原创或已统一重新授权。
 
 更新日期：2026-09-20。
