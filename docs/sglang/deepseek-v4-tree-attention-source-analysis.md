@@ -311,4 +311,239 @@ parents_list
 ~~~python
 expand_scores =
     scores.unsqueeze(2)
-    * topk_p.view(-1,
+    * topk_p.view(-1, topk, topk)
+~~~
+
+例如：
+
+~~~text
+root
+├─ A 0.60
+│  ├─ C 0.70  → path score 0.42
+│  └─ E 0.20  → path score 0.12
+│
+└─ B 0.40
+   ├─ D 0.80  → path score 0.32
+   └─ F 0.10  → path score 0.04
+~~~
+
+最终并不是把整个 expansion tree 都交给 Target。
+
+`organize_draft_results()` 会：
+
+~~~text
+1. flatten score pool
+2. top-k 选出 num_draft_token - 1 个 candidate
+3. sort selected indices
+4. gather 真正进入 Verify 的 draft tokens
+5. 保留 parent topology
+~~~
+
+固定源码：
+
+[`organize_draft_results()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py)
+
+这里最需要区分两个 index space：
+
+~~~text
+top_scores_index / selected_index
+        │
+        └─ Draft expansion candidate-pool space
+
+retrieve_index
+        │
+        └─ Compact Target-Verify row space
+~~~
+
+可以画成：
+
+~~~text
+Draft Expansion Pool
+
+#0 #1 #2 #3 #4 #5 #6 ...
+        │
+        │ top_scores_index
+        ▼
+Selected Candidate Set
+
+#0 #1 #3 #5 ...
+        │
+        │ build_tree_kernel
+        ▼
+Compact Verify Rows
+
+row0 row1 row2 row3 ...
+~~~
+
+Tree Attention 工作的对象，是最后这套：
+
+~~~text
+Compact Verify Row
+~~~
+
+### Verify root 不是普通 draft candidate
+
+进入：
+
+[`build_tree_kernel_efficient()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py)
+
+后第一步就是：
+
+~~~python
+draft_tokens = torch.cat(
+    (
+        bonus_tokens.unsqueeze(1),
+        draft_tokens,
+    ),
+    dim=1,
+).flatten()
+~~~
+
+所以 Target Verify 实际输入是：
+
+~~~text
+[上一轮 bonus/root, selected draft candidates...]
+~~~
+
+而不是单纯：
+
+~~~text
+[draft1, draft2, draft3...]
+~~~
+
+这个 root/bonus 的跨轮语义，后面单独展开。
+
+---
+
+## 三、Tree Position：Sibling 为什么必须拥有相同的时间坐标
+
+Tree Visibility 只解决：
+
+~~~text
+“我可以看谁？”
+~~~
+
+但模型还需要知道：
+
+~~~text
+“我处在第几个 token position？”
+~~~
+
+考虑：
+
+~~~text
+root
+├─ A
+│  └─ C
+└─ B
+   └─ D
+~~~
+
+假设当前 KV-ready prefix 长度是：
+
+~~~text
+P
+~~~
+
+正确 Position 必须是：
+
+~~~text
+root → P
+
+A    → P + 1
+B    → P + 1
+
+C    → P + 2
+D    → P + 2
+~~~
+
+而不能按 physical row 编成：
+
+~~~text
+root → P
+A    → P+1
+B    → P+2
+C    → P+3
+D    → P+4
+~~~
+
+因为：
+
+~~~text
+A / B
+~~~
+
+不是“先发生 A，再发生 B”。
+
+它们是：
+
+> **同一个未来时间步的两个备选世界。**
+
+因此：
+
+~~~text
+same tree depth
+=
+same logical position
+~~~
+
+### 源码确实按 depth 算 Position
+
+Tree kernel 在 root 位置写：
+
+~~~python
+positions[root] = seq_len
+~~~
+
+其它 node 则沿 parent relation 向上回溯，统计 depth：
+
+~~~text
+position
+=
+seq_len + tree_depth
+~~~
+
+固定 Triton 实现：
+
+[`spec_tree.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/ops/speculative/spec_tree.py)
+
+源码注释给出的例子就是：
+
+~~~text
+depth:
+[0, 1, 1, 2]
+
+prefix length:
+7
+
+positions:
+[7, 8, 8, 9]
+~~~
+
+SGLang 的真实单测更进一步。
+
+[`test_build_eagle_tree.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/test/registered/spec/utils/test_build_eagle_tree.py)
+
+其中一个 request 得到：
+
+~~~text
+positions =
+[5, 6, 6, 7, 7, 8, 8, 9]
+~~~
+
+配合：
+
+~~~text
+retrieve_next_token =
+[1, 3, 4, 5, 6, 7, -1, -1]
+
+retrieve_next_sibling =
+[-1, 2, -1, -1, -1, -1, -1, -1]
+~~~
+
+对应的树是：
+
+~~~text
+                   row0 pos5
+                  /                   row1 pos6          row2 pos6
+     
