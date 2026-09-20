@@ -41,7 +41,7 @@ def shell(title, body, kind='home', route='', description=DESCRIPTION):
 <script type="module" src="{BASE}assets/app.js?v={version}"></script></head><body class="{kind}" id="top">
 <a class="skip" href="#main">跳至正文</a><header class="header"><div class="header-inner">
 <a class="brand" href="{BASE}" aria-label="AkiYang 首页"><span class="brand-icon" aria-hidden="true">A<span>.</span></span><span>AkiYang<span class="brand-caption">推理工程手记</span></span></a>
-<nav aria-label="主导航"><a class="nav-articles" href="{BASE}articles/"{' aria-current="page"' if kind == 'archive-page' else ''}>文章</a><a class="nav-skills" href="{BASE}skills/"{' aria-current="page"' if 'skill' in kind else ''}>Skills</a><a class="nav-github" href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章与 Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索</span><kbd>/</kbd></button><button class="theme-toggle icon-button" aria-label="切换深色模式" title="切换深色模式"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button></nav></div></header>
+<nav aria-label="主导航"><a class="nav-articles" href="{BASE}articles/"{' aria-current="page"' if kind == 'archive-page' else ''}>文章</a><a class="nav-series" href="{BASE}series/">阅读地图</a><a class="nav-skills" href="{BASE}skills/"{' aria-current="page"' if 'skill' in kind else ''}>Skills</a><a class="nav-github" href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章与 Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索</span><kbd>/</kbd></button><button class="theme-toggle icon-button" aria-label="切换深色模式" title="切换深色模式"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button></nav></div></header>
 {body}
 <footer class="footer wrap"><a href="{BASE}" class="footer-brand">AkiYang<span>推理工程手记</span></a><div><a href="{BASE}credits/">插画来源</a><a href="{REPO}">源代码 ↗</a><span>独立个人站 · 非 DeepSeek 官方</span></div></footer>
 <dialog id="search-dialog" aria-labelledby="search-title"><div class="dialog-top"><h2 id="search-title">搜索文章与 Skills</h2><button class="close-search icon-button" aria-label="关闭搜索">×</button></div><label for="search-input" class="sr-only">搜索标题、章节或正文</label><input id="search-input" type="search" placeholder="搜索标题、章节或正文…" autocomplete="off"><div id="search-results" aria-live="polite"></div><p class="dialog-hint">↑ ↓ 选择 · Enter 打开 · Esc 关闭</p></dialog>
@@ -168,7 +168,7 @@ def published_series(paths, routes):
             if heading:
                 items.append({**entry, 'title': heading.group(1), 'url': routes[path.resolve()]})
         if items:
-            series.append({**spec, 'items': items, 'url': BASE + 'topics/' + spec['topic'] + '/#' + spec['id']})
+            series.append({**spec, 'items': items, 'url': BASE + 'series/#' + spec['id']})
     return series
 
 
@@ -196,6 +196,19 @@ def series_pager(series, current):
             item = items[index]
             links.append(f'<a class="series-page-link {relation}" rel="{relation}" href="{item["url"]}"><span class="pager-label">{arrow} {label}</span><strong>{esc(item["label"])}</strong><span class="pager-title">{esc(item["title"])}</span></a>')
     return '<nav class="series-pager" aria-label="系列前后篇">' + ''.join(links) + '</nav>' if links else ''
+
+
+def reading_map(series, articles):
+    lookup = {a['url']: a for a in articles}
+    blocks = []
+    for group in series:
+        nodes = []
+        total = sum(lookup[item['url']]['minutes'] for item in group['items'])
+        for i, item in enumerate(group['items']):
+            a = lookup[item['url']]
+            nodes.append(f'''<li class="map-step" data-reading-item="{item['url']}"><a href="{item['url']}"><span class="map-number">{i+1:02d}</span><h3>{esc(item['label'])}</h3><p>{esc(item.get('description', a['excerpt']))}</p><span class="map-meta">约 {a['minutes']} 分钟 <span data-reading-status>未读</span></span></a></li>''')
+        blocks.append(f'''<section class="reading-map" id="{group['id']}" data-reading-group><div class="map-heading"><div><p class="eyebrow">SOURCE READING PATH</p><h2>{esc(group['title'])}</h2><p>{len(group['items'])} 篇 · 约 {total} 分钟 · 推荐阅读顺序</p></div><a class="text-link" data-continue-reading href="{group['items'][0]['url']}">开始阅读 →</a></div><ol class="map-steps">{''.join(nodes)}</ol><div class="map-footer"><span data-reading-summary aria-live="polite">已读 0 / {len(group['items'])} 篇</span><span>进度仅保存在当前浏览器</span></div></section>''')
+    return ''.join(blocks)
 
 
 def build():
@@ -240,6 +253,8 @@ def build():
         current_series = series_by_path.get(current_path)
         series_nav = series_navigation(current_series, current_path)
         pager = series_pager(current_series, current_path)
+        if current_series:
+            pager = f'<div class="reading-actions"><button class="reading-complete" data-article-url="{url}" aria-pressed="false">标记为已读</button><a class="text-link" href="{BASE}series/">返回阅读地图 →</a></div>' + pager
         title_parts = title.split('：', 1)
         display_title = title_html(title_parts[0]) + (f'<span class="title-sub">{title_html(title_parts[1])}</span>' if len(title_parts) == 2 else '')
         body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}articles/">文章</a><span>/</span><a href="{BASE}topics/{topic_id}/">{esc(topic)}</a></nav><header class="article-header"><h1>{display_title}</h1><div class="article-meta"><span>AkiYang</span><span>约 {minutes} 分钟阅读</span><a href="{REPO}/blob/main/{path.relative_to(ROOT).as_posix()}" target="_blank" rel="noopener noreferrer">阅读源码文档 ↗</a><button class="copy-link">复制链接</button></div></header>{series_nav}<details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article>{pager}<div class="article-end"><div><span class="eyebrow">读到这里</span><p>从一条请求，看见整个系统。</p></div><a href="{BASE}articles/" class="text-link">返回文章目录 <span aria-hidden="true">↗</span></a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
@@ -249,13 +264,16 @@ def build():
     topics = sorted({a['topic_id'] for a in articles})
     topic_links = ''.join(f'<a class="topic-link" href="{BASE}topics/{t}/">{esc(TOPICS.get(t,t))}<span>{sum(a["topic_id"] == t for a in articles):02d}</span></a>' for t in topics)
     featured_url = articles[0]['url'] if articles else BASE + 'articles/'
-    cards = ''.join(card(a, i + 1) for i, a in enumerate(articles))
-    home_series = next((series for series in series_list if series['topic'] == 'sglang'), None)
-    series_preview = series_navigation(home_series)
-    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AKIYANG / ENGINEERING NOTES</p><h1 id="hero-title">理解系统。<br>深入<span>每一次推理。</span></h1><p class="hero-description">从请求到算子，从源码到工程。<br>关于大模型推理的原理、实现与实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">阅读专题 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">全部文章 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art"><div class="art-orbit" aria-hidden="true"></div><span class="art-word" aria-hidden="true">DEEP<br>BLUE.</span><img src="{BASE}assets/whale-cutout.webp" alt="DeepSeek 鲸鱼娘，蓝色长发与鲸尾的女仆装角色" width="945" height="1664" fetchpriority="high"><span class="art-caption">深蓝之间 · 探索推理</span></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>技术文章 <span class="count">{len(articles):02d}</span></h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="journal-grid"><div class="article-list">{cards}</div><aside class="chapter-preview series-preview"><p class="eyebrow">按顺序阅读</p>{series_preview}</aside></div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section></main>'''
+    groups = [('源码解析', [a for a in articles if a['topic_id'] == 'sglang']), ('部署实践', [a for a in articles if a['topic_id'] == 'ascend']), ('推理工程', [a for a in articles if a['topic_id'] not in ('sglang', 'ascend')])]
+    cards = ''.join(f'<section class="journal-category" aria-label="{label}"><h3 class="category-label">{label}</h3>' + ''.join(card(a, i + 1) for i, a in enumerate(group)) + '</section>' for label, group in groups if group)
+    knowledge_map = reading_map(series_list, articles)
+    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AKIYANG / ENGINEERING NOTES</p><h1 id="hero-title">理解系统。<br>深入<span>每一次推理。</span></h1><p class="hero-description">从请求到算子，从源码到工程。<br>关于大模型推理的原理、实现与实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">阅读专题 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">全部文章 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art"><div class="art-orbit" aria-hidden="true"></div><span class="art-word" aria-hidden="true">DEEP<br>BLUE.</span><img src="{BASE}assets/whale-cutout.webp" alt="DeepSeek 鲸鱼娘，蓝色长发与鲸尾的女仆装角色" width="945" height="1664" fetchpriority="high"><span class="art-caption">深蓝之间 · 探索推理</span></div></section><section class="home-map wrap" aria-label="源码阅读地图">{knowledge_map}</section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>技术文章 <span class="count">{len(articles):02d}</span></h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section></main>'''
     if skills:
         skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">METHODS &amp; PRACTICE</p><h2 id="home-skills-title">Skills <span class="count">{len(skills):02d}</span></h2></div><a class="text-link" href="{BASE}skills/">浏览 Skills <span aria-hidden="true">↗</span></a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills[:3])}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
+    series_page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">THE READING ATLAS</p><h1>源码阅读地图</h1><p>从整体请求到模型内部，沿着已发布的文章深入系统。</p></div></div>{knowledge_map}<p class="map-note">这里展示文章的推荐阅读顺序，并非运行时调用图。读完文章后可在文末标记已读。</p></main>'''
+    (OUT / 'series').mkdir(exist_ok=True)
+    (OUT / 'series/index.html').write_text(shell('源码阅读地图', series_page, 'series-index-page', 'series/'), encoding='utf-8')
     (OUT / 'index.html').write_text(shell('推理工程手记', body), encoding='utf-8')
     for topic_id in [None] + topics:
         selected = [a for a in articles if topic_id is None or a['topic_id'] == topic_id]

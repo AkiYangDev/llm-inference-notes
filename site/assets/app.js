@@ -101,3 +101,47 @@ $('.zoom-out').addEventListener('click', () => { zoom = Math.max(.5, zoom - .25)
 $('.zoom-reset').addEventListener('click', () => { zoom = 1; applyZoom(); });
 $('.close-diagram').addEventListener('click', () => $('#diagram-dialog').close());
 window.addEventListener('resize', () => { if ($('#diagram-dialog').open) applyZoom(); });
+
+// Device-local reading state; completion is an explicit reader action.
+const readingKey = 'aki-reading-v1';
+let readingState = {};
+try { const value = JSON.parse(localStorage.getItem(readingKey) || '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) readingState = value; } catch {}
+function refreshReading() {
+  document.querySelectorAll('[data-reading-group]').forEach(group => {
+    const items = [...group.querySelectorAll('[data-reading-item]')];
+    let count = 0;
+    items.forEach(item => {
+      const done = readingState[item.dataset.readingItem] === true;
+      item.classList.toggle('is-read', done);
+      item.querySelector('[data-reading-status]').textContent = done ? '已读 ✓' : '未读';
+      if (done) count++;
+    });
+    group.querySelector('[data-reading-summary]').textContent = `已读 ${count} / ${items.length} 篇`;
+    const next = items.find(item => readingState[item.dataset.readingItem] !== true);
+    const link = group.querySelector('[data-continue-reading]');
+    link.href = (next || items[0]).dataset.readingItem;
+    link.textContent = count === items.length ? '重新阅读 →' : count ? '继续阅读 →' : '开始阅读 →';
+  });
+  document.querySelectorAll('.reading-complete').forEach(button => {
+    const done = readingState[button.dataset.articleUrl] === true;
+    button.setAttribute('aria-pressed', String(done));
+    button.textContent = done ? '已读 ✓ · 撤销标记' : '标记为已读';
+  });
+}
+document.querySelectorAll('.reading-complete').forEach(button => button.addEventListener('click', () => {
+  const path = button.dataset.articleUrl;
+  const done = readingState[path] !== true;
+  const next = {...readingState, [path]: done};
+  try { localStorage.setItem(readingKey, JSON.stringify(next)); readingState = next; refreshReading(); toast(done ? '已记录阅读进度' : '已取消已读标记'); }
+  catch { toast('浏览器无法保存进度，请检查存储设置'); }
+}));
+window.addEventListener('storage', event => {
+  if (event.key !== readingKey && event.key !== null) return;
+  try { const value = JSON.parse(event.newValue || '{}'); readingState = value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { readingState = {}; }
+  refreshReading();
+});
+window.addEventListener('pageshow', () => {
+  try { const value = JSON.parse(localStorage.getItem(readingKey) || '{}'); readingState = value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { readingState = {}; }
+  refreshReading();
+});
+refreshReading();

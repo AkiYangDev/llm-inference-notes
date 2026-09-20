@@ -4,10 +4,31 @@
     "title": "SGLang 源码系列",
     "topic": "sglang",
     "items": [
-      {"path": "docs/sglang/sglang-ascend-request-lifecycle.md", "label": "请求执行全链路"},
-      {"path": "docs/sglang/sglang-scheduler-source-analysis.md", "label": "Scheduler"},
-      {"path": "docs/sglang/sglang-modelrunner-source-analysis.md", "label": "ModelRunner"},
-      {"path": "docs/sglang/sglang-kv-cache-source-analysis.md", "label": "KV Cache"}
+      {
+        "path": "docs/sglang/sglang-ascend-request-lifecycle.md",
+        "label": "请求执行全链路",
+        "description": "从请求入口建立全局视角"
+      },
+      {
+        "path": "docs/sglang/sglang-scheduler-source-analysis.md",
+        "label": "Scheduler",
+        "description": "理解请求如何组批与调度"
+      },
+      {
+        "path": "docs/sglang/sglang-modelrunner-source-analysis.md",
+        "label": "ModelRunner",
+        "description": "跟随 ForwardBatch 进入模型"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-attention-source-analysis.md",
+        "label": "Attention 与 KV Cache",
+        "description": "连接 Query、历史上下文与缓存"
+      },
+      {
+        "path": "docs/sglang/sglang-kv-cache-source-analysis.md",
+        "label": "KV Cache",
+        "description": "理解缓存的分配与复用"
+      }
     ]
   }
 ]
