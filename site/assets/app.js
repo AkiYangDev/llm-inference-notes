@@ -39,7 +39,7 @@ async function searchArticles() {
     }
     for (const result of found.slice(0, 15)) {
       const link = document.createElement('a'); link.href = result.article.url + (result.anchor ? '#' + encodeURIComponent(result.anchor) : ''); link.className = 'search-result';
-      const title = document.createElement('strong'); highlight(title, result.article.title, query); link.append(title);
+      const title = document.createElement('strong'); highlight(title, result.article.title, query); link.append(title); const type = document.createElement('span'); type.className = 'result-heading'; type.textContent = result.article.kind === 'skill' ? 'Skill · 介绍与使用' : '文章 · ' + result.article.topic; link.append(type);
       if (result.heading) { const heading = document.createElement('span'); heading.className = 'result-heading'; highlight(heading, result.heading + ' ↗', query); link.append(heading); }
       const excerpt = document.createElement('span'); excerpt.className = 'result-excerpt'; const pos = result.text.toLowerCase().indexOf(needle); const start = Math.max(0, pos - 28); const snippet = (start ? '…' : '') + result.text.slice(start, start + 130) + (result.text.length > start + 130 ? '…' : ''); highlight(excerpt, snippet, query); link.append(excerpt);
       link.addEventListener('click', () => search.close()); results.append(link);
@@ -59,7 +59,7 @@ search.addEventListener('keydown', event => {
 document.addEventListener('keydown', event => { if (event.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable && !document.querySelector('dialog[open]')) { event.preventDefault(); openSearch(); } });
 for (const dialog of document.querySelectorAll('dialog')) dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
 async function copyText(text, button, success) { try { await navigator.clipboard.writeText(text); toast(success); if (button) { const previous = button.textContent; button.textContent = '已复制'; setTimeout(() => button.textContent = previous, 2000); } } catch { toast('复制未完成，请手动选择内容复制。'); } }
-$('.copy-link')?.addEventListener('click', event => copyText(location.href, event.currentTarget, '文章链接已复制'));
+$('.copy-link')?.addEventListener('click', event => copyText(location.href, event.currentTarget, '页面链接已复制'));
 for (const block of document.querySelectorAll('.prose pre:not(.mermaid)')) { const button = document.createElement('button'); button.className = 'copy-code'; button.textContent = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.addEventListener('click', () => copyText(block.querySelector('code')?.textContent || '', button, '代码已复制')); block.append(button); }
 for (const link of document.querySelectorAll('.mobile-toc a')) link.addEventListener('click', () => { const panel = link.closest('details'); panel.open = false; });
 if ($('.prose')) {
