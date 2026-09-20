@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib.parse import quote
 from html.parser import HTMLParser
 import html
+import base64
 import hashlib
 import json
 import re
@@ -232,6 +233,20 @@ def build():
     for path in (ROOT / 'site/assets').iterdir():
         if path.suffix != '.md':
             shutil.copy2(path, OUT / 'assets' / path.name)
+
+    # The high-quality homepage hero is stored as small text payload chunks so
+    # repository tooling can transport it reliably. Rebuild one normal WebP for
+    # the published site; browsers still request a single image.
+    hero_payload_dir = ROOT / 'site/asset-payloads/whale-hero-v2'
+    hero_payload = ''.join(
+        part.read_text(encoding='ascii').strip()
+        for part in sorted(hero_payload_dir.glob('part-*.b64'))
+    )
+    hero_bytes = base64.b64decode(hero_payload, validate=True)
+    hero_sha256 = hashlib.sha256(hero_bytes).hexdigest()
+    if len(hero_bytes) != 40634 or hero_sha256 != '0b04d52e34bd8192dfa28db1937a442432a9cd1f6b81a62a19ea2ce9cc99ffe0':
+        raise RuntimeError('whale-hero-v2 payload is incomplete or corrupted')
+    (OUT / 'assets' / 'whale-hero-v2.webp').write_bytes(hero_bytes)
     editorial = json.loads((ROOT / "site/articles.json").read_text(encoding="utf-8"))
     articles = []
     paths = [p for p in sorted((ROOT / 'docs').rglob('*.md')) if p.name != 'README.md']
@@ -289,7 +304,7 @@ def build():
     cards = ''.join(card(a, i + 1) for i, a in enumerate(latest))
     recommended = ''.join(f'<a class="recommend-link" href="{a["url"]}"><span>{label}</span><strong>{title_html(a["title"])}</strong><span aria-hidden="true">→</span></a>' for a, label in [(articles[0], '从这里开始'), (next(a for a in articles if 'distributed-parallel' in a['url']), '理解并行')])
     knowledge_map = reading_map(series_list, articles)
-    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AI INFRA NOTES</p><h1 id="hero-title">把推理原理，<br><span>写成读得懂的手记。</span></h1><p class="hero-description">DeepSeek · SGLang · Ascend<br>记录推理系统的原理、源码与工程实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">开始阅读 <span aria-hidden="true">↗</span></a><a class="text-link hero-secondary" href="{BASE}series/">阅读地图 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art hero-scene"><img src="{BASE}assets/whale-hero-v2.avif" alt="蓝发鲸尾女仆站在蓝白科技海洋场景中" width="800" height="360" fetchpriority="high" decoding="async"></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新手记</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section><section class="reading-entry wrap" aria-label="阅读路线"><span class="mascot mascot-reading" aria-hidden="true"></span><div><p class="eyebrow">READING SERIES</p><h2>沿着源码，逐步深入</h2><p>请求执行 · 模型内部 · 分布式并行 · 投机推理</p></div><a class="text-link" href="{BASE}series/">查看完整阅读地图 →</a></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
+    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AI INFRA NOTES</p><h1 id="hero-title">把推理原理，<br><span>写成读得懂的手记。</span></h1><p class="hero-description">DeepSeek · SGLang · Ascend<br>记录推理系统的原理、源码与工程实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">开始阅读 <span aria-hidden="true">↗</span></a><a class="text-link hero-secondary" href="{BASE}series/">阅读地图 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art hero-scene"><img src="{BASE}assets/whale-hero-v2.webp" alt="蓝发鲸尾女仆站在蓝白科技海洋场景中" width="1000" height="450" fetchpriority="high" decoding="async"></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新手记</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section><section class="reading-entry wrap" aria-label="阅读路线"><span class="mascot mascot-reading" aria-hidden="true"></span><div><p class="eyebrow">READING SERIES</p><h2>沿着源码，逐步深入</h2><p>请求执行 · 模型内部 · 分布式并行 · 投机推理</p></div><a class="text-link" href="{BASE}series/">查看完整阅读地图 →</a></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
     if skills:
         skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">METHODS &amp; PRACTICE</p><h2 id="home-skills-title">Skills <span class="count">{len(skills):02d}</span></h2></div><a class="text-link" href="{BASE}skills/">浏览 Skills <span aria-hidden="true">↗</span></a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills[:3])}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
@@ -317,7 +332,7 @@ def build():
         dest.write_text(shell(label, page, 'archive-page', route, f'{label}相关文章：源码分析、执行链路与推理工程实践。'), encoding='utf-8')
     (OUT / 'search.json').write_text(json.dumps(articles + skills, ensure_ascii=False), encoding='utf-8')
     (OUT / '.nojekyll').touch()
-    credits = f'''<main id="main" class="credits wrap"><a class="back-link" href="{BASE}">← 首页</a><h1>插画来源</h1><p>本站为 AkiYang 的独立个人技术站，非 DeepSeek 官方网站。</p><h2>角色设计</h2><p>根据站点所有者提供的作者信息，鲸鱼娘角色设计署名 <a href="https://space.bilibili.com/4168597/dynamic">ZipZipPipe</a>。角色设计署名不等于下列每张衍生插画都由该作者绘制。</p><h2>首页立绘</h2><p>站点所有者提供持笔记本与钢笔的鲸鱼娘素材，本站使用 AI 辅助制作透明背景展示版本，可能存在局部细节变化。该张衍生插画的具体绘者未另行核实。</p><h2>Q 版状态素材</h2><p>阅读、搜索、完成与迷路四种状态为 AI 生成的角色延展素材，非 ZipZipPipe 原作。不对原角色或用户提供的插画主张原创或再许可。</p><p class="credits-note">历史素材与处理记录见 <a href="{REPO}/blob/main/site/assets/SOURCES.md">SOURCES.md</a>。</p></main>'''
+    credits = f'''<main id="main" class="credits wrap"><a class="back-link" href="{BASE}">← 首页</a><h1>插画来源</h1><p>本站为 AkiYang 的独立个人技术站，非 DeepSeek 官方网站。</p><h2>角色设计</h2><p>根据站点所有者提供的作者信息，鲸鱼娘角色设计署名 <a href="https://space.bilibili.com/4168597/dynamic">ZipZipPipe</a>。角色设计署名不等于下列每张衍生插画都由该作者绘制。</p><h2>首页看板</h2><p>首页宽幅鲸鱼娘看板以站点所有者提供的蓝发鲸尾女仆立绘作为角色与服装参考，经 AI 延展为蓝白科技海洋场景；该宽幅场景并非原画师原作，具体处理记录见素材来源文件。</p><h2>Q 版状态素材</h2><p>阅读、搜索、完成与迷路四种状态为 AI 生成的角色延展素材，非 ZipZipPipe 原作。不对原角色或用户提供的插画主张原创或再许可。</p><p class="credits-note">历史素材与处理记录见 <a href="{REPO}/blob/main/site/assets/SOURCES.md">SOURCES.md</a>。</p></main>'''
     (OUT / 'credits').mkdir()
     (OUT / 'credits/index.html').write_text(shell('插画来源', credits, 'credits-page', 'credits/'), encoding='utf-8')
     error = f'<main id="main" class="error-page wrap"><span class="mascot mascot-lost" aria-hidden="true"></span><span class="eyebrow">404 / PAGE NOT FOUND</span><h1>这一页，游到别处去了。</h1><p>链接可能已经变更，可以从文章目录继续阅读。</p><a class="button-primary" href="{BASE}articles/">浏览文章 →</a></main>'

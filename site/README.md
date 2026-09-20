@@ -11,7 +11,7 @@ python3 -m pip install -r site/requirements.txt
 python3 site/build.py
 ```
 
-生成目录为 `_site/`。站点基础路径为 `/llm-inference-notes/`，部署路径变化时需要同步调整 `site/build.py` 的 BASE。
+生成目录为 `_site/`。站点基础路径为 `/llm-inference-notes/`，部署路径变化时需要同步调整 `site/build.py` 的 BASE。\n\n首页高质量看板图由 `site/asset-payloads/whale-hero-v2/` 的文本分片在构建时还原为单张 `whale-hero-v2.webp`；`site/build.py` 会校验长度和 SHA-256，分片缺失或损坏会让构建直接失败。
 
 ## 界面资源
 
@@ -82,4 +82,4 @@ SGLang 系列顺序为请求执行全链路、Scheduler、ModelRunner、Attentio
 
 首页采用雾白、紫蓝与蓝白鲸鱼娘立绘，最新文章保持自动生成；完整阅读地图位于 `/series/`，首页用简洁入口连接。手机端首屏上下排列，正文延续独立阅读排版。
 
-`whale-hero-v2.avif` 为首页宽幅看板图：桌面端整幅铺入 Hero，并在左侧叠加阅读友好的渐变；移动端使用同一资源做右侧焦点裁切，避免再下载一张移动端大图。`whale-states.webp` 仍为 Q 版四宫格，CSS 的 `.mascot-*` 用于阅读入口、搜索、完成操作与 404；`whale-editor.webp` 保留为此前首屏版本的历史素材。素材来源页区分角色设计与 AI 延展素材。减少动态效果设置关闭动画与过渡。
+`whale-hero-v2.webp` 为首页宽幅看板图：桌面端整幅铺入 Hero，并在左侧叠加阅读友好的渐变；移动端使用同一资源做右侧焦点裁切，避免再下载一张移动端大图。`whale-states.webp` 仍为 Q 版四宫格，CSS 的 `.mascot-*` 用于阅读入口、搜索、完成操作与 404；`whale-editor.webp` 保留为此前首屏版本的历史素材。素材来源页区分角色设计与 AI 延展素材。减少动态效果设置关闭动画与过渡。
