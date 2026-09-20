@@ -1865,4 +1865,168 @@ late binding
 flowchart TD
     A[Req / ReqKvInfo] --> B[ScheduleBatch.prepare_for_decode]
 
-    B --
+    B --> C{Speculative?}
+
+    C -->|No| D[alloc_for_decode: one token]
+    C -->|Yes| E[spec_prepare_for_decode]
+
+    E --> F[Reserve speculative KV capacity]
+    F --> G[ScheduleBatch DECODE]
+
+    G --> H[Spec Worker]
+
+    H --> I[Draft / Proposal]
+    I --> J[Target Verify]
+    J --> K[Accept]
+
+    K --> L[new_seq_lens]
+    K --> M[accept_lens / accepted output]
+    K --> N[next bonus / next draft state]
+
+    L --> O[FutureMap.publish]
+    N --> P[Draft / post-verify state commit]
+    P --> Q[GenerationBatchResult]
+
+    Q --> R[FutureMap.stash]
+    Q --> S[BatchResultProcessor]
+
+    S --> T[req.output_ids += retained accepted run]
+    S --> U[req.kv.kv_committed_len += retained length]
+    S --> V[finish / grammar / metrics]
+
+    O --> W[Next scheduling iteration]
+    R --> W
+
+    W --> X[resolve_seq_lens]
+    W --> Y[resolve_forward_inputs]
+
+    X --> B
+    Y --> B
+```
+
+这张图里真正存在三类“时间”。
+
+### Past：CPU 已经 settle 的事实
+
+```text
+Req.output_ids
+
+Req.kv.kv_committed_len
+```
+
+这是：
+
+```text
+Committed Past
+```
+
+---
+
+### Present：这一轮 Scheduler Transaction
+
+```text
+ScheduleBatch
+
+ForwardBatch
+
+temporary TARGET_VERIFY / DRAFT_EXTEND states
+```
+
+这是：
+
+```text
+Executing Present
+```
+
+---
+
+### Future：CPU 还没 settle，但下一轮 GPU 已经可以依赖的结果
+
+```text
+FutureMap.new_seq_lens
+
+FutureMap.output_tokens_buf
+
+next_draft_input
+
+topk / hidden / confidence ...
+```
+
+这是：
+
+```text
+Safe Future
+```
+
+Spec V2 Scheduler 的核心价值，就是允许：
+
+```text
+Past
+Present
+Future
+```
+
+短暂不同步，但每一个 owner 都只能修改自己的那只时钟。
+
+---
+
+### 最值得记住的四个 Strict Review 结论
+
+**第一，Overlap 下 `ScheduleBatch.seq_lens` 可以领先 `Req.kv.kv_committed_len` 最多一个 Verify iteration，而不是一个 token。**
+
+一次 Verify 可能接受多个 token，所以数值差可以大于 1。2x speculative reserve 正是为了吸收这一轮 host committed lag。
+
+**第二，`on_publish(new_seq_lens)` 的统一语义是“next forward frontier 已经确定”，不是“所有 device-side post-verify commit 已结束”。**
+
+不同算法 publish 后仍可能继续 Draft Extend、Mamba commit、hidden → draft KV materialization。
+
+**第三，`_forward_isolation()` 对 Spec V2 默认 rollback 的是整个 `ScheduleBatch` dataclass。**
+
+Worker 的所有 mid-forward mutation 都是 transaction-local；真正跨轮的状态只能通过 `GenerationBatchResult / FutureMap / explicit recommit` 重新进入 Scheduler state。
+
+**第四，`new_seq_lens + 1` 只属于 mixed speculative tail 的 1-token EXTEND 语义。**
+
+`new_seq_lens` 本身仍是 KV-ready base；`+1` 表示当前 mixed forward 正在把 base 上的 pending bonus 作为一枚 extend token materialize。它既不是普通 spec decode 规则，也不是 DP Attention 的统一规则。
+
+---
+
+### Debug Scheduler 时建议同时打印这些字段
+
+以后如果你真正去 Debug Spec V2 Scheduler，我会优先打印：
+
+```text
+rid
+
+len(origin_input_ids)
+len(output_ids)
+Req.seqlen
+
+req.kv.cache_protected_len
+req.kv.kv_committed_len
+req.kv.kv_allocated_len
+
+batch.forward_iter
+batch.forward_mode
+batch.seq_lens
+batch.seq_lens_cpu
+
+type(batch.spec_info)
+future_indices
+
+result.accept_lens
+result.new_seq_lens
+
+FutureMap.new_seq_lens_buf[req_pool_idx]
+FutureMap.output_tokens_buf[req_pool_idx]
+```
+
+然后先问四个问题：
+
+```text
+1. 现在看的是 Host clock 还是 Device clock？
+
+2. 这个 field 的 owner 是 Scheduler、
+   Worker、ResultProcessor 还是 FutureMap？
+
+3. 这个值代表 committed boundary，
+   allocated bounda
