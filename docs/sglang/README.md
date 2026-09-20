@@ -16,6 +16,7 @@
 - [DeepSeek-V4 Speculative Decoding 源码解析：EAGLE Draft Tree 如何组织多分支候选，并驱动一次 Verify](deepseek-v4-eagle-draft-tree-source-analysis.md)：追踪 EAGLE 多分支候选的累计 score、Tree topology、Mask、Target traversal、KV compaction，并区分 Runtime Tree 能力与 Ascend dsv4 paged-tree 当前限制。
 - [DeepSeek-V4 Speculative Decoding 源码解析：多卡场景下 Draft、Verify 与 Accept 如何保持一致](deepseek-v4-speculative-distributed-consistency-source-analysis.md)：解释 speculative control state 在 TP/DP/EP 多卡下如何收敛，比较 DSpark/EAGLE 的同步边界，并区分 HCCL、ZBAL 与 DeepEP。
 - [DeepSeek-V4 Speculative Decoding 源码解析：Draft Tree 如何落到 KV Cache，Accept 后缓存如何 Commit、Compact 与 Rollback？](deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md)：解释 accepted path 如何从 verify-row space 收敛到 committed KV，核清 bonus、overshoot reclaim，以及 Ascend C4/C128 cleanup 的真实边界。
+- [DeepSeek-V4 Speculative Decoding 源码解析：Verify 为什么需要 Tree Attention？Tree Mask、Position 与 Candidate Layout 如何协同](deepseek-v4-tree-attention-source-analysis.md)：从 Candidate Layout、Tree Position、FULL_MASK / QLEN_ONLY 到 Triton / FlashAttention backend，解释 multi-branch Verify 的 ancestor-only visibility，并厘清 DeepSeek-V4 topk=1 的真实能力边界。
 - [DeepSeek-V4 Prefill / Decode Disaggregation 源码解析：为什么生产系统需要拆分 Prefill 和 Decode](deepseek-v4-pd-disaggregation-source-analysis.md)：追踪 Prefill/Decode 两侧握手、目标 KV 预分配、handoff token、PREBUILT metadata reconstruction，以及 Ascend MemFabric 数据面。
 
 [返回仓库首页](../../README.md)
