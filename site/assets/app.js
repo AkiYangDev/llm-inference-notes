@@ -65,7 +65,7 @@ for (const link of document.querySelectorAll('.mobile-toc a')) link.addEventList
 if ($('.prose')) {
   const progress = $('.reading-progress'), headings = [...document.querySelectorAll('.prose h2, .prose h3')], links = [...document.querySelectorAll('.toc a')];
   let scheduled = false;
-  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (heading.getBoundingClientRect().top < 155) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
+  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (heading.getBoundingClientRect().top < $('.header').getBoundingClientRect().height + 55) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
   window.addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, {passive:true}); window.addEventListener('resize', update); update();
   // Highlighting and diagrams load independently; failure of one does not delay the other.
   (async () => { try { const {default:hljs} = await import('https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js'); const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/styles/github-dark.min.css'; document.head.append(css); document.querySelectorAll('.prose pre code').forEach(c => hljs.highlightElement(c)); } catch {} })();
@@ -87,7 +87,7 @@ if ($('.prose')) {
         } while (pending);
         rendering = false;
         // Re-align deep links after diagrams change the document height.
-        if (location.hash && !updateDiagrams.aligned) { const target = document.getElementById(decodeURIComponent(location.hash.slice(1))); target?.scrollIntoView({behavior:'instant',block:'start'}); updateDiagrams.aligned = true; }
+        if (location.hash && !updateDiagrams.aligned) { updateDiagrams.aligned = true; requestAnimationFrame(() => requestAnimationFrame(() => { const target = document.getElementById(decodeURIComponent(location.hash.slice(1))); if (target) window.scrollTo({top:window.scrollY + target.getBoundingClientRect().top - $('.header').getBoundingClientRect().height - 24, behavior:'instant'}); })); }
       };
       await updateDiagrams();
       for (const {node} of diagrams) { const button = document.createElement('button'); button.textContent = '放大查看'; button.className = 'expand-diagram'; button.addEventListener('click', () => { const svg = node.querySelector('svg'); if (!svg) return; $('#diagram-view').replaceChildren(svg.cloneNode(true)); $('#diagram-dialog').showModal(); zoom = 1; applyZoom(); }); node.parentElement.append(button); }
@@ -95,7 +95,7 @@ if ($('.prose')) {
   })();
 }
 let zoom = 1;
-function applyZoom() { const view = $('#diagram-view'), svg = view.querySelector('svg'); if (svg) svg.style.width = Math.max(100, view.clientWidth - 40) * zoom + 'px'; $('.zoom-out').disabled = zoom <= .5; $('.zoom-in').disabled = zoom >= 3; }
+function applyZoom() { const view = $('#diagram-view'), svg = view.querySelector('svg'); if (svg) { const box = svg.viewBox.baseVal; const room = Math.max(150, innerHeight * .68 - 40); const ratio = box.width && box.height ? box.width / box.height : 1; const fitWidth = Math.min(Math.max(100, view.clientWidth - 40), room * ratio); svg.style.width = fitWidth * zoom + 'px'; } $('.zoom-out').disabled = zoom <= .5; $('.zoom-in').disabled = zoom >= 3; }
 $('.zoom-in').addEventListener('click', () => { zoom = Math.min(3, zoom + .25); applyZoom(); });
 $('.zoom-out').addEventListener('click', () => { zoom = Math.max(.5, zoom - .25); applyZoom(); });
 $('.zoom-reset').addEventListener('click', () => { zoom = 1; applyZoom(); });
