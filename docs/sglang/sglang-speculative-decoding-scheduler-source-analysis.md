@@ -1689,4 +1689,180 @@ reserves from the right base.
 
 固定源码：
 
-[`SchedulerBatchResultProcessor.process_batch_result_prefill()`](https://github.com/sgl-project/sglan
+[`SchedulerBatchResultProcessor.process_batch_result_prefill()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/batch_result_processor.py)
+
+这再次证明：
+
+```text
++1
+```
+
+是 “pending bonus 被当前 EXTEND 真正 commit” 的局部语义。
+
+---
+
+### 为什么不是所有 FutureMap resolve 都 `+1`？
+
+普通 speculative decode 下一轮仍然要把 pending bonus 当：
+
+```text
+Verify root
+```
+
+它需要的 prefix frontier 就是：
+
+```text
+C
+```
+
+而不是：
+
+```text
+C + 1
+```
+
+如果你提前把：
+
+```text
+ScheduleBatch.seq_lens = C + 1
+```
+
+那等于宣称 bonus 的 KV 已经存在。
+
+但实际上它还没 forward。
+
+所以普通 next-spec iteration 必须：
+
+```text
+seq_lens = new_seq_lens
+```
+
+只有：
+
+```text
+Mixed batch 把 bonus 直接变成一枚 EXTEND input
+```
+
+时才需要：
+
+```text
+new_seq_lens + 1
+```
+
+---
+
+### 这个 `+1` 也不是 DP Attention 的通用规则
+
+这次 Review 还发现一个需要特别澄清的点。
+
+当前 Scheduler 在：
+
+```text
+spec + DP Attention
+```
+
+下明确写：
+
+```text
+make sure prefill and decode batches
+will not be mixed
+```
+
+在 `get_next_batch_to_run()` 中，Spec + DP-attention 会在 merge 前先协调 prefill/decode mode，避免把它们走成普通 mixed chunk。
+
+固定源码：
+
+[`Scheduler.get_next_batch_to_run()` 附近](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)
+
+DP Attention 还有另一条路径：
+
+```python
+maybe_convert_decode_to_extend()
+```
+
+当别的 DP rank 正在跑 extend、而当前 rank 是 decode 时，为了保持 mode-homogeneous、复用 extend graph，它会把整个 decode batch 临时转换成：
+
+```text
+1-token EXTEND view
+```
+
+对应：
+
+[`SchedulerDPAttnAdapter.maybe_convert_decode_to_extend()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/dp_attn.py)
+
+这条路径调用：
+
+```python
+batch.convert_decode_to_extend()
+```
+
+它直接把当前 prepared `seq_lens` 解释成 full sequence length：
+
+```text
+prefix = seq_len - 1
+extend_len = 1
+```
+
+它不是：
+
+```text
+FutureMap.resolve_mixed_spec_tails()
+```
+
+因此更准确的结论是：
+
+> **`new_seq_lens + 1` 是“overlap mixed-chunk speculative tail late-binding”的局部转换规则，不是 FutureMap 的通用 seq_len 定义，也不是 DP Attention 的通用规则。**
+
+---
+
+### 为什么要 late-bind？
+
+因为 mixed batch 在 schedule time 构造时：
+
+```text
+CPU Req clock
+```
+
+可能还落后于 GPU 最新 verify。
+
+所以 `mix_with_running()` 只能先拿 host request state 做一个 provisional tail。
+
+到了真正 forward entry：
+
+```python
+resolve_forward_inputs()
+```
+
+才有资格等待 `publish_ready` 并读取：
+
+```text
+FutureMap.new_seq_lens_buf
+```
+
+于是重新绑定：
+
+```text
+fresh prefix
+fresh out_cache_loc
+fresh seq_lens
+```
+
+这就是：
+
+```text
+late binding
+```
+
+真正存在的原因。
+
+---
+
+## 七、把整个 Scheduler 状态机串起来：它管理的是 Past、Present 与 Future 三个边界
+
+现在可以把全文压缩成一张图。
+
+```mermaid
+flowchart TD
+    A[Req / ReqKvInfo] --> B[ScheduleBatch.prepare_for_decode]
+
+    B --
