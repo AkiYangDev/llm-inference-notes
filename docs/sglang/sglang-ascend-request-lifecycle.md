@@ -80,6 +80,20 @@ Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManage
 
 其中，`Req` 保存单条请求跨越多轮生成的状态，batch 则描述某一轮的计算安排。同一条请求会先后进入多个 batch，与它一起运行的其他请求也可能变化。
 
+如果要自己沿源码复现这条主线，不必从仓库目录逐层翻找。可以从请求入口开始，每次只追一个问题，并把上一层产出的对象带到下一层：
+
+| 阅读顺序 | 固定版本中的入口 | 这一站只确认什么 | 接下来带着什么继续追 |
+|---:|---|---|---|
+| 1 | [`OpenAIServingChat._convert_to_internal_request()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py#L1143-L1268) | OpenAI 请求怎样变成内部生成请求 | `GenerateReqInput` |
+| 2 | [`TokenizerManager`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py) | 文本、token ID 和生成参数怎样送往调度侧 | `TokenizedGenerateReqInput` |
+| 3 | [`Scheduler.event_loop_normal()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/scheduler.py#L1932-L2020) | 请求何时被选入下一轮计算 | `Req` 与本轮 `ScheduleBatch` |
+| 4 | [`ScheduleBatch.prepare_for_extend()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L2685-L2728) | 新增 token、序列长度和缓存位置怎样整理 | CPU 暂存输入与缓存映射 |
+| 5 | [`TpModelWorker.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tp_worker.py#L631-L725) | 执行侧怎样构造输入、运行模型并采样 | `ForwardBatch` 与模型输出 |
+| 6 | [`DeepseekV4ForCausalLM.forward()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155) | token 表示怎样进入 V4 模型层 | hidden states 与 Attention 输入 |
+| 7 | [`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189) | 窗口和压缩历史怎样进入 Ascend 算子 | Q、页表、缓存与算子参数 |
+
+这张表是阅读路线，不表示七个函数彼此直接调用。进程间消息、batch 转换和模型内部调用仍然存在；后文会在它们影响请求状态的地方展开。
+
 当 Scheduler 收到输入后，请求拥有了可持续更新的运行状态。后面每生成一批结果，系统都要更新它的输出、长度和结束条件。至此，聊天协议已经转化成一个等待计算资源的推理任务。
 
 ## 三、Scheduler 决定本轮处理谁，以及处理多少 token
@@ -118,6 +132,16 @@ flowchart TD
 ```
 
 全文继续追踪六个 token 的 prompt `[A, B, C, D, E, F]`。主例假设没有可复用前缀，因此第一次需要处理六个输入，逻辑位置为 `[0, 1, 2, 3, 4, 5]`。这里的字母只是 token ID 的代号，与真实分词结果无关。
+
+把同一个 `Req` 连续观察三次，可以看出“请求状态”和“本轮 batch”为什么是两回事：
+
+| 观察时点 | `Req` 持有的输入与已生成结果 | 本轮 batch 的任务 | 本轮结束后的变化 |
+|---|---|---|---|
+| 刚进入 Scheduler | prompt 为 `[A, B, C, D, E, F]`，尚无输出 token | 还在等待，没有设备计算 | 等待满足预算与缓存条件 |
+| 被选入 Prefill | prompt 不变，输出仍为空 | 计算 A 到 F 六个位置 | 采样得到 y1，记录首个生成结果；请求若未结束则继续保留 |
+| 再次被选入普通 Decode | prompt 不变，已生成结果为 `[y1]` | 只把 y1 作为本轮新增模型输入 | 采样得到 y2，已生成结果推进为 `[y1, y2]` |
+
+因此，`Req` 的生命周期覆盖多轮计算；`ScheduleBatch` 只描述其中一轮。Prefill 结束时产生了 y1，但 y1 对应的模型状态要等它在下一轮作为输入被处理后才写入缓存。
 
 前缀缓存可以改变待算数量。若另一条请求已经留下相同前缀，并且缓存实现能够恢复该模型需要的完整状态，命中的部分就不必重新做全部模型计算。例如逻辑上复用了前四个位置，待处理后缀就只剩 E、F。这个例子说明输入如何切分，不表示 DeepSeek-V4 的实际缓存匹配一定允许四 token 粒度。
 
@@ -289,13 +313,13 @@ Attention 输出随后经过相应位置变换及输出投影，回到层内 mHC
 
 普通自回归主线中，Prefill 结束就可以采样得到 y1。下一轮消费 y1，计算它对应的模型状态并预测 y2；再下一轮消费 y2，预测 y3。
 
-| 轮次 | 新增模型输入 | 本轮查询数 | 当前序列长度 | 采样输出 |
-|---|---|---:|---:|---|
-| Prefill 完成 | A 到 F | 6 | 6 | y1 |
-| 第一次普通 Decode | y1 | 1 | 7 | y2 |
-| 第二次普通 Decode | y2 | 1 | 8 | y3 |
+| 轮次 | 执行前已经形成缓存的位置 | 本轮新增模型输入 | 本轮结束后的缓存进度 | C4 状态变化 | 采样输出 |
+|---|---|---|---|---|---|
+| Prefill | 无 | A 到 F，位置 0～5 | 位置 0～5 已处理，总长度 6 | 已处理到第一个四 token 边界之后 | y1 |
+| 第一次普通 Decode | 位置 0～5 | y1，位置 6 | 位置 0～6 已处理，总长度 7 | 没有跨过新的四 token 边界 | y2 |
+| 第二次普通 Decode | 位置 0～6 | y2，位置 7 | 位置 0～7 已处理，总长度 8 | 到达新的四 token 边界，可形成本边界对应的有效更新 | y3 |
 
-表中的长度描述已经作为模型输入处理的位置数。刚采样出的 token 要到下一轮作为输入时，才形成它对应的缓存状态。若 y3 已触发停止条件，请求可以直接结束，不必为了它再执行一轮。采用 chunked prefill 时，prompt 可能分多轮处理，中间 chunk 不一定向用户产出 token。
+表中的“缓存进度”表示哪些逻辑位置已经作为模型输入处理，不表示它们占用连续显存，也不表示每层保存相同形式的 K/V。C4 一列只描述普通路径是否跨过比例边界；实际压缩内容仍由压缩器和索引器产生。刚采样出的 token 要到下一轮作为输入时，才形成它对应的缓存状态。若 y3 已触发停止条件，请求可以直接结束，不必为了它再执行一轮。采用 chunked prefill 时，prompt 可能分多轮处理，中间 chunk 不一定向用户产出 token。
 
 设备上的结果有两个去向：后续计算需要继续消费 token，主机侧则需要更新请求并输出文本。普通生成路径可以从设备结果缓冲区取得下一轮输入，避免每轮先把 token 传回 CPU 再重新上传；客户端返回链仍需取得可处理的输出数据。[源码：普通生成的后续设备输入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/overlap_utils.py#L87-L114)
 
