@@ -223,6 +223,7 @@ def build():
     for path in (ROOT / 'site/assets').iterdir():
         if path.suffix != '.md':
             shutil.copy2(path, OUT / 'assets' / path.name)
+    editorial = json.loads((ROOT / "site/articles.json").read_text(encoding="utf-8"))
     articles = []
     paths = [p for p in sorted((ROOT / 'docs').rglob('*.md')) if p.name != 'README.md']
     routes = {p.resolve(): BASE + 'articles/' + p.parent.name + '/' + p.stem + '/' for p in paths}
@@ -249,10 +250,10 @@ def build():
         parser = SearchSections()
         parser.feed(rendered)
         sections = parser.result()
-        excerpt = sections[0]['text'][:110]
-        if path.stem == 'sglang-ascend-request-lifecycle':
-            excerpt = '以 DeepSeek-V4 为例，沿一次请求连接调度、缓存、Ascend 算子与流式输出，理解 SGLang 的完整执行链路。'
+        entry = editorial.get(path.relative_to(ROOT).as_posix(), {})
+        excerpt = entry.get('summary') or sections[0]['text'][:110]
         a = {'title': title, 'topic': topic, 'topic_id': topic_id, 'url': url, 'minutes': minutes, 'excerpt': excerpt, 'sections': sections}
+        a['category'] = entry.get('category', {'ascend': '部署实践', 'fundamentals': '基础原理'}.get(topic_id, '推理工程'))
         articles.append(a)
         current_path = path.relative_to(ROOT).as_posix()
         dates = history(ROOT, path)
@@ -272,10 +273,11 @@ def build():
     topics = sorted({a['topic_id'] for a in articles})
     topic_links = ''.join(f'<a class="topic-link" href="{BASE}topics/{t}/">{esc(TOPICS.get(t,t))}<span>{sum(a["topic_id"] == t for a in articles):02d}</span></a>' for t in topics)
     featured_url = articles[0]['url'] if articles else BASE + 'articles/'
-    groups = [('源码解析', [a for a in articles if a['topic_id'] == 'sglang']), ('部署实践', [a for a in articles if a['topic_id'] == 'ascend']), ('推理工程', [a for a in articles if a['topic_id'] not in ('sglang', 'ascend')])]
-    cards = ''.join(f'<section class="journal-category" aria-label="{label}"><h3 class="category-label">{label}</h3>' + ''.join(card(a, i + 1) for i, a in enumerate(group)) + '</section>' for label, group in groups if group)
+    latest = sorted(articles, key=lambda a: (a.get('published', ''), a['url']), reverse=True)[:3]
+    cards = ''.join(card(a, i + 1) for i, a in enumerate(latest))
+    recommended = ''.join(f'<a class="recommend-link" href="{a["url"]}"><span>{label}</span><strong>{title_html(a["title"])}</strong><span aria-hidden="true">→</span></a>' for a, label in [(articles[0], '从这里开始'), (next(a for a in articles if 'distributed-parallel' in a['url']), '理解并行')])
     knowledge_map = reading_map(series_list, articles)
-    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AKIYANG / ENGINEERING NOTES</p><h1 id="hero-title">理解系统。<br>深入<span>每一次推理。</span></h1><p class="hero-description">从请求到算子，从源码到工程。<br>关于大模型推理的原理、实现与实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">阅读专题 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">全部文章 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art"><div class="art-orbit" aria-hidden="true"></div><span class="art-word" aria-hidden="true">DEEP<br>BLUE.</span><img src="{BASE}assets/whale-cutout.webp" alt="DeepSeek 鲸鱼娘，蓝色长发与鲸尾的女仆装角色" width="945" height="1664" fetchpriority="high"><span class="art-caption">深蓝之间 · 探索推理</span></div></section><section class="home-map wrap" aria-label="源码阅读地图">{knowledge_map}</section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>技术文章 <span class="count">{len(articles):02d}</span></h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section></main>'''
+    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AKIYANG / ENGINEERING NOTES</p><h1 id="hero-title">理解系统。<br>深入<span>每一次推理。</span></h1><p class="hero-description">从请求到算子，从源码到工程。<br>关于大模型推理的原理、实现与实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">阅读专题 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">全部文章 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art"><div class="art-orbit" aria-hidden="true"></div><span class="art-word" aria-hidden="true">DEEP<br>BLUE.</span><img src="{BASE}assets/whale-cutout.webp" alt="DeepSeek 鲸鱼娘，蓝色长发与鲸尾的女仆装角色" width="945" height="1664" fetchpriority="high"><span class="art-caption">深蓝之间 · 探索推理</span></div></section><section class="home-map wrap" aria-label="源码阅读地图">{knowledge_map}</section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新文章</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
     if skills:
         skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">METHODS &amp; PRACTICE</p><h2 id="home-skills-title">Skills <span class="count">{len(skills):02d}</span></h2></div><a class="text-link" href="{BASE}skills/">浏览 Skills <span aria-hidden="true">↗</span></a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills[:3])}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
@@ -290,7 +292,8 @@ def build():
         filters = f'<a href="{BASE}articles/"' + (' aria-current="page"' if not topic_id else '') + '>全部文章</a>'
         filters += ''.join(f'<a href="{BASE}topics/{t}/"' + (' aria-current="page"' if t == topic_id else '') + f'>{esc(TOPICS.get(t,t))}</a>' for t in topics)
         series_overview = ''.join(series_navigation(series, overview=True) for series in series_list if topic_id is None or series['topic'] == topic_id)
-        page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">INFERENCE ARCHIVE</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>关于推理系统的原理、源码与工程实践。</p></div><button class="archive-search">搜索文章 <span aria-hidden="true">↗</span></button></div><nav class="topic-filters" aria-label="筛选专题">{filters}</nav>{series_overview}<div class="archive-list">{''.join(card(a,i+1) for i,a in enumerate(selected))}</div></main>'''
+        archive_cards = ''.join(f'<section class="journal-category"><h2 class="category-label">{esc(category)}</h2>' + ''.join(card(a, i + 1) for i, a in enumerate(selected) if a['category'] == category) + '</section>' for category in dict.fromkeys(a['category'] for a in selected))
+        page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">INFERENCE ARCHIVE</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>关于推理系统的原理、源码与工程实践。</p></div><button class="archive-search">搜索文章 <span aria-hidden="true">↗</span></button></div><nav class="topic-filters" aria-label="筛选专题">{filters}</nav>{series_overview}<div class="archive-list">{archive_cards}</div></main>'''
         dest = OUT / route / 'index.html'
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(shell(label, page, 'archive-page', route), encoding='utf-8')

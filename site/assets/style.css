@@ -69,3 +69,13 @@ dialog{border:1px solid var(--line);background:var(--bg);color:var(--text);borde
 @media(max-width:540px){.header-inner{gap:8px}.header nav{gap:4px}.header .brand{flex-shrink:0}.header .nav-series{display:none}.publication-meta{font-size:13px}.map-footer{flex-wrap:wrap}.prose .keep{white-space:normal}.reading-shortcuts{display:none}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media print{.map-progress{display:none}.hero-copy>*,.hero-art{animation:none!important;opacity:1;transform:none}}
+
+/* Seven-step atlas and concise home recommendations. */
+@media(min-width:701px){.map-steps{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(min-width:701px) and (max-width:1000px){.map-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.home-recommended{padding-block:12px 60px}.recommend-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.recommend-link{display:flex;flex-direction:column;gap:16px;padding:26px;border:1px solid var(--line);border-radius:12px;background:var(--card)}.recommend-link>span:first-child{font-size:13px;color:var(--gold)}.recommend-link strong{font-size:19px;line-height:1.7;font-weight:550}.recommend-link>span:last-child{margin-top:auto;color:var(--blue);transition:transform .2s}.recommend-link:hover,.recommend-link:focus-visible{border-color:var(--gold);background:var(--gold-soft)}.recommend-link:hover>span:last-child{transform:translateX(5px)}
+@media(max-width:700px){.recommend-list{grid-template-columns:1fr}.home-recommended{padding-bottom:36px}}
+@keyframes section-arrive{from{opacity:.35;transform:translateY(14px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:no-preference){.reveal-arrive{animation:section-arrive .5s ease-out both}.header nav>a{position:relative}.header nav>a:after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--gold);transform:scaleX(0);transform-origin:left;transition:transform .2s}.header nav>a:hover:after,.header nav>a:focus-visible:after{transform:scaleX(1)}}
+@media(prefers-reduced-motion:reduce){.recommend-link>span:last-child{transition:none;transform:none}}
+@media print{.reveal-arrive{animation:none!important;opacity:1;transform:none}}

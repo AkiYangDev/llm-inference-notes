@@ -25,9 +25,24 @@
         "description": "连接 Query、历史上下文与缓存"
       },
       {
-        "path": "docs/sglang/sglang-kv-cache-source-analysis.md",
-        "label": "KV Cache",
-        "description": "理解缓存的分配与复用"
+        "path": "docs/sglang/deepseek-v4-moe-source-analysis.md",
+        "label": "MoE 与 Expert Parallel",
+        "description": "沿路由、分发与专家计算理解 MoE"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md",
+        "label": "TP / DP / EP",
+        "description": "串联 Attention 与 MoE 的并行布局"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md",
+        "label": "DSpark Layout",
+        "description": "理解 Draft 与 Target 的布局边界"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md",
+        "label": "投机推理执行链",
+        "description": "串起候选生成、验证与状态提交"
       }
     ]
   }

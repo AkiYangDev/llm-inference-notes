@@ -222,3 +222,25 @@ if (heroArt) {
   document.addEventListener('visibilitychange', updateMotion);
   updateMotion();
 }
+
+// Animate once on arrival; content stays visible without JavaScript or observers.
+const arrivalPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+if ('IntersectionObserver' in window && !arrivalPreference.matches) {
+  const arrivals = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      if (!arrivalPreference.matches) entry.target.classList.add('reveal-arrive');
+      arrivals.unobserve(entry.target);
+    });
+  }, {threshold: 0.08});
+  document.querySelectorAll('.home .map-step,.home .article-card,.home .recommend-link,.home .skill-card').forEach(el => {
+    el.addEventListener('animationend', () => el.classList.remove('reveal-arrive'), {once: true});
+    arrivals.observe(el);
+  });
+  arrivalPreference.addEventListener('change', event => {
+    if (event.matches) {
+      arrivals.disconnect();
+      document.querySelectorAll('.reveal-arrive').forEach(el => el.classList.remove('reveal-arrive'));
+    }
+  });
+}
