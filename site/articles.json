@@ -107,5 +107,47 @@
       "投机推理",
       "KV Cache"
     ]
+  },
+  "docs/sglang/deepseek-v4-tree-attention-source-analysis.md": {
+    "summary": "从 Candidate Layout、Tree Position 与 Tree Mask 出发，解释多分支 Verify 为什么只允许访问祖先路径，并区分 FULL_MASK / QLEN_ONLY 与不同 attention backend 的消费边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Tree Attention",
+      "投机推理"
+    ]
+  },
+  "docs/sglang/deepseek-v4-accept-decision-source-analysis.md": {
+    "summary": "聚焦 Verify 之后的 Accept Decision，区分 Greedy Tree Match、Target-only Tree Sampling 与经典 p/q Rejection Sampling，并解释 accept_index、terminal bonus 与 DSpark correct_len。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Accept Decision",
+      "Rejection Sampling",
+      "投机推理"
+    ]
+  },
+  "docs/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
+    "summary": "追踪 accepted path 如何从 Verify row 映射到 committed KV，解释 KV relocation、tensor compaction、Spec V2 overshoot 与 Ascend C4/C128 状态清理边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "KV Cache",
+      "投机推理"
+    ]
+  },
+  "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
+    "summary": "拆分 speculative control、logical layout 与 model-data collective 三层一致性，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast，并厘清 Ascend 多卡通信职责。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "多卡一致性",
+      "TP/DP/EP",
+      "投机推理"
+    ]
   }
 }
