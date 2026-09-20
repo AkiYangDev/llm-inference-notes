@@ -145,3 +145,68 @@ window.addEventListener('pageshow', () => {
   refreshReading();
 });
 refreshReading();
+
+// A line address highlights code without altering its copied text or syntax markup.
+function codeLines() {
+  document.querySelectorAll('.prose pre > code').forEach((code, index) => {
+    const pre = code.parentElement;
+    const id = `code-${index + 1}`;
+    pre.id = id;
+    pre.classList.add('numbered-code');
+    const gutter = document.createElement('div'); gutter.className = 'code-gutter'; gutter.setAttribute('aria-label', '代码行号，点击高亮并定位');
+    const count = code.textContent.replace(/\n$/, '').split('\n').length;
+    for (let line = 1; line <= count; line++) {
+      const a = document.createElement('a'); a.href = `#${id}-L${line}`; a.id = `${id}-L${line}`; a.textContent = String(line); a.setAttribute('aria-label', `代码块 ${index + 1} 第 ${line} 行`);
+      a.addEventListener('click', () => toast('已定位此行，可复制页面链接分享'));
+      gutter.append(a);
+    }
+    pre.append(gutter);
+  });
+  highlightCodeLine();
+}
+function highlightCodeLine() {
+  document.querySelectorAll('.numbered-code').forEach(pre => { pre.style.removeProperty('--selected-line'); pre.querySelectorAll('.code-gutter a').forEach(a => a.removeAttribute('aria-current')); });
+  const match = location.hash.match(/^#(code-\d+)-L(\d+)$/);
+  if (!match) return;
+  const pre = document.getElementById(match[1]);
+  const line = document.getElementById(`${match[1]}-L${match[2]}`);
+  if (pre && line) { pre.style.setProperty('--selected-line', Number(match[2]) - 1); line.setAttribute('aria-current', 'location'); line.scrollIntoView({block:'center'}); }
+}
+codeLines();
+window.addEventListener('hashchange', highlightCodeLine);
+
+// Deliberate shortcuts: no navigation while typing, selecting, or using dialogs.
+document.addEventListener('keydown', event => {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat || !['ArrowLeft','ArrowRight'].includes(event.key)) return;
+  const active = document.activeElement;
+  if (/INPUT|TEXTAREA|SELECT/.test(active.tagName) || active.isContentEditable || document.querySelector('dialog[open]') || String(window.getSelection())) return;
+  const link = document.querySelector(`.series-pager [rel="${event.key === 'ArrowLeft' ? 'prev' : 'next'}"]`);
+  if (link) { event.preventDefault(); location.assign(link.href); }
+});
+if ($('.series-pager')) { const hint = document.createElement('p'); hint.className = 'reading-shortcuts'; hint.textContent = '系列切换：Alt + ← 上一篇 · Alt + → 下一篇'; $('.series-pager').after(hint); }
+
+// Remember a stable section anchor and its local offset, not the whole page height.
+if (document.body.classList.contains('article-page') && !document.body.classList.contains('skill-page')) {
+  const positionKey = 'aki-position-v1:' + location.pathname;
+  const panel = $('.resume-reading');
+  let previous;
+  try { previous = JSON.parse(localStorage.getItem(positionKey) || 'null'); } catch {}
+  if (previous && typeof previous.anchor === 'string' && document.getElementById(previous.anchor) && Number.isFinite(previous.offset) && !location.hash) {
+    panel.hidden = false;
+    $('.resume-position').addEventListener('click', () => {
+      const heading = document.getElementById(previous.anchor);
+      window.scrollTo({top:Math.max(0, window.scrollY + heading.getBoundingClientRect().top + Math.min(Math.max(previous.offset,0),3000)),behavior:'instant'});
+      panel.hidden = true;
+    });
+  }
+  let timer, allowSave=true;
+  $('.forget-position')?.addEventListener('click', () => { try {localStorage.removeItem(positionKey);} catch {} panel.hidden=true; allowSave=false; clearTimeout(timer); toast('已清除上次阅读位置'); });
+  function savePosition() {
+    if (!allowSave || window.scrollY < 250) return;
+    const headings=[...document.querySelectorAll('.prose h2,.prose h3')];
+    const heading=headings.filter(h=>h.getBoundingClientRect().top<=100).at(-1);
+    if (heading) try {localStorage.setItem(positionKey,JSON.stringify({anchor:heading.id,offset:Math.max(0,-heading.getBoundingClientRect().top)}));}catch {}
+  }
+  window.addEventListener('scroll',()=>{clearTimeout(timer);timer=setTimeout(savePosition,450);},{passive:true});
+  window.addEventListener('pagehide',savePosition);
+}

@@ -22,3 +22,7 @@
 - [图片地址](https://img1.gamersky.com/image2026/08/20260817_zy_red_164_2/1127_S.jpg)
 
 原页面未明确标注绘者或开放许可；来源记录不构成再许可声明。
+
+## 分享封面
+
+`social-cover.png`：本站生成的蓝白鲸尾主题分享封面，用于 Open Graph 分享预览。
