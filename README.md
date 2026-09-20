@@ -26,6 +26,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 - [DeepSeek-V4 MoE 推理源码解析：一个 Token 如何经过 Router、All-to-All 和 Expert Parallel 完成一次前向计算](docs/sglang/deepseek-v4-moe-source-analysis.md)：从 Router / HashTopK 追到 Expert ownership、EP dispatch、Expert compute、combine，并解释 Ascend FuseEP 的融合边界。
 - [DeepSeek-V4 分布式推理源码解析：TP、EP、DP 三种并行如何共同驱动一次前向计算](docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md)：解释 `dp_size → attn_dp/attn_tp`、Attention→MoE 布局桥、A2A 下 EP=TP，以及 TP32/DP16 在 DSpark 路径中的显式限制。
 - [DeepSeek-V4 DSpark 源码解析：Draft Model 为什么需要独立处理 TP/DP/EP Layout？](docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md)：区分 Dense/MoE draft 的并行上下文，解释 DP/MoE token-count metadata、SpecTpSync、Verify layout，并把 TP32/DP16 的已知事实与待验证根因分开。
+- [DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject 如何驱动一次投机推理](docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md)：沿 DSparkWorkerV2 追踪 Draft Block、Verify Planner、Target Verify、greedy/sampling accept、commit_lens 与 Target hidden → Draft state 提交。
 
 ## 配套内容
 
