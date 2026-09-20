@@ -4,6 +4,8 @@
 
 Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
+[在线阅读](https://akiyangdev.github.io/llm-inference-notes/)
+
 ## 内容导航
 
 | 主题 | 内容范围 |
