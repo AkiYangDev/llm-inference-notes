@@ -28,6 +28,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 - [DeepSeek-V4 DSpark 源码解析：Draft Model 为什么需要独立处理 TP/DP/EP Layout？](docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md)：区分 Dense/MoE draft 的并行上下文，解释 DP/MoE token-count metadata、SpecTpSync、Verify layout，并把 TP32/DP16 的已知事实与待验证根因分开。
 - [DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject 如何驱动一次投机推理](docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md)：沿 DSparkWorkerV2 追踪 Draft Block、Verify Planner、Target Verify、greedy/sampling accept、commit_lens 与 Target hidden → Draft state 提交。
 - [DeepSeek-V4 Speculative Decoding 源码解析：MTP（Multi-Token Prediction）如何让 Draft 一次预测多个 Token](docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md)：区分 MTP / NextN / EAGLE 三层语义，追踪 Target mHC hidden → Draft Extend → multi-step NextN candidate chain，并解释 Ascend NPU 的 dsv4 multi-step Draft 路径。
+- [DeepSeek-V4 Speculative Decoding 源码解析：EAGLE Draft Tree 如何组织多分支候选，并驱动一次 Verify](docs/sglang/deepseek-v4-eagle-draft-tree-source-analysis.md)：从累计路径 score、candidate-pool 索引、Tree Mask、first-child/next-sibling traversal 到 accepted-path KV compaction，解释多分支 EAGLE Tree 以及 Ascend dsv4 当前 page-tree 边界。
 - [DeepSeek-V4 Prefill / Decode Disaggregation 源码解析：为什么生产系统需要拆分 Prefill 和 Decode](docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md)：沿 Prefill bootstrap、Decode prealloc、KV/state transfer、PREBUILT handoff 与首轮 Decode 追踪一次 P→D ownership 迁移，并拆清 Ascend DSV4 的 C4/SWA/C128 wire layout。
 
 ## 配套内容
