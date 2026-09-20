@@ -34,7 +34,7 @@ async function searchArticles() {
     results.replaceChildren();
     if (!found.length) {
       const empty = document.createElement('div'); empty.className = 'search-empty';
-      const mascot = document.createElement('img'); mascot.src = new URL('assets/whale-chibi.jpg', base); mascot.alt = ''; mascot.width = 100; mascot.height = 100;
+      const mascot = document.createElement('span'); mascot.className = 'mascot mascot-lost'; mascot.setAttribute('aria-hidden', 'true');
       const message = document.createElement('p'); message.textContent = '还没有找到相关内容，换一个关键词试试。'; empty.append(mascot, message); results.append(empty); return;
     }
     for (const result of found.slice(0, 15)) {
@@ -244,3 +244,4 @@ if ('IntersectionObserver' in window && !arrivalPreference.matches) {
     }
   });
 }
+
