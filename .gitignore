@@ -6,3 +6,4 @@ __pycache__/
 !.env.example
 .DS_Store
 .ipynb_checkpoints/
+_site/
