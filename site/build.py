@@ -150,6 +150,54 @@ def build_skills(paths, routes):
     return skills
 
 
+def published_series(paths, routes):
+    """Only existing, titled articles participate in order and navigation."""
+    available = {p.relative_to(ROOT).as_posix(): p for p in paths}
+    series = []
+    seen = set()
+    for spec in json.loads((ROOT / 'site/series.json').read_text(encoding='utf-8')):
+        items = []
+        for entry in spec['items']:
+            if entry['path'] in seen:
+                raise ValueError('Duplicate series article: ' + entry['path'])
+            seen.add(entry['path'])
+            path = available.get(entry['path'])
+            if path is None:
+                continue
+            heading = re.search(r'^# (.+)$', path.read_text(encoding='utf-8'), re.M)
+            if heading:
+                items.append({**entry, 'title': heading.group(1), 'url': routes[path.resolve()]})
+        if items:
+            series.append({**spec, 'items': items, 'url': BASE + 'topics/' + spec['topic'] + '/#' + spec['id']})
+    return series
+
+
+def series_navigation(series, current=None, overview=False):
+    if not series:
+        return ''
+    items = series['items']
+    current_index = next((i for i, item in enumerate(items) if item['path'] == current), None)
+    count = f'{current_index + 1:02d} / {len(items):02d}' if current_index is not None else f'{len(items)} 篇'
+    links = ''.join(f'<li><a href="{item["url"]}"' + (' aria-current="page"' if item['path'] == current else '') + f' title="{esc(item["title"])}"><span class="series-number">{i+1:02d}</span><span>{esc(item["label"])}</span></a></li>' for i, item in enumerate(items))
+    identity = f' id="{series["id"]}"' if overview else ''
+    heading = f'<h2>{esc(series["title"])}</h2>' if overview else f'<a href="{series["url"]}">{esc(series["title"])}</a>'
+    return f'<nav class="series-nav"{identity} aria-label="{esc(series["title"])}"><div class="series-heading">{heading}<span>{count}</span></div><ol>{links}</ol></nav>'
+
+
+def series_pager(series, current):
+    if not series:
+        return ''
+    items = series['items']
+    position = next(i for i, item in enumerate(items) if item['path'] == current)
+    links = []
+    for offset, label, arrow, relation in [(-1, '上一篇', '←', 'prev'), (1, '下一篇', '→', 'next')]:
+        index = position + offset
+        if 0 <= index < len(items):
+            item = items[index]
+            links.append(f'<a class="series-page-link {relation}" rel="{relation}" href="{item["url"]}"><span class="pager-label">{arrow} {label}</span><strong>{esc(item["label"])}</strong><span class="pager-title">{esc(item["title"])}</span></a>')
+    return '<nav class="series-pager" aria-label="系列前后篇">' + ''.join(links) + '</nav>' if links else ''
+
+
 def build():
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -164,6 +212,10 @@ def build():
     routes.update({p.resolve(): BASE + 'skills/' + p.parent.name + '/' for p in skill_paths})
     routes[(ROOT / 'skills/README.md').resolve()] = BASE + 'skills/'
     skills = build_skills(skill_paths, routes)
+    series_list = published_series(paths, routes)
+    series_by_path = {item['path']: series for series in series_list for item in series['items']}
+    order = {item['path']: i for series in series_list for i, item in enumerate(series['items'])}
+    paths.sort(key=lambda p: (p.parent.name, order.get(p.relative_to(ROOT).as_posix(), 10000), p.name))
     for path in paths:
         source = path.read_text(encoding='utf-8')
         heading = re.search(r'^# (.+)$', source, re.M)
@@ -184,9 +236,13 @@ def build():
             excerpt = '以 DeepSeek-V4 为例，沿一次请求连接调度、缓存、Ascend 算子与流式输出，理解 SGLang 的完整执行链路。'
         a = {'title': title, 'topic': topic, 'topic_id': topic_id, 'url': url, 'minutes': minutes, 'excerpt': excerpt, 'sections': sections}
         articles.append(a)
+        current_path = path.relative_to(ROOT).as_posix()
+        current_series = series_by_path.get(current_path)
+        series_nav = series_navigation(current_series, current_path)
+        pager = series_pager(current_series, current_path)
         title_parts = title.split('：', 1)
         display_title = title_html(title_parts[0]) + (f'<span class="title-sub">{title_html(title_parts[1])}</span>' if len(title_parts) == 2 else '')
-        body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}articles/">文章</a><span>/</span><a href="{BASE}topics/{topic_id}/">{esc(topic)}</a></nav><header class="article-header"><h1>{display_title}</h1><div class="article-meta"><span>AkiYang</span><span>约 {minutes} 分钟阅读</span><a href="{REPO}/blob/main/{path.relative_to(ROOT).as_posix()}" target="_blank" rel="noopener noreferrer">阅读源码文档 ↗</a><button class="copy-link">复制链接</button></div></header><details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article><div class="article-end"><div><span class="eyebrow">读到这里</span><p>从一条请求，看见整个系统。</p></div><a href="{BASE}articles/" class="text-link">返回文章目录 <span aria-hidden="true">↗</span></a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
+        body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}articles/">文章</a><span>/</span><a href="{BASE}topics/{topic_id}/">{esc(topic)}</a></nav><header class="article-header"><h1>{display_title}</h1><div class="article-meta"><span>AkiYang</span><span>约 {minutes} 分钟阅读</span><a href="{REPO}/blob/main/{path.relative_to(ROOT).as_posix()}" target="_blank" rel="noopener noreferrer">阅读源码文档 ↗</a><button class="copy-link">复制链接</button></div></header>{series_nav}<details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article>{pager}<div class="article-end"><div><span class="eyebrow">读到这里</span><p>从一条请求，看见整个系统。</p></div><a href="{BASE}articles/" class="text-link">返回文章目录 <span aria-hidden="true">↗</span></a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
         output = OUT / 'articles' / slug / 'index.html'
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(shell(title, body, 'article-page', 'articles/' + slug + '/', excerpt), encoding='utf-8')
@@ -194,8 +250,9 @@ def build():
     topic_links = ''.join(f'<a class="topic-link" href="{BASE}topics/{t}/">{esc(TOPICS.get(t,t))}<span>{sum(a["topic_id"] == t for a in articles):02d}</span></a>' for t in topics)
     featured_url = articles[0]['url'] if articles else BASE + 'articles/'
     cards = ''.join(card(a, i + 1) for i, a in enumerate(articles))
-    chapters = ''.join(f'<a href="{featured_url}#{quote(s["anchor"])}"><span>{i+1:02d}</span>{esc(re.sub(r"^[一二三四五六七八九十]+、", "", s["heading"]))}<b aria-hidden="true">↗</b></a>' for i, s in enumerate([s for s in articles[0]['sections'] if s['anchor']][:3])) if articles else ''
-    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AKIYANG / ENGINEERING NOTES</p><h1 id="hero-title">理解系统。<br>深入<span>每一次推理。</span></h1><p class="hero-description">从请求到算子，从源码到工程。<br>关于大模型推理的原理、实现与实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">阅读专题 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">全部文章 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art"><div class="art-orbit" aria-hidden="true"></div><span class="art-word" aria-hidden="true">DEEP<br>BLUE.</span><img src="{BASE}assets/whale-cutout.webp" alt="DeepSeek 鲸鱼娘，蓝色长发与鲸尾的女仆装角色" width="945" height="1664" fetchpriority="high"><span class="art-caption">深蓝之间 · 探索推理</span></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>技术文章 <span class="count">{len(articles):02d}</span></h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="journal-grid"><div class="article-list">{cards}</div><aside class="chapter-preview"><p class="eyebrow">从这里读起</p><h3>一次请求的旅程</h3><div class="chapter-links">{chapters}</div><a class="chapter-all" href="{featured_url}">查看完整链路 <span aria-hidden="true">→</span></a></aside></div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section></main>'''
+    home_series = next((series for series in series_list if series['topic'] == 'sglang'), None)
+    series_preview = series_navigation(home_series)
+    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AKIYANG / ENGINEERING NOTES</p><h1 id="hero-title">理解系统。<br>深入<span>每一次推理。</span></h1><p class="hero-description">从请求到算子，从源码到工程。<br>关于大模型推理的原理、实现与实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">阅读专题 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">全部文章 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art"><div class="art-orbit" aria-hidden="true"></div><span class="art-word" aria-hidden="true">DEEP<br>BLUE.</span><img src="{BASE}assets/whale-cutout.webp" alt="DeepSeek 鲸鱼娘，蓝色长发与鲸尾的女仆装角色" width="945" height="1664" fetchpriority="high"><span class="art-caption">深蓝之间 · 探索推理</span></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>技术文章 <span class="count">{len(articles):02d}</span></h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="journal-grid"><div class="article-list">{cards}</div><aside class="chapter-preview series-preview"><p class="eyebrow">按顺序阅读</p>{series_preview}</aside></div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section></main>'''
     if skills:
         skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">METHODS &amp; PRACTICE</p><h2 id="home-skills-title">Skills <span class="count">{len(skills):02d}</span></h2></div><a class="text-link" href="{BASE}skills/">浏览 Skills <span aria-hidden="true">↗</span></a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills[:3])}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
@@ -206,7 +263,8 @@ def build():
         route = f'topics/{topic_id}/' if topic_id else 'articles/'
         filters = f'<a href="{BASE}articles/"' + (' aria-current="page"' if not topic_id else '') + '>全部文章</a>'
         filters += ''.join(f'<a href="{BASE}topics/{t}/"' + (' aria-current="page"' if t == topic_id else '') + f'>{esc(TOPICS.get(t,t))}</a>' for t in topics)
-        page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">INFERENCE ARCHIVE</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>关于推理系统的原理、源码与工程实践。</p></div><button class="archive-search">搜索文章 <span aria-hidden="true">↗</span></button></div><nav class="topic-filters" aria-label="筛选专题">{filters}</nav><div class="archive-list">{''.join(card(a,i+1) for i,a in enumerate(selected))}</div></main>'''
+        series_overview = ''.join(series_navigation(series, overview=True) for series in series_list if topic_id is None or series['topic'] == topic_id)
+        page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">INFERENCE ARCHIVE</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>关于推理系统的原理、源码与工程实践。</p></div><button class="archive-search">搜索文章 <span aria-hidden="true">↗</span></button></div><nav class="topic-filters" aria-label="筛选专题">{filters}</nav>{series_overview}<div class="archive-list">{''.join(card(a,i+1) for i,a in enumerate(selected))}</div></main>'''
         dest = OUT / route / 'index.html'
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(shell(label, page, 'archive-page', route), encoding='utf-8')

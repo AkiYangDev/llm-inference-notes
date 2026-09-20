@@ -1,0 +1,13 @@
+[
+  {
+    "id": "sglang-source",
+    "title": "SGLang 源码系列",
+    "topic": "sglang",
+    "items": [
+      {"path": "docs/sglang/sglang-ascend-request-lifecycle.md", "label": "请求执行全链路"},
+      {"path": "docs/sglang/sglang-scheduler-source-analysis.md", "label": "Scheduler"},
+      {"path": "docs/sglang/sglang-modelrunner-source-analysis.md", "label": "ModelRunner"},
+      {"path": "docs/sglang/sglang-kv-cache-source-analysis.md", "label": "KV Cache"}
+    ]
+  }
+]
