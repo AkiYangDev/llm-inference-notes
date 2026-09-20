@@ -1,6 +1,7 @@
 """Build a static reading site from the repository's published Markdown."""
 from pathlib import Path
 import html
+import hashlib
 import json
 import re
 import shutil
@@ -16,12 +17,13 @@ def esc(value):
     return html.escape(str(value), quote=True)
 
 def shell(title, body, kind='home'):
+    asset_version = hashlib.sha256((ROOT / 'site/assets/style.css').read_bytes() + (ROOT / 'site/assets/app.js').read_bytes()).hexdigest()[:12]
     return f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} · AkiYang</title><meta name="description" content="AkiYang 的大模型推理工程文档：SGLang、Ascend、源码与性能分析。">
 <meta name="color-scheme" content="light dark"><link rel="icon" href="{BASE}assets/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="{BASE}assets/style.css"><script>try{{if(localStorage.getItem('aki-theme')==='dark')document.documentElement.dataset.theme='dark'}}catch(e){{}}</script>
-<script type="module" src="{BASE}assets/app.js"></script></head><body class="{kind}">
+<link rel="stylesheet" href="{BASE}assets/style.css?v={asset_version}"><script>try{{if(localStorage.getItem('aki-theme')==='dark')document.documentElement.dataset.theme='dark'}}catch(e){{}}</script>
+<script type="module" src="{BASE}assets/app.js?v={asset_version}"></script></head><body class="{kind}">
 <a class="skip" href="#main">跳至正文</a><header class="header"><div class="header-inner">
 <a class="brand" href="{BASE}" aria-label="AkiYang 首页"><span class="brand-icon">A<span>.</span></span><span>AkiYang<span class="brand-caption">ENGINEERING NOTES</span></span></a>
 <nav aria-label="主导航"><a href="{BASE}#articles">文章</a><a href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章">搜索 <kbd>/</kbd></button><button class="theme-toggle" aria-label="切换深色模式" title="切换深色模式">◐</button></nav></div></header>
