@@ -15,7 +15,9 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 | [投机推理](docs/speculative-decoding/README.md) | Draft / Verify、接受逻辑与缓存状态 |
 | [性能分析](docs/performance/README.md) | TTFT、TPOT、吞吐、显存与 Profiling |
 
-当前已完成目录与维护配置，专题文章尚未发布。
+## 专题文章
+
+- [SGLang 推理执行链路解析：一次 Chat Completion 请求是如何跑到 Ascend NPU 上的](docs/sglang/sglang-ascend-request-lifecycle.md)：从请求接入、调度与 KV Cache，到 Ascend Attention 算子及流式输出。
 
 ## 配套内容
 
