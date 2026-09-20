@@ -55,6 +55,26 @@
         "description": "从多分支候选树走到一次验证"
       },
       {
+        "path": "docs/sglang/deepseek-v4-tree-attention-source-analysis.md",
+        "label": "Tree Attention",
+        "description": "理解多分支 Verify 的可见性与位置语义"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-accept-decision-source-analysis.md",
+        "label": "Accept Decision",
+        "description": "理解 Tree / Chain 如何收敛成唯一 accepted path"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md",
+        "label": "Speculative KV Commit",
+        "description": "把 Accept 结果落实到 KV 与缓存生命周期"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md",
+        "label": "多卡一致性",
+        "description": "理解 Draft、Verify 与 Accept 如何跨 rank 保持一致"
+      },
+      {
         "path": "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md",
         "label": "Prefill / Decode 分离",
         "description": "理解跨实例请求与缓存状态交接"
