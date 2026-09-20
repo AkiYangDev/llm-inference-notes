@@ -43,6 +43,21 @@
         "path": "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md",
         "label": "投机推理执行链",
         "description": "串起候选生成、验证与状态提交"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md",
+        "label": "MTP 与 NextN",
+        "description": "理解多步候选生成的语义与实现"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-eagle-draft-tree-source-analysis.md",
+        "label": "EAGLE Draft Tree",
+        "description": "从多分支候选树走到一次验证"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md",
+        "label": "Prefill / Decode 分离",
+        "description": "理解跨实例请求与缓存状态交接"
       }
     ]
   }

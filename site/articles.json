@@ -86,5 +86,26 @@
       "PD 分离",
       "分布式推理"
     ]
+  },
+  "docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
+    "summary": "区分 MTP、NextN 与 EAGLE 的语义，沿 Target hidden、Draft Extend 与多步候选生成理解 Draft 路径及 Ascend 实现边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "MTP",
+      "投机推理"
+    ]
+  },
+  "docs/sglang/deepseek-v4-eagle-draft-tree-source-analysis.md": {
+    "summary": "从候选路径评分、树索引与 Tree Mask，到 Verify 和 KV Cache 整理，理解 EAGLE 多分支候选如何组织及其 Ascend 适用边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "EAGLE",
+      "投机推理",
+      "KV Cache"
+    ]
   }
 }
