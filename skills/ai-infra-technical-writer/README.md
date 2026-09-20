@@ -65,6 +65,7 @@
 | [执行链核验](references/execution-chain-review.md) | 消息边界、设备提交、缓存状态和布局转换 |
 | [阅读体验](references/reading-experience.md) | 术语、段落、源码摘录与图示安排 |
 | [证据交接](references/evidence-handoff.md) | 接收研究材料时核查来源、适用条件和未知项 |
+| [推理专项检查](references/inference-boundaries.md) | 按需加载通信、显存与 Prefill/Decode 的概念边界 |
 | [职责与验收](references/role-and-acceptance.md) | 与研究、工程、性能分析分工 |
 | [文章评审](references/article-assessment.md) | 用具体段落支持评分，区分编辑判断与技术核验 |
 | [工程总结](references/engineering-evidence-to-outcomes.md) | 周报、技术分享与项目案例 |
@@ -74,7 +75,9 @@
 
 ## 目前验证到哪里
 
-本 Skill 的公开开发回归集包含 **3 个用例**，不是整套 Skills 的 21 个用例。本轮独立试用了其中 2 个短任务，结果和原始输出见 [评测记录](evals/RESULTS.md)。剩余用例未在本轮执行；没有完整长文盲测、受控新旧版本对照或 NPU 验证。
+本 Skill 的公开开发回归集现包含 **4 个用例**。上一轮的两个短任务记录见 [初次试用](evals/RESULTS.md)。本轮新增材料齐全的完整教程任务，保留了修改前、首次调整和最终复测三个输出，详见 [第二轮记录](evals/ROUND2.md)。最终稿通过该例的技术与交付检查；前两份输出技术判读通过，但篇幅偏短，没有计为整例通过。
+
+第 1 个公开源码/私有容器差异用例仍未运行；旧版短任务未在最终版本重跑。没有真实框架集成或 NPU 验证，也没有足够样本证明总体质量提升。
 
 因此当前定位是可使用、持续迭代的早期公开版本，不以自评分数宣传效果。后续优先增加固定源码材料下的完整文章评测，观察版本混用、调用断点和阅读负担，而非单纯增加规则数量。
 
