@@ -1209,4 +1209,242 @@ TARGET_VERIFY
 
 或者临旵：
 
-``
+```text
+batch.spec_info = EagleVerifyInput
+```
+
+如果这些 worker-internal mutation 泄漏回 Scheduler，下一轮就可能被错误地识别为：
+
+```text
+EXTEND
+TARGET_VERIFY
+```
+
+甚至造成重复 merge / 错误 allocation。
+
+---
+
+### 严格 Review 结论：Spec V2 不是“回滚几个字段”，而是回滚整个 ScheduleBatch dataclass
+
+`Scheduler._forward_isolation()` 当前实现：
+
+```python
+snapshot_v2_full = not batch.spec_algorithm.is_none()
+
+sched_snapshot = {
+    f.name: getattr(batch, f.name)
+    for f in dataclasses.fields(batch)
+}
+```
+
+退出时：
+
+```python
+for name, value in sched_snapshot.items():
+    setattr(batch, name, value)
+```
+
+固定源码：
+
+[`Scheduler._forward_isolation()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)
+
+因此最准确的表述不是：
+
+> “forward_mode / spec_info 要 rollback。”
+
+而是：
+
+> **对 Spec V2，ScheduleBatch 的全部 dataclass fields 默认都属于 Scheduler transaction state；Worker forward 期间的 mutation 结束后全部回滚。**
+
+这是一个非常强的 ownership boundary。
+
+---
+
+### `sampling_info` 为什么还要额外换成 forward-only copy？
+
+Isolation 进入前会：
+
+```python
+batch.sampling_info =
+    sched_sampling_info.copy_for_forward()
+```
+
+原因是一个 Spec iteration 内部可能多次：
+
+```text
+ForwardBatch.init_new()
+```
+
+如果直接复用 Scheduler 的 sampling state，penalty 等状态可能被重复 accumulate。
+
+因此：
+
+```text
+Scheduler sampling state
+```
+
+和：
+
+```text
+forward-local sampling view
+```
+
+也被隔离开了。
+
+---
+
+### Overlap 下还要保活两轮 tensor reference
+
+`record_batch_in_overlap()` 会把：
+
+```text
+batch
++
+attr_snapshot
+```
+
+保存在两槽 ring 中。
+
+原因不是状态语义，而是 tensor lifetime。
+
+Spec Worker 可能：
+
+```text
+rebind batch.input_ids
+rebind batch.out_cache_loc
+rebind batch.spec_info
+```
+
+旧 tensor Python 引用如果提前丢掉，Caching Allocator 可能在 forward stream 还没读完时复用那块显存。
+
+所以：
+
+```text
+semantic rollback
+```
+
+和：
+
+```text
+GPU tensor lifetime
+```
+
+这里同时被 isolation 管住。
+
+---
+
+### 那么哪些字段最终必须显式 re-commit？
+
+关键就在这里。
+
+Isolation 的设计是：
+
+```text
+先全部 rollback
+```
+
+然后：
+
+```text
+只重新提交真正属于 next iteration contract 的状态
+```
+
+#### Overlap 路径
+
+Worker 返回以后：
+
+```python
+batch.input_ids = None
+
+batch.spec_info =
+    batch_result.next_draft_input
+
+batch.spec_info.future_indices =
+    future_indices
+```
+
+但：
+
+```text
+batch.seq_lens
+```
+
+不会直接在这里赋成 `new_seq_lens`。
+
+因为它已经通过：
+
+```text
+FutureMap.publish(new_seq_lens)
+```
+
+进入 device relay。
+
+下一轮：
+
+```python
+future_map.resolve_seq_lens_cpu(batch)
+```
+
+再把 fresh frontier resolve 回来。
+
+所以 overlap 的显式 commit 是：
+
+```text
+ScheduleBatch object:
+next_draft_input / relay handle
+
+FutureMap:
+new_seq_lens
+bonus/topk/hidden...
+```
+
+---
+
+#### Non-overlap 路径
+
+没有 FutureMap overlap relay，所以 isolation 结束后 Scheduler 必须显式：
+
+```python
+batch.spec_info = batch_result.next_draft_input
+
+batch.seq_lens = batch_result.new_seq_lens
+
+batch.seq_lens_cpu =
+    batch_result.new_seq_lens.to("cpu")
+
+batch.seq_lens_sum =
+    int(batch.seq_lens_cpu.sum())
+
+batch.input_ids = None
+```
+
+这就是同步路径中的 cross-iteration commit。
+
+---
+
+### 哪些字段必须保持 rollback？
+
+最典型的有：
+
+```text
+forward_mode
+```
+
+Scheduler 外部仍然应该看到：
+
+```text
+DECODE
+```
+
+而不是 Worker 内部临时的：
+
+```text
+TARGET_VERIFY
+DRAFT_EXTEND_V2
+```
+
+还有：
+
+```text
+verify-time input_ids
+verify-time ou
