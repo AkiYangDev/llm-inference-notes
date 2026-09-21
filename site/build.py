@@ -37,14 +37,14 @@ def title_html(title):
     return text
 
 
-def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=None, browser_title=None, meta_description=None):
+def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=None, browser_title=None, meta_description=None, indexable=True):
     version = hashlib.sha256((ROOT / 'site/assets/style.css').read_bytes() + (ROOT / 'site/assets/app.js').read_bytes()).hexdigest()[:12]
     browser_title = browser_title or title
     meta_description = meta_description or description
     return f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(browser_title)} · AkiYang</title><meta name="description" content="{esc(meta_description)}">
-{metadata(title, meta_description, kind, route, ORIGIN, BASE, dates)}
+{metadata(title, meta_description, kind, route, ORIGIN, BASE, dates, indexable=indexable)}
 {verification_meta(ROOT)}
 <link rel="canonical" href="{ORIGIN}{BASE}{route}"><meta name="color-scheme" content="light dark">
 <link rel="icon" href="{BASE}assets/favicon.svg" type="image/svg+xml">
@@ -411,7 +411,7 @@ def build():
         page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">INFERENCE ARCHIVE</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>{esc(description)}</p></div><button class="archive-search">搜索文章 <span aria-hidden="true">↗</span></button></div><nav class="topic-filters" aria-label="筛选专题">{filters}</nav><div class="tag-browser"><span class="filter-label">按阅读层级浏览</span><nav class="tag-filters" aria-label="筛选阅读层级">{role_filters}</nav></div><div class="tag-browser"><span class="filter-label">按内容标签浏览</span><nav class="tag-filters" aria-label="筛选内容标签">{tag_filters}</nav></div>{series_overview}<div class="archive-list">{archive_cards}</div></main>'''
         dest = OUT / route / 'index.html'
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(shell(label, page, 'archive-page', route, description), encoding='utf-8')
+        dest.write_text(shell(label, page, 'archive-page', route, description, indexable=not bool(active_tag)), encoding='utf-8')
     (OUT / 'search.json').write_text(json.dumps(articles + skills, ensure_ascii=False), encoding='utf-8')
     (OUT / '.nojekyll').touch()
     credits = f'''<main id="main" class="credits wrap"><a class="back-link" href="{BASE}">← 首页</a><h1>插画来源</h1><p>本站为 AkiYang 的独立个人技术站，非 DeepSeek 官方网站。</p><h2>角色设计</h2><p>根据站点所有者提供的作者信息，鲸鱼娘角色设计署名 <a href="https://space.bilibili.com/4168597/dynamic">ZipZipPipe</a>。角色设计署名不等于下列每张衍生插画都由该作者绘制。</p><h2>首页看板</h2><p>首页宽幅鲸鱼娘看板以站点所有者提供的蓝发鲸尾女仆立绘作为角色与服装参考，经 AI 延展为蓝白科技海洋场景；该宽幅场景并非原画师原作，具体处理记录见素材来源文件。</p><h2>Q 版状态素材</h2><p>阅读、搜索、完成与迷路四种状态为 AI 生成的角色延展素材，非 ZipZipPipe 原作。不对原角色或用户提供的插画主张原创或再许可。</p><p class="credits-note">历史素材与处理记录见 <a href="{REPO}/blob/main/site/assets/SOURCES.md">SOURCES.md</a>。</p></main>'''
