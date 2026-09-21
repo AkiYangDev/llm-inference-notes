@@ -6,7 +6,8 @@
       "SGLang",
       "Ascend",
       "请求链路"
-    ]
+    ],
+    "topic": "sglang"
   },
   "docs/sglang/sglang-scheduler-source-analysis.md": {
     "summary": "跟随请求进入等待队列、组成批次并交给 ModelRunner，理解 Scheduler 的状态管理与 Prefill / Decode 调度边界。",
@@ -15,7 +16,8 @@
       "SGLang",
       "Scheduler",
       "请求调度"
-    ]
+    ],
+    "topic": "sglang"
   },
   "docs/sglang/sglang-modelrunner-source-analysis.md": {
     "summary": "从 ForwardBatch 出发，追踪模型前向、执行路径选择与输出处理，理解 ModelRunner 如何连接调度与 DeepSeek 模型。",
@@ -24,7 +26,8 @@
       "SGLang",
       "ModelRunner",
       "DeepSeek-V4"
-    ]
+    ],
+    "topic": "sglang"
   },
   "docs/sglang/deepseek-v4-attention-source-analysis.md": {
     "summary": "追踪 DeepSeek-V4 Attention 中 Query 的生成和 KV Cache 的访问，连接张量变化、历史上下文与实际源码入口。",
@@ -34,7 +37,8 @@
       "DeepSeek-V4",
       "Attention",
       "KV Cache"
-    ]
+    ],
+    "topic": "sglang"
   },
   "docs/sglang/deepseek-v4-moe-source-analysis.md": {
     "summary": "沿 Router、All-to-All、专家计算和结果合并，理解一个 Token 如何完成 MoE 前向，以及 Expert Parallel 的职责。",
@@ -44,7 +48,8 @@
       "DeepSeek-V4",
       "MoE",
       "Expert Parallel"
-    ]
+    ],
+    "topic": "sglang"
   },
   "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md": {
     "summary": "结合源码与配置示例，梳理 TP、DP、EP 在 Attention 和 MoE 之间如何协作，辨清并行组与布局转换的适用边界。",
@@ -54,7 +59,8 @@
       "DeepSeek-V4",
       "TP/DP/EP",
       "分布式并行"
-    ]
+    ],
+    "topic": "distributed"
   },
   "docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md": {
     "summary": "分析 DSpark Draft Model 的并行上下文、同步与布局规划，区分已确认的源码行为和 TP / DP 适配中待验证的假设。",
@@ -65,7 +71,8 @@
       "DSpark",
       "TP/DP/EP",
       "分布式并行"
-    ]
+    ],
+    "topic": "distributed"
   },
   "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md": {
     "summary": "沿 Draft、Verify、Accept / Reject 与状态提交，追踪一轮 DSpark 投机推理，理解候选验证、接受结果与缓存状态如何衔接。",
@@ -75,7 +82,8 @@
       "DeepSeek-V4",
       "DSpark",
       "投机推理"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md": {
     "summary": "追踪 Prefill 与 Decode 分离后的请求交接，梳理状态传输、目标资源准备与完成确认，理解独立调度两类负载的工程代价。",
@@ -85,7 +93,8 @@
       "DeepSeek-V4",
       "PD 分离",
       "分布式推理"
-    ]
+    ],
+    "topic": "distributed"
   },
   "docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
     "summary": "区分 MTP、NextN 与 EAGLE 的语义，沿 Target hidden、Draft Extend 与多步候选生成理解 Draft 路径及 Ascend 实现边界。",
@@ -95,7 +104,8 @@
       "DeepSeek-V4",
       "MTP",
       "投机推理"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-eagle-draft-tree-source-analysis.md": {
     "summary": "从候选路径评分、树索引与 Tree Mask，到 Verify 和 KV Cache 整理，理解 EAGLE 多分支候选如何组织及其 Ascend 适用边界。",
@@ -106,7 +116,8 @@
       "EAGLE",
       "投机推理",
       "KV Cache"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-tree-attention-source-analysis.md": {
     "summary": "从 Candidate Layout、Tree Position 与 Tree Mask 出发，解释多分支 Verify 为什么只允许访问祖先路径，并区分 FULL_MASK / QLEN_ONLY 与不同 attention backend 的消费边界。",
@@ -116,7 +127,8 @@
       "DeepSeek-V4",
       "Tree Attention",
       "投机推理"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-accept-decision-source-analysis.md": {
     "summary": "聚焦 Verify 之后的 Accept Decision，区分 Greedy Tree Match、Target-only Tree Sampling 与经典 p/q Rejection Sampling，并解释 accept_index、terminal bonus 与 DSpark correct_len。",
@@ -127,7 +139,8 @@
       "Accept Decision",
       "Rejection Sampling",
       "投机推理"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
     "summary": "追踪 accepted path 如何从 Verify row 映射到 committed KV，解释 KV relocation、tensor compaction、Spec V2 overshoot 与 Ascend C4/C128 状态清理边界。",
@@ -137,7 +150,8 @@
       "DeepSeek-V4",
       "KV Cache",
       "投机推理"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
     "summary": "拆分 speculative control、logical layout 与 model-data collective 三层一致性，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast，并厘清 Ascend 多卡通信职责。",
@@ -148,7 +162,8 @@
       "多卡一致性",
       "TP/DP/EP",
       "投机推理"
-    ]
+    ],
+    "topic": "distributed"
   },
   "docs/fundamentals/ai-infra-working-glossary.md": {
     "summary": "从 Token、Tensor、Attention、KV Cache、Scheduler、分布式通信一路连接到 CANN 与 Ascend 910C Kernel，作为整个仓库的工作知识地图与源码阅读入口。",
@@ -158,7 +173,8 @@
       "SGLang",
       "DeepSeek-V4",
       "Ascend 910C"
-    ]
+    ],
+    "topic": "fundamentals"
   },
   "docs/distributed/sglang-rank-group-deepseek-v4.md": {
     "summary": "从 WORLD、TP Group 和局部 Rank 出发，画清 DeepSeek-V4 Attention 与 MoE 中 TP / DP / EP 多套逻辑坐标，以及 Ascend 910C 上独立 MoE EP Group 的边界。",
@@ -168,7 +184,8 @@
       "DeepSeek-V4",
       "Rank / Group",
       "TP/DP/EP"
-    ]
+    ],
+    "topic": "distributed"
   },
   "docs/distributed/sglang-collectives-deepseek-v4.md": {
     "summary": "沿 Tensor ownership 解释 AllReduce、AllGather、ReduceScatter 与 All-to-All 到底搬什么，并把 DPA、MoE、DeepEP 与 FuseEP 的通信方向落到当前 SGLang 源码。",
@@ -179,7 +196,8 @@
       "Collective",
       "DeepEP",
       "分布式并行"
-    ]
+    ],
+    "topic": "distributed"
   },
   "docs/sglang/sglang-speculative-decoding-scheduler-source-analysis.md": {
     "summary": "从 Req、ScheduleBatch、ForwardBatch 与 FutureMap 追踪 Draft、Verify、Accept 状态机，重点解释 overlap 下的多时钟、publish fence、forward isolation 与 mixed-tail late binding。",
@@ -189,7 +207,8 @@
       "Scheduler",
       "ScheduleBatch",
       "投机推理"
-    ]
+    ],
+    "topic": "speculative-decoding"
   },
   "docs/sglang/deepseek-v4-speculative-performance-analysis.md": {
     "summary": "从 Accept Length、strict Accept Rate、Draft / Verify 成本与 Ragged Verify 出发，建立投机推理何时加速、何时反而变慢的性能 break-even 模型。",
@@ -199,7 +218,8 @@
       "投机推理",
       "Acceptance Rate",
       "性能模型"
-    ]
+    ],
+    "topic": "performance"
   },
   "docs/sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
     "summary": "沿 Draft Graph、Target Verify、Plan Stream、Attention Multi-Stream 与 DeepEP async event 拆解 Ascend 910C 上一轮投机推理的真实 critical path 与 overlap 边界。",
@@ -210,7 +230,8 @@
       "NPU Graph",
       "Communication Overlap",
       "投机推理"
-    ]
+    ],
+    "topic": "performance"
   },
   "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md": {
     "summary": "把 DSpark Draft / Verify、NPU Graph replay、Accept / Commit 与 DeepEP 通信映射到 Ascend 910C Profiling 时间线，用源码边界解释真实 Host / Device gap。",
@@ -221,7 +242,8 @@
       "Profiling",
       "DSpark",
       "投机推理"
-    ]
+    ],
+    "topic": "performance"
   },
   "docs/ascend/deepseek-v4-w8a8-ascend-910c.md": {
     "summary": "从官方 ModelSlim W8A8_DYNAMIC 配方出发，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ 到 ACLNN / CANN AI Core 的量化执行链。",
@@ -232,6 +254,7 @@
       "W8A8",
       "ModelSlim",
       "CANN"
-    ]
+    ],
+    "topic": "ascend"
   }
 }
