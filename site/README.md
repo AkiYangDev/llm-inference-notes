@@ -30,6 +30,19 @@ Mermaid 与代码高亮使用固定版本的 jsDelivr 模块；网络不可用�
 - `/credits/` 记录插画来源。首页展示 WebP 透明背景素材，原始提供图仍保留。
 - 样式与交互脚本按内容哈希更新版本，搜索索引使用重新验证的请求。
 
+## 内容四层
+
+每篇公开文章都在 `site/articles.json` 中声明一个 `role`，用于区分文章在增长与阅读路径中的主要职责，而不是替代专题分类。
+
+- `entry` / 流量入口：回答更广泛的搜索问题，降低第一次进入 AI Infra / SGLang 的阅读门槛。
+- `advanced` / 进阶：从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
+- `deep` / 深水：源码、性能、投机解码、Ascend Profiling 与 PR 级工程细节。
+- `reference` / Reference：适合反复查阅的名词表、Rank / Group、Collective 与知识地图。
+
+`/articles/` 默认按这四层组织，并生成 `/levels/entry/`、`/levels/advanced/`、`/levels/deep/`、`/levels/reference/` 四个独立归档页。首页同时提供层级入口；专题、标签和系列阅读仍保留，四层结构与原有信息架构并行存在。
+
+文章可选声明 `seo_title` 与 `seo_summary`。它们只服务浏览器标题与搜索摘要，不改正文 H1，因此可以在不牺牲技术标题准确性的情况下，为高价值入口页提供更短、更明确的搜索结果文案。所有公开 Markdown 必须在 `site/articles.json` 有编辑元数据，否则构建失败，避免新文章悄悄退化到默认 SEO 信息。
+
 ## Skills 栏目
 
 网站自动发现 `skills/<slug>/README.md`，同目录必须存在 `SKILL.md`。
