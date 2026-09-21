@@ -19,4 +19,4 @@ jobs:
         with:
           persist-credentials: false
       - name: Check documentation
-        run: python3 scripts/check_docs.py
+        run: python3 scripts/check_docs.py --strict-style
