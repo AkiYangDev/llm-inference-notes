@@ -30,31 +30,31 @@ Rank / Group
 
 这正是小 PR 最有价值的地方：**代码很少，背后的系统知识却很完整。**
 
-本文固定到：
+| 项目 | 信息 |
+| --- | --- |
+| PR | [sgl-project/sglang #39871](https://github.com/sgl-project/sglang/pull/39871) |
+| 标题 | `Fix DSA partial DP-TP mode log to use derived attn_tp_size` |
+| 状态 | merged |
+| Merge commit | `803f0c93d20104cf19ff6a95f7ef580b9fe449a2` |
+| 改动规模 | 1 file / +8 / -2 |
+| 难度 | ★☆☆☆☆ |
+| 类型 | Correctness / Observability |
+| 核心知识 | DP Attention、Runtime Derivation、Rank / Group、Single Source of Truth |
+| 适用边界 | CUDA / ROCm DSA model-specific adjustment；不是 Ascend 910C 执行路径修复 |
 
-```text
-sgl-project/sglang
-PR: #39871
-merge commit: 803f0c93d20104cf19ff6a95f7ef580b9fe449a2
-merged: 2026-09-18
-reviewed: 2026-09-21
-```
-
-先说明边界：这个 PR 位于 DSA 的 CUDA / ROCm model-specific adjustment 分支，**不是 Ascend 910C 执行路径修复，也没有改变实际并行拓扑**。它只是让日志使用已经正确派生出的 `attn_tp_size`。本文借这个案例解释 SGLang 的 Attention 并行宽度；如果你想系统理解 WORLD / Rank / Group / MoE EP，可以继续阅读仓库里的[《SGLang 里的 Rank 和 Group 到底是什么？》](../distributed/sglang-rank-group-deepseek-v4.md)。
-
-> **先给结论：**在合法的 DP Attention 配置下，`tp_size` 不一定等于 `attn_tp_size`。SGLang 当前的核心关系是：
+> **30 秒结论**
 >
-> ```text
-> tp_size
-> =
-> attn_dp_size
-> × attn_cp_size
-> × attn_tp_size
-> ```
+> 这个 PR 没有修改并行行为，只修复了错误的 Observability。问题根因是：代码把用户配置的 `tp_size` 直接当成了运行时真正的 `attn_tp_size`。在 DP Attention 下，两者不一定相等。
 >
-> 因此 `tp_size=16, dp_size=2, attn_cp_size=1` 且开启 DP Attention 时，真正的 `attn_tp_size=8`。
+> 对于 `tp_size=16, dp_size=2, attn_cp_size=1, enable_dp_attention=true`，SGLang 当前会派生出 `attn_dp_size=2`、`attn_tp_size=8`。
+>
+> 核心关系可以先记成：`tp_size = attn_dp_size × attn_cp_size × attn_tp_size`。
+
+如果你想系统理解 WORLD / Rank / Group / MoE EP，可以把本文当成案例入口，再继续阅读[《SGLang 里的 Rank 和 Group 到底是什么？》](../distributed/sglang-rank-group-deepseek-v4.md)。这里我们只讲理解这个 PR 所需的最小背景。
 
 ---
+
+## 一、问题：到底哪里不对？为什么一条日志值得专门修？
 
 ## 一、一个“只是日志错了”的 PR，为什么值得认真读？
 
@@ -143,7 +143,7 @@ flowchart TB
 
 ---
 
-## 二、顺着源码看：`attn_tp_size` 到底是怎样派生出来的？
+## 二、最小背景：`tp_size` 为什么不一定等于 `attn_tp_size`？
 
 PR 没有在日志旁边临时写一个除法，而是复用了 `runtime_context.py` 中已有的：
 
@@ -266,134 +266,94 @@ attn_tp_size
 
 ---
 
-## 三、把 CP 和 Rank 放进来：并行不是几个数字相乘，而是在定义 Group
+## 三、根因：真正被破坏的是哪个 invariant？
 
-如果只记住“16 除以 2 等于 8”，这个 PR 其实还没有学透。
+现在回到修改前的数据流。
 
-再加入 Context Parallelism：
-
-```text
-tp_size = 16
-dp_size = 2
-attn_cp_size = 2
-enable_dp_attention = true
-```
-
-此时：
+SGLang Runtime 已经有统一的派生逻辑：
 
 ```text
-attn_dp_size = 2
-
-attn_tp_size
-= 16 / 2 / 2
-= 4
+cfg.tp_size
+cfg.dp_size
+cfg.attn_cp_size
+cfg.enable_dp_attention
+        │
+        ▼
+derive_attention_widths()
+        │
+        ├── attn_dp_size
+        └── attn_tp_size
 ```
 
-拓扑变成：
+在 PR 的例子里，Runtime 这条路径已经会得到：
+
+```text
+attn_tp_size = 8
+```
+
+真正出问题的是 Logging 走了一条旁路：它没有消费这个派生结果，而是直接把 `cfg.tp_size` 打成了 `attn_tp_size`。
 
 ```mermaid
-flowchart TB
-    W["TP world = 16"]
+flowchart TD
+    C["Config<br/>tp=16 / dp=2 / cp=1 / DPA=on"]
+    D["derive_attention_widths()"]
+    R["Runtime topology<br/>attn_tp_size = 8"]
+    L["Old logging"]
+    W["prints cfg.tp_size<br/>attn_tp_size = 16"]
 
-    W --> D0["DP 0"]
-    W --> D1["DP 1"]
-
-    D0 --> C00["CP 0"]
-    D0 --> C01["CP 1"]
-    D1 --> C10["CP 0"]
-    D1 --> C11["CP 1"]
-
-    C00 --> T00["Attn TP = 4"]
-    C01 --> T01["Attn TP = 4"]
-    C10 --> T10["Attn TP = 4"]
-    C11 --> T11["Attn TP = 4"]
+    C --> D
+    D --> R
+    C --> L
+    L --> W
 ```
 
-检查：
+于是同一个进程里同时存在：
 
 ```text
-DP 2 × CP 2 × AttnTP 4 = 16
+Runtime Truth       = 8
+Logging Observation = 16
 ```
 
-这时候应该开始从“数字”切换到“Group”的视角。
+这就是这个 PR 的 Root Cause：
 
-真正值得问的不是：
+> **Logging 直接消费了 configured value，而没有消费 runtime-derived value。**
 
-> TP、DP、CP 的定义分别是什么？
+进一步可以把这个 PR 修复的核心 invariant 写成一句话：
 
-而是：
+> **Invariant：任何描述 Attention TP 宽度的消费者，都应该与 Runtime Group / Rank 派生使用同一套 Attention width 语义，而不能把原始 `tp_size` 直接当成 `attn_tp_size`。**
+
+这个 invariant 比具体的 `16 → 8` 更重要。以后即使配置变成 `TP32 / DP8 / CP2`，问题本质仍然一样：**不能从某个原始配置字段“猜”运行时模块宽度。**
+
+读 PR 时，因此可以多问一层：
 
 ```text
-当前进程属于哪个 Attention TP Group？
-这个 Group 的 world_size 是多少？
-谁和谁会一起做 collective？
-当前 Rank 在这个 Group 里的 local rank 是多少？
+不要只问：哪一行错了？
+
+还要问：哪条系统不变量被破坏了？
 ```
 
-这才是分布式源码最终要落到的地方。
-
-### 一个特别有用的极端例子：`TP16 + DP16`
-
-假设：
-
-```text
-tp_size = 16
-dp_size = 16
-attn_cp_size = 1
-enable_dp_attention = true
-```
-
-那么：
-
-```text
-attn_tp_size
-=
-16 / 16 / 1
-=
-1
-```
-
-这意味着：
-
-```text
-attn_tp_size = 1
-```
-
-但同时：
-
-```text
-tp_size = 16
-```
-
-依然成立。
-
-因此以后看到源码判断：
-
-```python
-attn_tp_size == 1
-```
-
-不能翻译成：
-
-> “整个模型是单卡运行。”
-
-它只表示：
-
-> **到了 Attention 这个并行坐标里，一个 Attention TP Group 的宽度已经是 1。**
-
-这类区别对后续阅读 DSpark、Draft / Target Layout、MoE EP 都非常重要。
+一旦能准确写出 invariant，通常就已经真正理解了 PR。
 
 ---
-
-## 四、回到 PR Diff：为什么正确修法不是手写 `tp_size // dp_size`？
-
-有了前面的背景，再看 PR 本身就非常轻松了。
+## 四、修复：Diff 真正做了哪几个设计动作？为什么不是直接除一下？
 
 修复后的代码位于：
 
 [`python/sglang/srt/arg_groups/model_hook.py`](https://github.com/sgl-project/sglang/blob/803f0c93d20104cf19ff6a95f7ef580b9fe449a2/python/sglang/srt/arg_groups/model_hook.py#L280-L299)
 
-核心变化就是先调用统一的派生函数：
+如果按“设计意图”而不是逐行翻译 Diff，这次修改其实只有三个动作。
+
+**第一，找到真正的 Single Source of Truth。**
+
+PR 新增：
+
+```python
+from sglang.srt.runtime_context import derive_attention_widths
+```
+
+它没有在 Logging 层再发明一套并行宽度算法，而是复用 Runtime 已有的派生逻辑。
+
+**第二，用派生值替换错误的配置值。**
 
 ```python
 _, attn_tp_size = derive_attention_widths(
@@ -404,67 +364,38 @@ _, attn_tp_size = derive_attention_widths(
 )
 ```
 
-然后日志不再打印：
+日志随后从 `cfg.tp_size` 改成真正的 `attn_tp_size`。
 
-```python
-cfg.tp_size
-```
+**第三，保持 Runtime 行为完全不变。**
 
-而是打印真正派生出的：
+这个 PR 不改 Process Group、不改 Kernel、不改 Collective，只让 Observability 重新对齐 Runtime Truth。
 
-```python
-attn_tp_size
-```
+### 为什么不是直接写 `tp_size // dp_size`？
 
-这里有一个特别值得学习的软件工程点。
-
-你可能会想，既然 PR 的例子只是：
-
-```text
-16 / 2 = 8
-```
-
-为什么不直接写：
+表面看当前例子只需要 `16 / 2 = 8`，所以似乎下面这样也能修：
 
 ```python
 attn_tp_size = cfg.tp_size // cfg.dp_size
 ```
 
-因为这样虽然能修当前例子，却把系统规则复制了一份。
+但这只是“修当前样例”，不是“修系统语义”。真正的规则还涉及 `enable_dp_attention` 和 `attn_cp_size`。
 
-真正的规则还涉及：
-
-```text
-enable_dp_attention
-attn_cp_size
-```
-
-如果不同文件各自写：
+如果不同文件各自维护一份 arithmetic：
 
 ```text
 A.py → tp / dp
 B.py → tp / dp / cp
-C.py → DP Attention 开了才除
+C.py → DPA 开启时才除
 D.py → 日志直接打印 tp
 ```
 
-随着代码演进，很容易出现：
+随着代码演进，很容易再次出现 Runtime、Logging、Scheduler 对同一个宽度给出不同答案。
 
-```text
-Runtime 认为 AttnTP = 8
-Logging 认为 AttnTP = 16
-另一个模块又认为 AttnTP = 4
-```
+更关键的是，固定 merge commit 下 `derive_attention_widths()` 的源码注释已经明确说明了为什么要把这段算术单独抽出来：DP Attention 的 rank 计算也需要同样的两个宽度，**不能再维护第二份 arithmetic**。
 
-而 `derive_attention_widths()` 的源码注释恰好明确说明了为什么要把这段算术单独抽出来：DP Attention 的 rank 计算也需要同样的两个宽度，**不能再维护第二份 arithmetic**。
+所以正确修法不是“重新算一个正确数字”，而是：
 
-这就是典型的：
-
-```text
-Single Source of Truth
-```
-
-可以把设计关系理解成：
+> **让 Logging 回到 Runtime 已经存在的语义源。**
 
 ```mermaid
 flowchart TD
@@ -480,53 +411,40 @@ flowchart TD
     D --> O
 ```
 
-真正好的修复不是“把这一行数字改对”，而是：
-
-> **让观察系统、运行系统和其他消费者重新回到同一套语义来源。**
+这就是 **Single Source of Truth**。
 
 ---
+## 五、验证与边界：什么是源码事实，什么不能过度解读？
 
-## 五、严格 Review：这个 PR 修了什么，又没有修什么？
+正式 PR 解读里，最容易犯的错误是把“这个 PR 能证明什么”和“我们从它延伸出的知识”混在一起。
 
-一篇正式的 PR 解读，最容易犯的错误是把一个很小的改动讲成“大规模运行时修复”。所以这里需要明确边界。
+这里把证据分四层：
 
-### 它修了什么
+| 证据层级 | 本文中的结论 |
+| --- | --- |
+| **Source-confirmed** | `derive_attention_widths()` 按 `tp_size // attn_dp_size // attn_cp_size` 派生 `attn_tp_size`；修复后的日志调用该 helper |
+| **PR-confirmed** | PR 作者明确说明错误发生在 partial DP Attention 日志，且改动是 log-only，没有 behavioral impact |
+| **Measured** | 这个 PR 没有性能/精度 benchmark，因为没有修改模型计算或 Runtime 行为 |
+| **Inference / Transfer** | “配置值与运行时派生值混淆”可以作为其他模块的 Code Review 模式，但每个具体模块仍需重新核源码 |
 
-PR #39871 修复的是 DSA partial DP-TP 场景下的一条 warning：
-
-```text
-旧日志：
-attn_tp_size = cfg.tp_size
-
-新日志：
-attn_tp_size = derive_attention_widths(...)[1]
-```
-
-因此 Observability 现在和真正的 Attention width derivation 保持一致。
-
-这不是“纯 cosmetic”到完全没有工程价值。分布式推理排障严重依赖日志，如果日志告诉你：
+**这个 PR 实际修了什么：**
 
 ```text
-AttnTP = 16
+旧日志：attn_tp_size = cfg.tp_size
+
+新日志：attn_tp_size = derive_attention_widths(...)[1]
 ```
 
-你很可能会沿着 16-way TP communication、AllReduce、带宽压力去查性能；但真实 topology 如果是：
+因此 Observability 重新与 Attention width derivation 对齐。
 
-```text
-AttnTP = 8
-```
-
-整个排查方向从第一步就可能偏掉。
-
-### 它没有修什么
-
-这个 PR：
+**这个 PR 没有修什么：**
 
 - 没有改变 Attention Kernel；
-- 没有改变 Process Group 的创建；
+- 没有改变 Process Group 创建；
 - 没有改变 Weight Sharding；
 - 没有改变 Collective Communication；
-- 没有改变模型精度或性能；
+- 没有改变模型精度；
+- 没有带来性能提升；
 - 没有修改 Ascend NPU / XPU 的这个 DSA 分支。
 
 源码里的外层条件明确是：
@@ -536,89 +454,101 @@ if not get_platform().is_npu and not get_platform().is_xpu:
     # CUDA or ROCm GPU
 ```
 
-所以不能把它写成：
+所以不能把它描述成“PR #39871 修复了 Ascend 910C 的 DP Attention Bug”。更准确的说法是：
 
-> “PR #39871 修复了 Ascend 910C 的 DP Attention Bug。”
+> **它修复了 CUDA / ROCm DSA model-specific adjustment 中 partial DP Attention 的日志语义；本文借这个案例学习 SGLang 的 Attention width derivation。**
 
-准确说法应该是：
+这也是 PR 精读需要长期坚持的边界：
 
-> **它修复了 CUDA / ROCm DSA model-specific adjustment 中 partial DP Attention 的日志语义；我们借这个小 PR 学习 SGLang 通用的 Attention width derivation。**
-
-这种“修改事实”和“可迁移知识”分开写，是阅读 PR 时非常重要的习惯。
+```text
+PR 修改事实
+      ≠
+可以迁移出的知识
+```
 
 ---
+## 六、迁移：这个 PR 真正教给我们的 AI Infra 方法是什么？
 
-## 六、从这个小 PR 应该带走什么？以及下一步怎么读
+如果读完只记住 `16 / 2 = 8`，那这篇文章的价值其实很有限。真正应该带走的是三个层次。
 
-PR #39871 最终值得记住的不是某一行日志，而是四个工程习惯。
-
-第一，**Config Value 不等于 Runtime Derived Value**。
-
-```text
-cfg.tp_size = 16
-```
-
-不能直接推出：
+**第一层：直接知识。**
 
 ```text
-attn_tp_size = 16
+tp_size
+≠
+attn_tp_size
 ```
 
-中间还可能经过：
+Attention 的实际并行宽度可能由 DP Attention、CP、TP 共同派生。
+
+**第二层：通用 Bug Pattern。**
+
+这个 PR 属于一个很常见的系统 Bug：
 
 ```text
-DP Attention
-CP
-其他 layout derivation
+Configured Value
+      ≠
+Derived Runtime Value
 ```
 
-第二，**并行的最终落点是 Rank / Group，而不是缩写本身**。
+原始配置仍然“看起来合理”，所以代码不一定 crash；真正出错的是某个下游消费者直接拿了原始值，而没有经过 Runtime Derivation。
 
-真正需要理解的是：
+这个模式不只可能出现在并行宽度，也值得在 Buffer capacity、Graph bucket、Effective batch、KV state、Draft / Verify layout、MoE backend、Memory budget 等位置保持警觉——但具体是否存在同类问题，仍然必须逐处按源码确认。
+
+**第三层：Code Review Rule。**
+
+以后在 SGLang 里看到：
+
+```python
+cfg.xxx
+```
+
+被运行时模块直接使用，可以多问一句：
+
+> **这里真正需要的是用户配置值，还是已经经过 topology / capability / state derivation 的运行时值？**
+
+进一步可以形成一组可复用的检查问题：
 
 ```text
-Parallelism
-   ↓
-Rank Layout
-   ↓
-Process Group
-   ↓
-Collective Communication
+1. 这个值是 configured leaf，还是 derived runtime state？
+2. 是否已经存在统一 helper / context / coordinator 负责派生？
+3. 当前代码是不是复制了一份 arithmetic？
+4. Logging / Metrics / Debug 输出和 Runtime 是否共享同一语义源？
+5. 这个值在 enable flag、CP、DP、Spec、MoE 等模式下会不会变化？
+6. 如果这里错了，影响的是 Runtime behavior，还是 Observability？
 ```
 
-第三，**Single Source of Truth 比“这一处公式写对”更重要**。
+### 继续阅读
 
-一个系统规则如果已经由 `derive_attention_widths()` 定义，Logging、Rank Derivation 和其他运行时消费者都应该复用它，而不是各算一遍。
+如果想把这条知识链继续往下走，可以按下面的顺序：
 
-第四，**Observability 也是正确性的一部分**。
+1. [《SGLang 里的 Rank 和 Group 到底是什么？》](../distributed/sglang-rank-group-deepseek-v4.md)：把 WORLD、TP / DP / CP / EP 坐标补完整；
+2. [《SGLang 里的 AllReduce、AllGather、ReduceScatter、All-to-All 到底在搬什么？》](../distributed/sglang-collectives-deepseek-v4.md)：把 Group 落到真实通信；
+3. 再进入 DSpark / DeepSeek-V4 Layout，理解为什么 Draft、Target、Attention 和 MoE 不能只看一个全局 `tp_size`。
 
-程序执行正确但日志描述错误，会让工程师在 Debug、Profiling 和容量分析时看到一个不存在的系统。
-
-如果你读完这篇还想继续深入，可以按下面的顺序走：
-
-1. 先读[《SGLang 里的 Rank 和 Group 到底是什么？》](../distributed/sglang-rank-group-deepseek-v4.md)，把 WORLD、TP / DP / CP / EP 坐标补完整；
-2. 再读[《SGLang 里的 AllReduce、AllGather、ReduceScatter、All-to-All 到底在搬什么？》](../distributed/sglang-collectives-deepseek-v4.md)，把 Group 落到真实通信；
-3. 最后回到更复杂的 DSpark / DeepSeek-V4 Layout，理解为什么 Draft、Target、Attention 和 MoE 不能只看一个全局 `tp_size`。
-
-### 固定源码入口
+固定源码入口：
 
 - [SGLang PR #39871](https://github.com/sgl-project/sglang/pull/39871)
 - [`model_hook.py`：修复后的日志路径](https://github.com/sgl-project/sglang/blob/803f0c93d20104cf19ff6a95f7ef580b9fe449a2/python/sglang/srt/arg_groups/model_hook.py#L280-L299)
 - [`runtime_context.py`：`derive_attention_widths()`](https://github.com/sgl-project/sglang/blob/803f0c93d20104cf19ff6a95f7ef580b9fe449a2/python/sglang/srt/runtime_context.py#L138-L148)
-- [`runtime_context.py`：派生宽度继续进入 parallel runtime](https://github.com/sgl-project/sglang/blob/803f0c93d20104cf19ff6a95f7ef580b9fe449a2/python/sglang/srt/runtime_context.py#L151-L205)
+- [`runtime_context.py`：派生宽度进入 parallel runtime](https://github.com/sgl-project/sglang/blob/803f0c93d20104cf19ff6a95f7ef580b9fe449a2/python/sglang/srt/runtime_context.py#L151-L205)
 
-以后读 PR，也可以重复同样的方法：
+以后读一个新 PR，也可以重复同样的方法：
 
 ```text
 现象是什么？
     ↓
+理解它需要哪些最小背景？
+    ↓
 哪个 invariant 被破坏？
     ↓
-真正的 Single Source of Truth 在哪里？
+修改前的数据流 / 状态流在哪里分叉？
     ↓
-这个 PR 改了行为，还是只改了观察方式？
+为什么作者选择这个修法？
     ↓
-能迁移成什么通用工程知识？
+证据能证明到哪里？
+    ↓
+什么经验可以迁移成下一次 Code Review 的检查规则？
 ```
 
-这就是这个只有几行改动的 PR 最值得学习的地方：**它没有教我们一个复杂的新算法，却用最小的代码差异，把“配置、派生拓扑、Rank / Group 和 Observability”连成了一条完整的工程链路。**
+这就是 PR #39871 真正值得学习的地方：**它没有教我们一个复杂的新算法，却用最小的代码差异，把配置、运行时派生、Rank / Group、Single Source of Truth 和 Observability 连成了一条完整的工程链路。**
