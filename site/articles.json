@@ -256,5 +256,17 @@
       "CANN"
     ],
     "topic": "ascend"
+  },
+  "docs/performance/deepseek-v4-w8a8-ascend-910c-performance.md": {
+    "summary": "从 Decode 小 M 出发，严格核对 DynamicQuant 的 Vector Core 并行度、QuantBatchMatmulV3 的 SmallMN / StreamK、DeepSeek-V4 实际 FRACTAL_NZ shape，以及 GroupedMatmul 的 Expert Token 调优阈值，区分源码机制与必须实测的性能结论。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "W8A8",
+      "CANN Tiling",
+      "Profiling"
+    ],
+    "topic": "performance"
   }
 }
