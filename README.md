@@ -20,6 +20,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 ## 专题文章
 
 - [AI 推理基础设施工作名词表：SGLang、DeepSeek 与 Ascend 910C 从 Token 到 NPU Kernel](docs/fundamentals/ai-infra-working-glossary.md)：作为全仓库总入口，串起模型、Runtime、内存、分布式、投机解码与 Ascend 执行层，并提供当前 SGLang 源码入口索引和后续专题阅读路线。
+- [为什么 Prefill 和 Decode 明明跑的是同一个模型，性能却完全不同？](docs/fundamentals/prefill-vs-decode-performance.md)：从 DeepSeek-V4 的真实 Dense / MoE shape、SWA/C4/C128 长上下文读流量和 Ascend 910C Profiling 指标解释两阶段为何落在不同 Workload Shape 空间。
 - [SGLang 里的 Rank 和 Group 到底是什么？用 DeepSeek-V4 画清 TP Rank、DP Rank、EP Rank](docs/distributed/sglang-rank-group-deepseek-v4.md)：作为分布式源码前置，区分 Native DP 与 DPA 下的 `dp_rank`，解释 Attention 的 `DP × CP × TP`、MoE 的 `DP × EP × TP` 坐标，以及 Ascend 910C 上独立 `_MOE_EP` Group。
 - [SGLang 里的 AllReduce、AllGather、ReduceScatter、All-to-All 到底在搬什么？用 DeepSeek-V4 画清 Group、Tensor 和通信方向](docs/distributed/sglang-collectives-deepseek-v4.md)：沿 Tensor ownership 解释 TP AllReduce/AllGather、DPA 的三类 gather、MoE ReduceScatter，以及 Ascend DeepEP / FuseEP 的 A2A 数据面边界。
 - [DeepSeek-V4 W8A8 推理在 Ascend 910C 上到底发生了什么？从量化权重到 INT8 MatMul Kernel](docs/ascend/deepseek-v4-w8a8-ascend-910c.md)：严格区分官方 `W8A8_DYNAMIC` 主路径与静态 W8A8 对照路径，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ → `aclnnQuantMatmulWeightNz` → CANN QuantBatchMatmulV3。

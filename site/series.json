@@ -8,6 +8,11 @@
         "path": "docs/fundamentals/ai-infra-working-glossary.md",
         "label": "工作知识地图",
         "description": "从 Token、Runtime、分布式到 Ascend Kernel 建立全局坐标"
+      },
+      {
+        "path": "docs/fundamentals/prefill-vs-decode-performance.md",
+        "label": "Prefill / Decode 性能直觉",
+        "description": "从 Dense M、Expert M_e 与 DSV4 历史状态理解两阶段为何性能完全不同"
       }
     ]
   },
