@@ -31,7 +31,7 @@ def evidence_panel(source, dates, repo, path):
     bits.append(f'<a href="{repo}/commits/main/{path}">文章修改记录 ↗</a>')
     return '<div class="publication-meta">'+''.join(bits)+'</div>'
 
-def metadata(title, description, kind, route, origin, base, dates=None):
+def metadata(title, description, kind, route, origin, base, dates=None, indexable=True):
     dates=dates or {};url=origin+base+route
     article=kind=='article-page'
     data={'@context':'https://schema.org','@type':'BlogPosting' if article else ('WebSite' if not route else 'WebPage'),'name':title,'description':description,'url':url,'inLanguage':'zh-CN'}
@@ -51,7 +51,8 @@ def metadata(title, description, kind, route, origin, base, dates=None):
     tags+=f'<meta name="twitter:image" content="{image}">'
     tags+=f'<link rel="alternate" type="application/rss+xml" title="AkiYang · 技术文章" href="{origin}{base}feed.xml">'
     tags+='<script type="application/ld+json">'+json.dumps(data,ensure_ascii=False).replace('<','\\u003c')+'</script>'
-    if route=='404.html':tags+='<meta name="robots" content="noindex">'
+    if route=='404.html' or not indexable:
+        tags+='<meta name="robots" content="noindex,follow">'
     else:
         tags+='<meta name="robots" content="index,follow,max-image-preview:large">'
         PAGES[url]=dates
