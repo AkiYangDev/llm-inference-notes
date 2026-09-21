@@ -1,5 +1,5 @@
 {
-  "version": "0.1",
+  "version": "0.2",
   "cases": [
     {
       "id": "pr-39871-correctness-observability",
@@ -16,6 +16,11 @@
         "runtime parallelism changed",
         "Ascend 910C bug fixed",
         "performance improved"
+      ],
+      "maintainer_checks": [
+        "Impact: wrong observability can mislead topology debugging, but runtime behavior is unchanged",
+        "Validation: no performance/accuracy benchmark is required for the log-only behavior claim",
+        "Review question: is a configured leaf bypassing an existing derived runtime source"
       ]
     },
     {
@@ -30,6 +35,11 @@
       "must_not_claim": [
         "normal peak memory is reduced",
         "healthy request semantics changed materially"
+      ],
+      "maintainer_checks": [
+        "Impact: stuck fake-bootstrap requests accumulate and pin inflight/tree-cache resources",
+        "Validation should cover zero-work/final-chunk and timeout terminal paths",
+        "Review question: can every enqueue path reach a terminal state"
       ]
     },
     {
@@ -44,6 +54,11 @@
       "must_not_claim": [
         "2.72 GiB is a universal hard bound",
         "KV cache itself caused the OOM"
+      ],
+      "maintainer_checks": [
+        "Impact: temporary allocation can OOM even when KV cache has capacity",
+        "Validation must separate memory mechanism/bound from workload-specific measured peak",
+        "Review question: are temporary tensor lifetime and memory budget tied to the same dimensions"
       ]
     },
     {
@@ -58,6 +73,11 @@
       "must_not_claim": [
         "kernel fusion is always faster",
         "the threshold applies to DeepSeek-V4 or all hardware"
+      ],
+      "maintainer_checks": [
+        "Performance evidence: distinguish launch-count mechanism from benchmarked small-token workload gains",
+        "Validation surface: larger token counts where fusion can regress must remain in scope",
+        "Review question: which shape/device boundary justifies the fusion guard"
       ]
     },
     {
@@ -72,6 +92,11 @@
       "must_not_claim": [
         "exact performance parity is universal",
         "all PD backends/hardware were fully validated"
+      ],
+      "maintainer_checks": [
+        "History chain: DCP pack buffers were introduced earlier and cached-prefix transfer bypassed the same capacity contract",
+        "Impact: large cached prefix can fall back to per-token RDMA despite little prefill compute",
+        "Review question: do all transfer paths share the pack-capacity bound"
       ]
     }
   ]
