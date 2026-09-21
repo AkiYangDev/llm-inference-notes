@@ -308,5 +308,17 @@
       "Ascend 910C"
     ],
     "topic": "fundamentals"
+  },
+  "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md": {
+    "summary": "从 SGLang PR #39871 的一条错误日志出发，解释 TP16 为什么在 DP Attention 下可以派生为 AttnTP8，并把配置值、运行时派生值、Rank / Group、Single Source of Truth 与可观测性连成一条完整工程链路。",
+    "category": "PR 精读",
+    "tags": [
+      "SGLang",
+      "PR 精读",
+      "DP Attention",
+      "TP/DP/CP",
+      "Rank / Group"
+    ],
+    "topic": "pr-reviews"
   }
 }

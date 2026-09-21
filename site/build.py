@@ -16,7 +16,7 @@ OUT = ROOT / '_site'
 BASE = '/llm-inference-notes/'
 ORIGIN = 'https://akiyangdev.github.io'
 REPO = 'https://github.com/AkiYangDev/llm-inference-notes'
-TOPICS = {'sglang': 'SGLang', 'ascend': 'Ascend', 'fundamentals': '推理基础', 'distributed': '分布式推理', 'speculative-decoding': '投机解码', 'performance': '性能分析'}
+TOPICS = {'sglang': 'SGLang', 'pr-reviews': 'PR 精读', 'ascend': 'Ascend', 'fundamentals': '推理基础', 'distributed': '分布式推理', 'speculative-decoding': '投机解码', 'performance': '性能分析'}
 DESCRIPTION = 'AkiYang 的大模型推理工程文档：SGLang、Ascend、源码与性能分析。'
 
 

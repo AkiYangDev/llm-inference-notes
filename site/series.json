@@ -54,6 +54,18 @@
     ]
   },
   {
+    "id": "sglang-pr-reviews",
+    "title": "SGLang PR 精读",
+    "topic": "pr-reviews",
+    "items": [
+      {
+        "path": "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md",
+        "label": "PR #39871 · Attention 并行宽度",
+        "description": "从一个日志修复学 tp_size、attn_tp_size、Rank / Group 与 Runtime Derivation"
+      }
+    ]
+  },
+  {
     "id": "distributed-inference",
     "title": "DeepSeek-V4 分布式推理",
     "topic": "distributed",
