@@ -75,7 +75,7 @@ SGLang 系列顺序为请求执行全链路、Scheduler、ModelRunner、Attentio
 
 ## Google Search Console
 
-网站已输出完整静态正文、canonical、Sitemap、RSS 与 JSON-LD。首页与正文允许索引，404 保持 noindex。发布前运行 `python scripts/check_site.py` 检查元数据、站内链接和 Sitemap。
+网站已输出完整静态正文、canonical、Sitemap、RSS 与 JSON-LD。首页、正文、专题页与四层阅读归档允许索引；404 与标签筛选页保持 `noindex,follow`。标签页主要承担站内导航，当前标签粒度较细，不进入 Sitemap，避免大量单篇/双篇薄归档稀释年轻站点的索引信号。发布前运行 `python scripts/check_site.py` 检查元数据、站内链接和 Sitemap。
 
 1. 在 Google Search Console 添加网址前缀属性 `https://akiyangdev.github.io/llm-inference-notes/`。
 2. 选择 HTML 标记验证，将 Google 提供的 content 值填入 `site/search-console.json` 的 `google_site_verification`，提交并等待部署后验证。空配置不会输出伪造标签。
