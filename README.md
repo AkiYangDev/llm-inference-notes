@@ -55,7 +55,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 - [代码示例](examples/README.md)：文章配套的可运行示例。
 - [图表资源](assets/README.md)：架构图、调用链图和实验图表。
 - [写作模板](templates/README.md)：源码解析与部署实践模板。
-- [技术写作 Skill](skills/README.md)：源码取证、连续工程叙事、图解与文章评审规则。
+- [AI Infra Skills](skills/README.md)：源码取证、SGLang PR 精读、连续工程叙事、图解与文章评审规则。
 - [贡献与维护](CONTRIBUTING.md)：命名、证据要求与检查方式。
 
 文章按具体版本解释实现；原理示例、源码确认与实测结果分别标注。

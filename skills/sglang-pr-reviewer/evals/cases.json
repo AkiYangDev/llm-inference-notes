@@ -1,0 +1,78 @@
+{
+  "version": "0.1",
+  "cases": [
+    {
+      "id": "pr-39871-correctness-observability",
+      "pr": "sgl-project/sglang#39871",
+      "type": "correctness_observability",
+      "must_detect": [
+        "log-only change",
+        "derive_attention_widths is the shared derivation",
+        "configured tp_size differs from derived attn_tp_size under DP Attention",
+        "CUDA/ROCm DSA branch scope",
+        "Single Source of Truth invariant"
+      ],
+      "must_not_claim": [
+        "runtime parallelism changed",
+        "Ascend 910C bug fixed",
+        "performance improved"
+      ]
+    },
+    {
+      "id": "pr-28652-async-terminal-state",
+      "pr": "sgl-project/sglang#28652",
+      "type": "scheduler_async",
+      "must_detect": [
+        "zero-page final chunk can leave FakeKVSender waiting",
+        "stuck request pins inflight/tree-cache resources",
+        "terminal-state/timeout invariant"
+      ],
+      "must_not_claim": [
+        "normal peak memory is reduced",
+        "healthy request semantics changed materially"
+      ]
+    },
+    {
+      "id": "pr-40217-memory",
+      "pr": "sgl-project/sglang#40217",
+      "type": "memory",
+      "must_detect": [
+        "temporary FP32 scores and candidate masks drive peak HBM",
+        "row tiling bounds score allocation",
+        "compact candidate block IDs replace full persistent mask"
+      ],
+      "must_not_claim": [
+        "2.72 GiB is a universal hard bound",
+        "KV cache itself caused the OOM"
+      ]
+    },
+    {
+      "id": "pr-39200-kernel-performance",
+      "pr": "sgl-project/sglang#39200",
+      "type": "kernel_performance",
+      "must_detect": [
+        "small speculative verify batch is launch-bound",
+        "fusion reduces launches only below a guarded token threshold",
+        "threshold is shape/hardware-specific"
+      ],
+      "must_not_claim": [
+        "kernel fusion is always faster",
+        "the threshold applies to DeepSeek-V4 or all hardware"
+      ]
+    },
+    {
+      "id": "pr-40376-pd-communication",
+      "pr": "sgl-project/sglang#40376",
+      "type": "distributed_communication",
+      "must_detect": [
+        "cached-prefix compute size can be much smaller than KV transfer size",
+        "DCP packed send must respect pack capacity",
+        "oversized transfers are split rather than falling back per-token"
+      ],
+      "must_not_claim": [
+        "exact performance parity is universal",
+        "all PD backends/hardware were fully validated"
+      ]
+    }
+  ]
+}
