@@ -48,7 +48,8 @@ for path in pages:
         assert canonical == [ORIGIN + BASE + route], (relative, 'canonical')
         schema = json.loads(page.schema)
         assert schema['url'] == canonical[0]
-        if relative == '404.html':
+        is_tag_archive = relative.startswith('tags/')
+        if relative == '404.html' or is_tag_archive:
             assert 'noindex' in page.meta['robots'] and canonical[0] not in urls
         else:
             assert 'noindex' not in page.meta.get('robots', '') and canonical[0] in urls
@@ -62,7 +63,8 @@ for path in pages:
             if url.path.endswith('/'): target /= 'index.html'
             assert target.exists(), (relative, a['href'])
 
-assert len(urls) == len(pages) - 1 - len(REDIRECT_INDEXES)
+tag_pages = [p for p in pages if p.relative_to(ROOT).as_posix().startswith('tags/')]
+assert len(urls) == len(pages) - 1 - len(REDIRECT_INDEXES) - len(tag_pages)
 items = ET.parse(ROOT / 'feed.xml').findall('./channel/item')
 article_pages = [
     p for p in (ROOT / 'articles').glob('*/*/index.html')
