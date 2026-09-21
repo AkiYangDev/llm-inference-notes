@@ -146,6 +146,11 @@
         "path": "docs/ascend/deepseek-v4-w8a8-ascend-910c.md",
         "label": "W8A8 与 INT8 Kernel",
         "description": "从 ModelSlim 量化权重追到 ACLNN、CANN 与 AI Core"
+      },
+      {
+        "path": "docs/performance/deepseek-v4-w8a8-ascend-910c-performance.md",
+        "label": "W8A8 性能与 CANN Tiling",
+        "description": "从 Decode 小 M、FRACTAL_NZ 与 Expert M_e 解释 INT8 性能能否兑现"
       }
     ]
   }
