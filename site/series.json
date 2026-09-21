@@ -64,12 +64,12 @@
         "description": "串联 Attention 与 MoE 的并行布局"
       },
       {
-        "path": "docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md",
+        "path": "docs/distributed/deepseek-v4-dspark-parallel-layout-analysis.md",
         "label": "DSpark Layout",
         "description": "理解 Draft 与 Target 的布局边界"
       },
       {
-        "path": "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md",
+        "path": "docs/distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md",
         "label": "多卡一致性",
         "description": "理解 Draft、Verify 与 Accept 如何跨 Rank 保持一致"
       },
@@ -82,41 +82,41 @@
   },
   {
     "id": "speculative-decoding",
-    "title": "DeepSeek-V4 投机推理",
+    "title": "DeepSeek-V4 投机解码",
     "topic": "speculative-decoding",
     "items": [
       {
-        "path": "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md",
-        "label": "投机推理执行链",
+        "path": "docs/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md",
+        "label": "投机解码执行链",
         "description": "串起 Draft、Verify、Accept 与状态提交"
       },
       {
-        "path": "docs/sglang/sglang-speculative-decoding-scheduler-source-analysis.md",
+        "path": "docs/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md",
         "label": "Speculative Scheduler",
         "description": "理解 ScheduleBatch 如何管理 Draft / Verify / Accept 状态机"
       },
       {
-        "path": "docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md",
+        "path": "docs/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md",
         "label": "MTP 与 NextN",
         "description": "理解多步候选生成的语义与实现"
       },
       {
-        "path": "docs/sglang/deepseek-v4-eagle-draft-tree-source-analysis.md",
+        "path": "docs/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md",
         "label": "EAGLE Draft Tree",
         "description": "从多分支候选树走到一次验证"
       },
       {
-        "path": "docs/sglang/deepseek-v4-tree-attention-source-analysis.md",
+        "path": "docs/speculative-decoding/deepseek-v4-tree-attention-source-analysis.md",
         "label": "Tree Attention",
         "description": "理解多分支 Verify 的可见性与位置语义"
       },
       {
-        "path": "docs/sglang/deepseek-v4-accept-decision-source-analysis.md",
+        "path": "docs/speculative-decoding/deepseek-v4-accept-decision-source-analysis.md",
         "label": "Accept Decision",
         "description": "理解候选如何收敛成唯一 accepted path"
       },
       {
-        "path": "docs/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md",
+        "path": "docs/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md",
         "label": "KV Commit / Compact / Rollback",
         "description": "把 Accept 结果落实到 KV 与缓存生命周期"
       },
@@ -126,12 +126,12 @@
         "description": "从 Confidence/STS 到 SPS Budget、Ragged Verify 与 Ascend 910C compact 边界"
       },
       {
-        "path": "docs/sglang/deepseek-v4-speculative-performance-analysis.md",
+        "path": "docs/performance/deepseek-v4-speculative-performance-analysis.md",
         "label": "性能 Break-even",
         "description": "理解 Acceptance Rate、Draft Cost 与 Verify Cost 的收益边界"
       },
       {
-        "path": "docs/sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md",
+        "path": "docs/performance/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md",
         "label": "Ascend Critical Path",
         "description": "拆解 Graph、Multi-Stream 与 Communication Overlap"
       },

@@ -1,6 +1,6 @@
 # DeepSeek-V4 DSpark 源码解析：Draft Model 为什么需要独立处理 TP/DP/EP Layout？
 
-上一篇《[DeepSeek-V4 分布式推理源码解析：TP、EP、DP 三种并行如何共同驱动一次前向计算](deepseek-v4-distributed-parallel-source-analysis.md)》已经确认：普通 DeepSeek-V4 target model 在 Attention 与 MoE 之间存在显式的数据布局桥。对于 `attn_tp_size > 1 + A2A MoE`，post-attention hidden rows 会先按 Attention-TP rank 做 token-row split，MoE 完成后再 `attn_tp_all_gather()` 恢复下一层需要的布局。
+上一篇《[DeepSeek-V4 分布式推理源码解析：TP、EP、DP 三种并行如何共同驱动一次前向计算](../sglang/deepseek-v4-distributed-parallel-source-analysis.md)》已经确认：普通 DeepSeek-V4 target model 在 Attention 与 MoE 之间存在显式的数据布局桥。对于 `attn_tp_size > 1 + A2A MoE`，post-attention hidden rows 会先按 Attention-TP rank 做 token-row split，MoE 完成后再 `attn_tp_all_gather()` 恢复下一层需要的布局。
 
 但 DSpark 的 DeepSeek-V4 MoE draft 在更早的位置就拒绝了同一类拓扑：
 

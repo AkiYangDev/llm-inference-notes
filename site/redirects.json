@@ -1,0 +1,13 @@
+{
+  "articles/sglang/deepseek-v4-speculative-decoding-source-analysis/": "articles/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis/",
+  "articles/sglang/sglang-speculative-decoding-scheduler-source-analysis/": "articles/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis/",
+  "articles/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis/": "articles/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis/",
+  "articles/sglang/deepseek-v4-eagle-draft-tree-source-analysis/": "articles/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis/",
+  "articles/sglang/deepseek-v4-tree-attention-source-analysis/": "articles/speculative-decoding/deepseek-v4-tree-attention-source-analysis/",
+  "articles/sglang/deepseek-v4-accept-decision-source-analysis/": "articles/speculative-decoding/deepseek-v4-accept-decision-source-analysis/",
+  "articles/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis/": "articles/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis/",
+  "articles/sglang/deepseek-v4-speculative-performance-analysis/": "articles/performance/deepseek-v4-speculative-performance-analysis/",
+  "articles/sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis/": "articles/performance/deepseek-v4-speculative-ascend-performance-critical-path-analysis/",
+  "articles/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis/": "articles/distributed/deepseek-v4-speculative-distributed-consistency-source-analysis/",
+  "articles/sglang/deepseek-v4-dspark-parallel-layout-analysis/": "articles/distributed/deepseek-v4-dspark-parallel-layout-analysis/"
+}

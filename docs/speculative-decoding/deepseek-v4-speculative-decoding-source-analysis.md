@@ -1,4 +1,4 @@
-# DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject 如何驱动一次投机推理
+# DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject 如何驱动一次投机解码
 
 前面的 DSpark 文章重点分析了一个分布式边界：为什么 DeepSeek-V4 MoE draft 在 DP Attention 下仍然拒绝 `attn_tp_size > 1`。但那篇文章默认读者已经接受了一个更基础的事实：DSpark 一轮 Decode 并不是一次普通 `model.forward()`，而是一套 Draft、Verify、Accept、Commit 连续状态机。
 

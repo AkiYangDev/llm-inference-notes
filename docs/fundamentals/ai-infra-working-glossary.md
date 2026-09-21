@@ -1,6 +1,6 @@
 # AI 推理基础设施工作名词表：SGLang、DeepSeek 与 Ascend 910C 从 Token 到 NPU Kernel
 
-> 这不是一份按字母排序的缩写大全，而是一张面向推理工程工作的知识地图：看到一个陌生词，先判断它属于模型、Runtime、内存、分布式、投机推理，还是算子与 NPU Kernel。
+> 这不是一份按字母排序的缩写大全，而是一张面向推理工程工作的知识地图：看到一个陌生词，先判断它属于模型、Runtime、内存、分布式、投机解码，还是算子与 NPU Kernel。
 
 刚开始接触大模型推理基础设施时，很容易遇到一种非常典型的困境：每一个中文字都认识，但一句话连起来就看不懂了。
 
@@ -77,7 +77,7 @@ flowchart TD
 | Runtime | Req、Scheduler、ScheduleBatch、ForwardBatch、ModelRunner | 哪些请求在这一轮真正执行？ |
 | 内存 | Page、KV Pool、Activation、Workspace、Buffer | 状态放在哪里，显存怎么分配？ |
 | 分布式 | Rank、Group、TP、DP、DPA、EP、CP、Collective | 谁拥有哪部分数据，谁和谁通信？ |
-| 投机推理 | Draft、Verify、Accept、DSpark | 怎样用更便宜的预测换取更少的 Target Decode？ |
+| 投机解码 | Draft、Verify、Accept、DSpark | 怎样用更便宜的预测换取更少的 Target Decode？ |
 | Device 执行 | Backend、CANN、Operator、Tiling、Kernel、Stream | Python 里的 Forward 最终怎样落到 910C？ |
 
 以后碰到陌生词时，第一反应不要是“缩写是什么意思”，而是先问：
@@ -330,7 +330,7 @@ flowchart LR
 
 > Req 是跨轮次生命周期；ScheduleBatch 是本轮调度视图；ForwardBatch 是本轮 Device Forward 视图。
 
-这对后面读投机推理尤其重要，因为 Draft / Verify / Accept 会让“逻辑长度”“已分配 KV”“已正式提交 KV”出现不同时间点。
+这对后面读投机解码尤其重要，因为 Draft / Verify / Accept 会让“逻辑长度”“已分配 KV”“已正式提交 KV”出现不同时间点。
 
 ### Continuous Batching、Chunked Prefill、Graph 与 Overlap
 
@@ -535,7 +535,7 @@ HCCL / 专用 MoE backend / 网络传输能力
 
 ---
 
-## 五、投机推理：Draft、Verify、Accept 与 DSpark
+## 五、投机解码：Draft、Verify、Accept 与 DSpark
 
 普通自回归 Decode 的问题是：Target Model 每做一次昂贵 Forward，只向前推进很少的新 Token。
 
@@ -593,7 +593,7 @@ Target Verify 才决定候选是否符合 Target Model 的分布/选择规则。
 - Draft/Verify Metadata；
 - 下一轮 Draft State。
 
-因此投机推理代码经常围绕一个核心问题：
+因此投机解码代码经常围绕一个核心问题：
 
 > **哪些状态只是 speculative future，哪些状态已经 committed？**
 
@@ -601,7 +601,7 @@ Target Verify 才决定候选是否符合 Target Model 的分布/选择规则。
 
 ### Acceptance Rate 高不等于一定更快
 
-投机推理收益取决于：
+投机解码收益取决于：
 
 ~~~text
 有效接受的 Token 数
@@ -611,7 +611,7 @@ Draft + Verify + KV + Scheduler + Communication 的总成本
 
 所以高 Acceptance Rate 只是有利条件之一。
 
-如果 Draft 很贵、Verify window 过大、KV 搬运增加、DP/TP 同步开销明显，投机推理可能并不比普通 Decode 更快。
+如果 Draft 很贵、Verify window 过大、KV 搬运增加、DP/TP 同步开销明显，投机解码可能并不比普通 Decode 更快。
 
 ### DSpark 在源码里从哪里看
 
@@ -871,7 +871,7 @@ ForwardBatch
 
 也就是从“知道 TP/DP/EP 的定义”，走到真正能分析 parallel layout。
 
-### 如果你在看 DSpark / 投机推理
+### 如果你在看 DSpark / 投机解码
 
 推荐顺序：
 

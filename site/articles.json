@@ -62,29 +62,6 @@
     ],
     "topic": "distributed"
   },
-  "docs/sglang/deepseek-v4-dspark-parallel-layout-analysis.md": {
-    "summary": "分析 DSpark Draft Model 的并行上下文、同步与布局规划，区分已确认的源码行为和 TP / DP 适配中待验证的假设。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "DSpark",
-      "TP/DP/EP",
-      "分布式并行"
-    ],
-    "topic": "distributed"
-  },
-  "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md": {
-    "summary": "沿 Draft、Verify、Accept / Reject 与状态提交，追踪一轮 DSpark 投机推理，理解候选验证、接受结果与缓存状态如何衔接。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "DSpark",
-      "投机推理"
-    ],
-    "topic": "speculative-decoding"
-  },
   "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md": {
     "summary": "追踪 Prefill 与 Decode 分离后的请求交接，梳理状态传输、目标资源准备与完成确认，理解独立调度两类负载的工程代价。",
     "category": "源码解析",
@@ -93,75 +70,6 @@
       "DeepSeek-V4",
       "PD 分离",
       "分布式推理"
-    ],
-    "topic": "distributed"
-  },
-  "docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
-    "summary": "区分 MTP、NextN 与 EAGLE 的语义，沿 Target hidden、Draft Extend 与多步候选生成理解 Draft 路径及 Ascend 实现边界。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "MTP",
-      "投机推理"
-    ],
-    "topic": "speculative-decoding"
-  },
-  "docs/sglang/deepseek-v4-eagle-draft-tree-source-analysis.md": {
-    "summary": "从候选路径评分、树索引与 Tree Mask，到 Verify 和 KV Cache 整理，理解 EAGLE 多分支候选如何组织及其 Ascend 适用边界。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "EAGLE",
-      "投机推理",
-      "KV Cache"
-    ],
-    "topic": "speculative-decoding"
-  },
-  "docs/sglang/deepseek-v4-tree-attention-source-analysis.md": {
-    "summary": "从 Candidate Layout、Tree Position 与 Tree Mask 出发，解释多分支 Verify 为什么只允许访问祖先路径，并区分 FULL_MASK / QLEN_ONLY 与不同 attention backend 的消费边界。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "Tree Attention",
-      "投机推理"
-    ],
-    "topic": "speculative-decoding"
-  },
-  "docs/sglang/deepseek-v4-accept-decision-source-analysis.md": {
-    "summary": "聚焦 Verify 之后的 Accept Decision，区分 Greedy Tree Match、Target-only Tree Sampling 与经典 p/q Rejection Sampling，并解释 accept_index、terminal bonus 与 DSpark correct_len。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "Accept Decision",
-      "Rejection Sampling",
-      "投机推理"
-    ],
-    "topic": "speculative-decoding"
-  },
-  "docs/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
-    "summary": "追踪 accepted path 如何从 Verify row 映射到 committed KV，解释 KV relocation、tensor compaction、Spec V2 overshoot 与 Ascend C4/C128 状态清理边界。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "KV Cache",
-      "投机推理"
-    ],
-    "topic": "speculative-decoding"
-  },
-  "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
-    "summary": "拆分 speculative control、logical layout 与 model-data collective 三层一致性，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast，并厘清 Ascend 多卡通信职责。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "DeepSeek-V4",
-      "多卡一致性",
-      "TP/DP/EP",
-      "投机推理"
     ],
     "topic": "distributed"
   },
@@ -199,40 +107,6 @@
     ],
     "topic": "distributed"
   },
-  "docs/sglang/sglang-speculative-decoding-scheduler-source-analysis.md": {
-    "summary": "从 Req、ScheduleBatch、ForwardBatch 与 FutureMap 追踪 Draft、Verify、Accept 状态机，重点解释 overlap 下的多时钟、publish fence、forward isolation 与 mixed-tail late binding。",
-    "category": "源码解析",
-    "tags": [
-      "SGLang",
-      "Scheduler",
-      "ScheduleBatch",
-      "投机推理"
-    ],
-    "topic": "speculative-decoding"
-  },
-  "docs/sglang/deepseek-v4-speculative-performance-analysis.md": {
-    "summary": "从 Accept Length、strict Accept Rate、Draft / Verify 成本与 Ragged Verify 出发，建立投机推理何时加速、何时反而变慢的性能 break-even 模型。",
-    "category": "性能分析",
-    "tags": [
-      "DeepSeek-V4",
-      "投机推理",
-      "Acceptance Rate",
-      "性能模型"
-    ],
-    "topic": "performance"
-  },
-  "docs/sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
-    "summary": "沿 Draft Graph、Target Verify、Plan Stream、Attention Multi-Stream 与 DeepEP async event 拆解 Ascend 910C 上一轮投机推理的真实 critical path 与 overlap 边界。",
-    "category": "性能分析",
-    "tags": [
-      "DeepSeek-V4",
-      "Ascend 910C",
-      "NPU Graph",
-      "Communication Overlap",
-      "投机推理"
-    ],
-    "topic": "performance"
-  },
   "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md": {
     "summary": "把 DSpark Draft / Verify、NPU Graph replay、Accept / Commit 与 DeepEP 通信映射到 Ascend 910C Profiling 时间线，用源码边界解释真实 Host / Device gap。",
     "category": "性能分析",
@@ -241,7 +115,7 @@
       "Ascend 910C",
       "Profiling",
       "DSpark",
-      "投机推理"
+      "投机解码"
     ],
     "topic": "performance"
   },
@@ -271,7 +145,7 @@
   },
   "docs/speculative-decoding/deepseek-v4-dspark-adaptive-verify-scheduler.md": {
     "summary": "从 DeepSpec 的 AcceptRatePredictor 训练 target 出发，严格区分 STS greedy prefix 校准事件，推导 tau 与 commit_lens 的成立条件，分析 1D / Additive SPS 在 Graph tier cliff 附近的误差，并拆清 Ascend 910C 从 static 放开 compact 仍缺的 NPU DSV4 ragged metadata、graph 与 DP/DeepEP 能力。",
-    "category": "投机推理",
+    "category": "投机解码",
     "tags": [
       "DeepSeek-V4",
       "DSpark",
@@ -281,5 +155,131 @@
       "Ascend 910C"
     ],
     "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md": {
+    "summary": "沿 Draft、Verify、Accept / Reject 与状态提交，追踪一轮 DSpark 投机解码，理解候选验证、接受结果与缓存状态如何衔接。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "DSpark",
+      "投机解码"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md": {
+    "summary": "从 Req、ScheduleBatch、ForwardBatch 与 FutureMap 追踪 Draft、Verify、Accept 状态机，重点解释 overlap 下的多时钟、publish fence、forward isolation 与 mixed-tail late binding。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "Scheduler",
+      "ScheduleBatch",
+      "投机解码"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
+    "summary": "区分 MTP、NextN 与 EAGLE 的语义，沿 Target hidden、Draft Extend 与多步候选生成理解 Draft 路径及 Ascend 实现边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "MTP",
+      "投机解码"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md": {
+    "summary": "从候选路径评分、树索引与 Tree Mask，到 Verify 和 KV Cache 整理，理解 EAGLE 多分支候选如何组织及其 Ascend 适用边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "EAGLE",
+      "投机解码",
+      "KV Cache"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/deepseek-v4-tree-attention-source-analysis.md": {
+    "summary": "从 Candidate Layout、Tree Position 与 Tree Mask 出发，解释多分支 Verify 为什么只允许访问祖先路径，并区分 FULL_MASK / QLEN_ONLY 与不同 attention backend 的消费边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Tree Attention",
+      "投机解码"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/deepseek-v4-accept-decision-source-analysis.md": {
+    "summary": "聚焦 Verify 之后的 Accept Decision，区分 Greedy Tree Match、Target-only Tree Sampling 与经典 p/q Rejection Sampling，并解释 accept_index、terminal bonus 与 DSpark correct_len。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Accept Decision",
+      "Rejection Sampling",
+      "投机解码"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
+    "summary": "追踪 accepted path 如何从 Verify row 映射到 committed KV，解释 KV relocation、tensor compaction、Spec V2 overshoot 与 Ascend C4/C128 状态清理边界。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "KV Cache",
+      "投机解码"
+    ],
+    "topic": "speculative-decoding"
+  },
+  "docs/performance/deepseek-v4-speculative-performance-analysis.md": {
+    "summary": "从 Accept Length、strict Accept Rate、Draft / Verify 成本与 Ragged Verify 出发，建立投机解码何时加速、何时反而变慢的性能 break-even 模型。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "投机解码",
+      "Acceptance Rate",
+      "性能模型"
+    ],
+    "topic": "performance"
+  },
+  "docs/performance/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
+    "summary": "沿 Draft Graph、Target Verify、Plan Stream、Attention Multi-Stream 与 DeepEP async event 拆解 Ascend 910C 上一轮投机解码的真实 critical path 与 overlap 边界。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "NPU Graph",
+      "Communication Overlap",
+      "投机解码"
+    ],
+    "topic": "performance"
+  },
+  "docs/distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
+    "summary": "拆分 speculative control、logical layout 与 model-data collective 三层一致性，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast，并厘清 Ascend 多卡通信职责。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "多卡一致性",
+      "TP/DP/EP",
+      "投机解码"
+    ],
+    "topic": "distributed"
+  },
+  "docs/distributed/deepseek-v4-dspark-parallel-layout-analysis.md": {
+    "summary": "分析 DSpark Draft Model 的并行上下文、同步与布局规划，区分已确认的源码行为和 TP / DP 适配中待验证的假设。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "DSpark",
+      "TP/DP/EP",
+      "分布式并行"
+    ],
+    "topic": "distributed"
   }
 }

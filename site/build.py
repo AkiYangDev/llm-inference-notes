@@ -16,7 +16,7 @@ OUT = ROOT / '_site'
 BASE = '/llm-inference-notes/'
 ORIGIN = 'https://akiyangdev.github.io'
 REPO = 'https://github.com/AkiYangDev/llm-inference-notes'
-TOPICS = {'sglang': 'SGLang', 'ascend': 'Ascend', 'fundamentals': '推理基础', 'distributed': '分布式推理', 'speculative-decoding': '投机推理', 'performance': '性能分析'}
+TOPICS = {'sglang': 'SGLang', 'ascend': 'Ascend', 'fundamentals': '推理基础', 'distributed': '分布式推理', 'speculative-decoding': '投机解码', 'performance': '性能分析'}
 DESCRIPTION = 'AkiYang 的大模型推理工程文档：SGLang、Ascend、源码与性能分析。'
 
 
@@ -301,6 +301,21 @@ def build():
         output = OUT / 'articles' / slug / 'index.html'
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(shell(title, body, 'article-page', 'articles/' + slug + '/', excerpt, dates), encoding='utf-8')
+    # Preserve legacy article URLs after information-architecture moves.
+    # GitHub Pages cannot emit HTTP 301 responses, so old routes are static
+    # noindex redirect pages with a canonical link to the new location.
+    redirects_path = ROOT / 'site/redirects.json'
+    redirects = json.loads(redirects_path.read_text(encoding='utf-8')) if redirects_path.exists() else {}
+    for old_route, new_route in redirects.items():
+        old_route = old_route.strip('/') + '/'
+        new_route = new_route.strip('/') + '/'
+        target = BASE + new_route
+        canonical = ORIGIN + target
+        dest = OUT / old_route / 'index.html'
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        redirect_html = f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,follow"><meta name="description" content="文章已迁移到新的专题目录。"><link rel="canonical" href="{canonical}"><meta http-equiv="refresh" content="0; url={target}"><title>文章已迁移 · AkiYang</title><script>location.replace({json.dumps(target)});</script></head><body><main><p>文章已迁移到新的专题目录。</p><p><a href="{target}">前往新地址</a></p></main></body></html>'''
+        dest.write_text(redirect_html, encoding='utf-8')
+
     topics = sorted({a['topic_id'] for a in articles})
     topic_links = ''.join(f'<a class="topic-link" href="{BASE}topics/{t}/">{esc(TOPICS.get(t,t))}<span>{sum(a["topic_id"] == t for a in articles):02d}</span></a>' for t in topics)
     # Keep the homepage entry point stable as new topic directories are added.
@@ -320,7 +335,7 @@ def build():
         picks.append((distributed_pick, '理解并行'))
     recommended = ''.join(f'<a class="recommend-link" href="{a["url"]}"><span>{label}</span><strong>{title_html(a["title"])}</strong><span aria-hidden="true">→</span></a>' for a, label in picks)
     knowledge_map = reading_map(series_list, articles)
-    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AI INFRA NOTES</p><h1 id="hero-title">把推理原理，<br><span>写成读得懂的手记。</span></h1><p class="hero-description">DeepSeek · SGLang · Ascend<br>记录推理系统的原理、源码与工程实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">开始阅读 <span aria-hidden="true">↗</span></a><a class="text-link hero-secondary" href="{BASE}series/">阅读地图 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art hero-scene"><img src="{BASE}assets/whale-hero-v2.webp" alt="蓝发鲸尾女仆站在蓝白科技海洋场景中" width="1000" height="450" fetchpriority="high" decoding="async"></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新手记</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section><section class="reading-entry wrap" aria-label="阅读路线"><span class="mascot mascot-reading" aria-hidden="true"></span><div><p class="eyebrow">READING SERIES</p><h2>沿着源码，逐步深入</h2><p>请求执行 · 模型内部 · 分布式并行 · 投机推理</p></div><a class="text-link" href="{BASE}series/">查看完整阅读地图 →</a></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
+    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AI INFRA NOTES</p><h1 id="hero-title">把推理原理，<br><span>写成读得懂的手记。</span></h1><p class="hero-description">DeepSeek · SGLang · Ascend<br>记录推理系统的原理、源码与工程实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">开始阅读 <span aria-hidden="true">↗</span></a><a class="text-link hero-secondary" href="{BASE}series/">阅读地图 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art hero-scene"><img src="{BASE}assets/whale-hero-v2.webp" alt="蓝发鲸尾女仆站在蓝白科技海洋场景中" width="1000" height="450" fetchpriority="high" decoding="async"></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新手记</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section><section class="reading-entry wrap" aria-label="阅读路线"><span class="mascot mascot-reading" aria-hidden="true"></span><div><p class="eyebrow">READING SERIES</p><h2>沿着源码，逐步深入</h2><p>请求执行 · 模型内部 · 分布式并行 · 投机解码</p></div><a class="text-link" href="{BASE}series/">查看完整阅读地图 →</a></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
     if skills:
         skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">METHODS &amp; PRACTICE</p><h2 id="home-skills-title">Skills <span class="count">{len(skills):02d}</span></h2></div><a class="text-link" href="{BASE}skills/">浏览 Skills <span aria-hidden="true">↗</span></a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills[:3])}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
