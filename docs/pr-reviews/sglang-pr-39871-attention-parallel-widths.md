@@ -40,6 +40,7 @@ Rank / Group
 | 难度 | ★☆☆☆☆ |
 | 类型 | Correctness / Observability |
 | 核心知识 | DP Attention、Runtime Derivation、Rank / Group、Single Source of Truth |
+| 为什么值得读 | 改动极小，却完整暴露了 Configured Value vs Derived Runtime Value 这一类常见系统 Bug |
 | 适用边界 | CUDA / ROCm DSA model-specific adjustment；不是 Ascend 910C 执行路径修复 |
 
 > **30 秒结论**
@@ -292,17 +293,29 @@ attn_tp_size = 8
 真正出问题的是 Logging 走了一条旁路：它没有消费这个派生结果，而是直接把 `cfg.tp_size` 打成了 `attn_tp_size`。
 
 ```mermaid
-flowchart TD
-    C["Config<br/>tp=16 / dp=2 / cp=1 / DPA=on"]
-    D["derive_attention_widths()"]
-    R["Runtime topology<br/>attn_tp_size = 8"]
-    L["Old logging"]
-    W["prints cfg.tp_size<br/>attn_tp_size = 16"]
+flowchart LR
+    subgraph B[Before]
+        direction TB
+        BC["Config<br/>tp=16 / dp=2 / cp=1 / DPA=on"]
+        BD["derive_attention_widths()"]
+        BR["Runtime<br/>AttnTP = 8 ✓"]
+        BL["Logging reads cfg.tp_size"]
+        BW["Log<br/>AttnTP = 16 ✗"]
+        BC --> BD --> BR
+        BC --> BL --> BW
+    end
 
-    C --> D
-    D --> R
-    C --> L
-    L --> W
+    subgraph A[After]
+        direction TB
+        AC["Config<br/>tp=16 / dp=2 / cp=1 / DPA=on"]
+        AD["derive_attention_widths()"]
+        AR["Runtime<br/>AttnTP = 8 ✓"]
+        AL["Logging reuses derived value"]
+        AW["Log<br/>AttnTP = 8 ✓"]
+        AC --> AD
+        AD --> AR
+        AD --> AL --> AW
+    end
 ```
 
 于是同一个进程里同时存在：
@@ -333,6 +346,7 @@ Logging Observation = 16
 一旦能准确写出 invariant，通常就已经真正理解了 PR。
 
 ---
+
 ## 四、修复：Diff 真正做了哪几个设计动作？为什么不是直接除一下？
 
 修复后的代码位于：
@@ -412,6 +426,7 @@ flowchart TD
 这就是 **Single Source of Truth**。
 
 ---
+
 ## 五、验证与边界：什么是源码事实，什么不能过度解读？
 
 正式 PR 解读里，最容易犯的错误是把“这个 PR 能证明什么”和“我们从它延伸出的知识”混在一起。
@@ -465,6 +480,7 @@ PR 修改事实
 ```
 
 ---
+
 ## 六、迁移：这个 PR 真正教给我们的 AI Infra 方法是什么？
 
 如果读完只记住 `16 / 2 = 8`，那这篇文章的价值其实很有限。真正应该带走的是三个层次。
