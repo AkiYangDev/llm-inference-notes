@@ -2,6 +2,8 @@
 
 请求入口、调度、批次数据、模型执行和输出处理。
 
+> 第一次接触这些概念时，建议先读 [AI 推理基础设施工作名词表](../fundamentals/ai-infra-working-glossary.md)，先建立 Token、KV Cache、Scheduler、TP / DP / EP、DSpark 到 Ascend Kernel 的整体地图，再进入源码细节。
+
 ## 专题文章
 
 - [SGLang 推理执行链路解析：一次 Chat Completion 请求是如何跑到 Ascend NPU 上的](sglang-ascend-request-lifecycle.md)：DeepSeek-V4、`dsv4` Ascend 后端与 DSPARK 生成边界。
