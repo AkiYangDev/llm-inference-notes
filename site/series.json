@@ -13,6 +13,11 @@
         "path": "docs/fundamentals/prefill-vs-decode-performance.md",
         "label": "Prefill / Decode 性能直觉",
         "description": "从 Dense M、Expert M_e 与 DSV4 历史状态理解两阶段为何性能完全不同"
+      },
+      {
+        "path": "docs/fundamentals/sglang-decode-source-reading-primer.md",
+        "label": "SGLang Decode 源码第一课",
+        "description": "沿一枚 Token 串起 ForwardBatch、KV ownership、MoE、Logits 与 Sampling"
       }
     ]
   },

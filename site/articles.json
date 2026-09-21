@@ -294,5 +294,19 @@
       "性能模型"
     ],
     "topic": "fundamentals"
+  },
+  "docs/fundamentals/sglang-decode-source-reading-primer.md": {
+    "summary": "用一个普通 DeepSeek-V4 Decode Step 串起 SGLang 的 ScheduleBatch、ForwardBatch、mHC、Ascend 910C DSV4 KV ownership、MoE、Vocab Parallel LM Head 与 Sampling，并严格解释 L→L+1 的时间语义和多卡 Logits 边界。",
+    "category": "基础原理",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Decode",
+      "KV Cache",
+      "MoE",
+      "Sampling",
+      "Ascend 910C"
+    ],
+    "topic": "fundamentals"
   }
 }

@@ -2,7 +2,11 @@
 
 请求入口、调度、批次数据、模型执行和输出处理。
 
-> 第一次接触这些概念时，建议先读 [AI 推理基础设施工作名词表](../fundamentals/ai-infra-working-glossary.md)，先建立 Token、KV Cache、Scheduler、TP / DP / EP、DSpark 到 Ascend Kernel 的整体地图，再进入源码细节。
+> 第一次接触 SGLang 时，建议先读 [AI 推理基础设施工作名词表](../fundamentals/ai-infra-working-glossary.md) 建立整体坐标，再读 [SGLang Decode 源码入门篇](../fundamentals/sglang-decode-source-reading-primer.md)，沿一枚 Token 走通 ForwardBatch、KV Cache、Attention、MoE、Logits 与 Sampling，最后再进入下面的分专题源码。
+
+## 入门桥梁
+
+- [第一次读 SGLang 源码，应该先看懂什么？用 DeepSeek-V4 一次 Decode 串起 Tensor、KV Cache、Attention、MoE 与 Sampling](../fundamentals/sglang-decode-source-reading-primer.md)：严格核清普通 Decode 的 L→L+1 时间语义、V4 mHC 的 [T,4,H]↔[T,H] 边界、Ascend 910C DSV4 的 SWA/C4/C128 ownership，以及 DP Attention / Vocab Parallel 下 Logits 与 Sampling 的 Group 边界。
 
 ## 核心执行链
 
