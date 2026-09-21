@@ -1126,9 +1126,9 @@ flowchart TD
 
 建议按下面顺序阅读：
 
-1. [DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject](../sglang/deepseek-v4-speculative-decoding-source-analysis.md)
-2. [DeepSeek-V4 Speculative Decoding 性能解析：为什么 Speculative Decoding 不一定更快？](../sglang/deepseek-v4-speculative-performance-analysis.md)
-3. [DeepSeek-V4 Speculative Decoding 在 Ascend 910C 上的性能源码解析：NPU Graph、Multi-Stream 与 Communication Overlap](../sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md)
+1. [DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject](../speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md)
+2. [DeepSeek-V4 Speculative Decoding 性能解析：为什么 Speculative Decoding 不一定更快？](deepseek-v4-speculative-performance-analysis.md)
+3. [DeepSeek-V4 Speculative Decoding 在 Ascend 910C 上的性能源码解析：NPU Graph、Multi-Stream 与 Communication Overlap](deepseek-v4-speculative-ascend-performance-critical-path-analysis.md)
 4. **本文：把源码机制映射到真实 Profiling 时间线。**
 
 下一步真正有价值的工作，是拿一组稳定的 910C Trace，把：

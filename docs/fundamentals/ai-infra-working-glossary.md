@@ -875,19 +875,19 @@ ForwardBatch
 
 推荐顺序：
 
-1. [DeepSeek-V4 Speculative Decoding 总链路](../sglang/deepseek-v4-speculative-decoding-source-analysis.md)
-2. [DeepSeek-V4 DSpark Parallel Layout](../sglang/deepseek-v4-dspark-parallel-layout-analysis.md)
-3. [SGLang Speculative Scheduler](../sglang/sglang-speculative-decoding-scheduler-source-analysis.md)
-4. [Accept Decision](../sglang/deepseek-v4-accept-decision-source-analysis.md)
-5. [KV Commit / Compact / Rollback](../sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md)
-6. [多卡一致性](../sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md)
-7. [Speculative 性能模型](../sglang/deepseek-v4-speculative-performance-analysis.md)
+1. [DeepSeek-V4 Speculative Decoding 总链路](../speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md)
+2. [DeepSeek-V4 DSpark Parallel Layout](../distributed/deepseek-v4-dspark-parallel-layout-analysis.md)
+3. [SGLang Speculative Scheduler](../speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md)
+4. [Accept Decision](../speculative-decoding/deepseek-v4-accept-decision-source-analysis.md)
+5. [KV Commit / Compact / Rollback](../speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md)
+6. [多卡一致性](../distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md)
+7. [Speculative 性能模型](../performance/deepseek-v4-speculative-performance-analysis.md)
 
 如果需要进一步理解多 Token Draft 与 Verify Tree，再进入：
 
-- [MTP / NextN](../sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md)
-- [EAGLE Draft Tree](../sglang/deepseek-v4-eagle-draft-tree-source-analysis.md)
-- [Tree Attention](../sglang/deepseek-v4-tree-attention-source-analysis.md)
+- [MTP / NextN](../speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md)
+- [EAGLE Draft Tree](../speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md)
+- [Tree Attention](../speculative-decoding/deepseek-v4-tree-attention-source-analysis.md)
 
 ### 如果你在看 PD 分离
 
