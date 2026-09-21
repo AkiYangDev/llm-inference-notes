@@ -121,6 +121,11 @@
         "description": "把 Accept 结果落实到 KV 与缓存生命周期"
       },
       {
+        "path": "docs/speculative-decoding/deepseek-v4-dspark-adaptive-verify-scheduler.md",
+        "label": "DSpark 自适应 Verify",
+        "description": "从 Confidence/STS 到 SPS Budget、Ragged Verify 与 Ascend 910C compact 边界"
+      },
+      {
         "path": "docs/sglang/deepseek-v4-speculative-performance-analysis.md",
         "label": "性能 Break-even",
         "description": "理解 Acceptance Rate、Draft Cost 与 Verify Cost 的收益边界"
