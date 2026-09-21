@@ -5,7 +5,8 @@ from urllib.parse import urlsplit, unquote
 import json
 import xml.etree.ElementTree as ET
 
-ROOT = Path(__file__).resolve().parents[1] / '_site'
+REPO_ROOT = Path(__file__).resolve().parents[1]
+ROOT = REPO_ROOT / '_site'
 BASE = '/llm-inference-notes/'
 ORIGIN = 'https://akiyangdev.github.io'
 class Page(HTMLParser):
@@ -52,6 +53,23 @@ print(f'Site checks passed: {len(pages)} pages, {len(urls)} sitemap URLs, {len(i
 # Tag archives must contain exactly their members, and card links cannot nest.
 import hashlib
 articles = [a for a in json.loads((ROOT / 'search.json').read_text()) if a.get('kind') != 'skill']
+
+# Every published Markdown document must have a generated article route. This
+# prevents a future build refactor from silently dropping newly added docs.
+source_docs = sorted(
+    p for p in (REPO_ROOT / 'docs').rglob('*.md')
+    if p.name != 'README.md'
+)
+expected_article_urls = {
+    BASE + 'articles/' + p.parent.name + '/' + p.stem + '/'
+    for p in source_docs
+}
+generated_article_urls = {a['url'] for a in articles}
+assert generated_article_urls == expected_article_urls, (
+    'article publication mismatch',
+    sorted(expected_article_urls - generated_article_urls),
+    sorted(generated_article_urls - expected_article_urls),
+)
 class Cards(HTMLParser):
     def __init__(self, text):
         super().__init__(); self.urls = []; self.active = []; self.depth = 0; self.in_tags = False; self.feed(text)
