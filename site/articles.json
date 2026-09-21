@@ -268,5 +268,18 @@
       "Profiling"
     ],
     "topic": "performance"
+  },
+  "docs/speculative-decoding/deepseek-v4-dspark-adaptive-verify-scheduler.md": {
+    "summary": "从 DeepSpec 的 AcceptRatePredictor 训练 target 出发，严格区分 STS greedy prefix 校准事件，推导 tau 与 commit_lens 的成立条件，分析 1D / Additive SPS 在 Graph tier cliff 附近的误差，并拆清 Ascend 910C 从 static 放开 compact 仍缺的 NPU DSV4 ragged metadata、graph 与 DP/DeepEP 能力。",
+    "category": "投机推理",
+    "tags": [
+      "DeepSeek-V4",
+      "DSpark",
+      "Ragged Verify",
+      "STS",
+      "SPS",
+      "Ascend 910C"
+    ],
+    "topic": "speculative-decoding"
   }
 }
