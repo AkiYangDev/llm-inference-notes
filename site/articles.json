@@ -7,7 +7,10 @@
       "Ascend",
       "请求链路"
     ],
-    "topic": "sglang"
+    "topic": "sglang",
+    "role": "entry",
+    "seo_title": "SGLang 推理执行链路：一次请求如何跑到 Ascend NPU",
+    "seo_summary": "以 DeepSeek-V4 为例，从 HTTP 请求、Scheduler、KV Cache、ModelRunner 到 Ascend NPU 和流式输出，建立完整推理链路。"
   },
   "docs/sglang/sglang-scheduler-source-analysis.md": {
     "summary": "跟随请求进入等待队列、组成批次并交给 ModelRunner，理解 Scheduler 的状态管理与 Prefill / Decode 调度边界。",
@@ -17,7 +20,8 @@
       "Scheduler",
       "请求调度"
     ],
-    "topic": "sglang"
+    "topic": "sglang",
+    "role": "advanced"
   },
   "docs/sglang/sglang-modelrunner-source-analysis.md": {
     "summary": "从 ForwardBatch 出发，追踪模型前向、执行路径选择与输出处理，理解 ModelRunner 如何连接调度与 DeepSeek 模型。",
@@ -27,7 +31,8 @@
       "ModelRunner",
       "DeepSeek-V4"
     ],
-    "topic": "sglang"
+    "topic": "sglang",
+    "role": "advanced"
   },
   "docs/sglang/deepseek-v4-attention-source-analysis.md": {
     "summary": "追踪 DeepSeek-V4 Attention 中 Query 的生成和 KV Cache 的访问，连接张量变化、历史上下文与实际源码入口。",
@@ -38,7 +43,8 @@
       "Attention",
       "KV Cache"
     ],
-    "topic": "sglang"
+    "topic": "sglang",
+    "role": "advanced"
   },
   "docs/sglang/deepseek-v4-moe-source-analysis.md": {
     "summary": "沿 Router、All-to-All、专家计算和结果合并，理解一个 Token 如何完成 MoE 前向，以及 Expert Parallel 的职责。",
@@ -49,7 +55,8 @@
       "MoE",
       "Expert Parallel"
     ],
-    "topic": "sglang"
+    "topic": "sglang",
+    "role": "advanced"
   },
   "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md": {
     "summary": "结合源码与配置示例，梳理 TP、DP、EP 在 Attention 和 MoE 之间如何协作，辨清并行组与布局转换的适用边界。",
@@ -60,7 +67,8 @@
       "TP/DP/EP",
       "分布式并行"
     ],
-    "topic": "distributed"
+    "topic": "distributed",
+    "role": "advanced"
   },
   "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md": {
     "summary": "追踪 Prefill 与 Decode 分离后的请求交接，梳理状态传输、目标资源准备与完成确认，理解独立调度两类负载的工程代价。",
@@ -71,7 +79,8 @@
       "PD 分离",
       "分布式推理"
     ],
-    "topic": "distributed"
+    "topic": "distributed",
+    "role": "advanced"
   },
   "docs/fundamentals/ai-infra-working-glossary.md": {
     "summary": "从 Token、Tensor、Attention、KV Cache、Scheduler、分布式通信一路连接到 CANN 与 Ascend 910C Kernel，作为整个仓库的工作知识地图与源码阅读入口。",
@@ -82,7 +91,10 @@
       "DeepSeek-V4",
       "Ascend 910C"
     ],
-    "topic": "fundamentals"
+    "topic": "fundamentals",
+    "role": "reference",
+    "seo_title": "AI Infra 名词表：SGLang、DeepSeek 与 Ascend 910C",
+    "seo_summary": "从 Token、Tensor、Attention、KV Cache、Scheduler、分布式通信到 Ascend 910C Kernel，建立大模型推理基础知识地图。"
   },
   "docs/distributed/sglang-rank-group-deepseek-v4.md": {
     "summary": "从 WORLD、TP Group 和局部 Rank 出发，画清 DeepSeek-V4 Attention 与 MoE 中 TP / DP / EP 多套逻辑坐标，以及 Ascend 910C 上独立 MoE EP Group 的边界。",
@@ -93,7 +105,10 @@
       "Rank / Group",
       "TP/DP/EP"
     ],
-    "topic": "distributed"
+    "topic": "distributed",
+    "role": "reference",
+    "seo_title": "SGLang Rank 和 Group 是什么？TP / DP / EP 图解",
+    "seo_summary": "用 DeepSeek-V4 图解 WORLD、TP/DP/EP Rank 与通信 Group，建立多卡推理的进程和坐标系直觉。"
   },
   "docs/distributed/sglang-collectives-deepseek-v4.md": {
     "summary": "沿 Tensor ownership 解释 AllReduce、AllGather、ReduceScatter 与 All-to-All 到底搬什么，并把 DPA、MoE、DeepEP 与 FuseEP 的通信方向落到当前 SGLang 源码。",
@@ -105,7 +120,10 @@
       "DeepEP",
       "分布式并行"
     ],
-    "topic": "distributed"
+    "topic": "distributed",
+    "role": "reference",
+    "seo_title": "AllReduce、AllGather、ReduceScatter、All-to-All 有什么区别？",
+    "seo_summary": "沿 Tensor ownership 解释四类分布式通信到底搬什么，并连接 SGLang、DPA、MoE 与 DeepEP。"
   },
   "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md": {
     "summary": "把 DSpark Draft / Verify、NPU Graph replay、Accept / Commit 与 DeepEP 通信映射到 Ascend 910C Profiling 时间线，用源码边界解释真实 Host / Device gap。",
@@ -117,7 +135,8 @@
       "DSpark",
       "投机解码"
     ],
-    "topic": "performance"
+    "topic": "performance",
+    "role": "deep"
   },
   "docs/ascend/deepseek-v4-w8a8-ascend-910c.md": {
     "summary": "从官方 ModelSlim W8A8_DYNAMIC 配方出发，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ 到 ACLNN / CANN AI Core 的量化执行链。",
@@ -129,7 +148,8 @@
       "ModelSlim",
       "CANN"
     ],
-    "topic": "ascend"
+    "topic": "ascend",
+    "role": "advanced"
   },
   "docs/performance/deepseek-v4-w8a8-ascend-910c-performance.md": {
     "summary": "从 Decode 小 M 出发，严格核对 DynamicQuant 的 Vector Core 并行度、QuantBatchMatmulV3 的 SmallMN / StreamK、DeepSeek-V4 实际 FRACTAL_NZ shape，以及 GroupedMatmul 的 Expert Token 调优阈值，区分源码机制与必须实测的性能结论。",
@@ -141,7 +161,8 @@
       "CANN Tiling",
       "Profiling"
     ],
-    "topic": "performance"
+    "topic": "performance",
+    "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-dspark-adaptive-verify-scheduler.md": {
     "summary": "从 DeepSpec 的 AcceptRatePredictor 训练 target 出发，严格区分 STS greedy prefix 校准事件，推导 tau 与 commit_lens 的成立条件，分析 1D / Additive SPS 在 Graph tier cliff 附近的误差，并拆清 Ascend 910C 从 static 放开 compact 仍缺的 NPU DSV4 ragged metadata、graph 与 DP/DeepEP 能力。",
@@ -154,7 +175,8 @@
       "SPS",
       "Ascend 910C"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md": {
     "summary": "沿 Draft、Verify、Accept / Reject 与状态提交，追踪一轮 DSpark 投机解码，理解候选验证、接受结果与缓存状态如何衔接。",
@@ -165,7 +187,8 @@
       "DSpark",
       "投机解码"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "advanced"
   },
   "docs/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md": {
     "summary": "从 Req、ScheduleBatch、ForwardBatch 与 FutureMap 追踪 Draft、Verify、Accept 状态机，重点解释 overlap 下的多时钟、publish fence、forward isolation 与 mixed-tail late binding。",
@@ -176,7 +199,8 @@
       "ScheduleBatch",
       "投机解码"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
     "summary": "区分 MTP、NextN 与 EAGLE 的语义，沿 Target hidden、Draft Extend 与多步候选生成理解 Draft 路径及 Ascend 实现边界。",
@@ -187,7 +211,8 @@
       "MTP",
       "投机解码"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "advanced"
   },
   "docs/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md": {
     "summary": "从候选路径评分、树索引与 Tree Mask，到 Verify 和 KV Cache 整理，理解 EAGLE 多分支候选如何组织及其 Ascend 适用边界。",
@@ -199,7 +224,8 @@
       "投机解码",
       "KV Cache"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-tree-attention-source-analysis.md": {
     "summary": "从 Candidate Layout、Tree Position 与 Tree Mask 出发，解释多分支 Verify 为什么只允许访问祖先路径，并区分 FULL_MASK / QLEN_ONLY 与不同 attention backend 的消费边界。",
@@ -210,7 +236,8 @@
       "Tree Attention",
       "投机解码"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-accept-decision-source-analysis.md": {
     "summary": "聚焦 Verify 之后的 Accept Decision，区分 Greedy Tree Match、Target-only Tree Sampling 与经典 p/q Rejection Sampling，并解释 accept_index、terminal bonus 与 DSpark correct_len。",
@@ -222,7 +249,8 @@
       "Rejection Sampling",
       "投机解码"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
     "summary": "追踪 accepted path 如何从 Verify row 映射到 committed KV，解释 KV relocation、tensor compaction、Spec V2 overshoot 与 Ascend C4/C128 状态清理边界。",
@@ -233,7 +261,8 @@
       "KV Cache",
       "投机解码"
     ],
-    "topic": "speculative-decoding"
+    "topic": "speculative-decoding",
+    "role": "deep"
   },
   "docs/performance/deepseek-v4-speculative-performance-analysis.md": {
     "summary": "从 Accept Length、strict Accept Rate、Draft / Verify 成本与 Ragged Verify 出发，建立投机解码何时加速、何时反而变慢的性能 break-even 模型。",
@@ -244,7 +273,8 @@
       "Acceptance Rate",
       "性能模型"
     ],
-    "topic": "performance"
+    "topic": "performance",
+    "role": "advanced"
   },
   "docs/performance/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
     "summary": "沿 Draft Graph、Target Verify、Plan Stream、Attention Multi-Stream 与 DeepEP async event 拆解 Ascend 910C 上一轮投机解码的真实 critical path 与 overlap 边界。",
@@ -256,7 +286,8 @@
       "Communication Overlap",
       "投机解码"
     ],
-    "topic": "performance"
+    "topic": "performance",
+    "role": "deep"
   },
   "docs/distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
     "summary": "拆分 speculative control、logical layout 与 model-data collective 三层一致性，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast，并厘清 Ascend 多卡通信职责。",
@@ -268,7 +299,8 @@
       "TP/DP/EP",
       "投机解码"
     ],
-    "topic": "distributed"
+    "topic": "distributed",
+    "role": "deep"
   },
   "docs/distributed/deepseek-v4-dspark-parallel-layout-analysis.md": {
     "summary": "分析 DSpark Draft Model 的并行上下文、同步与布局规划，区分已确认的源码行为和 TP / DP 适配中待验证的假设。",
@@ -280,7 +312,8 @@
       "TP/DP/EP",
       "分布式并行"
     ],
-    "topic": "distributed"
+    "topic": "distributed",
+    "role": "deep"
   },
   "docs/fundamentals/prefill-vs-decode-performance.md": {
     "summary": "从 DeepSeek-V4 的真实 Dense / MoE shape 出发，解释 Prefill 与 Decode 在 Weight reuse、Expert M_e、SWA/C4/C128 历史读取和串行调度上的差异，并给出 Ascend 910C 上验证 Cube / Vector / Memory 瓶颈的 Profiling 方法。",
@@ -293,7 +326,10 @@
       "Ascend 910C",
       "性能模型"
     ],
-    "topic": "fundamentals"
+    "topic": "fundamentals",
+    "role": "entry",
+    "seo_title": "Prefill 和 Decode 有什么区别？为什么性能差这么多",
+    "seo_summary": "用 DeepSeek-V4 解释 Prefill 与 Decode 的计算形态、内存访问和性能瓶颈，并给出 Ascend 910C 上的 Profiling 思路。"
   },
   "docs/fundamentals/sglang-decode-source-reading-primer.md": {
     "summary": "用一个普通 DeepSeek-V4 Decode Step 串起 SGLang 的 ScheduleBatch、ForwardBatch、mHC、Ascend 910C DSV4 KV ownership、MoE、Vocab Parallel LM Head 与 Sampling，并严格解释 L→L+1 的时间语义和多卡 Logits 边界。",
@@ -307,7 +343,10 @@
       "Sampling",
       "Ascend 910C"
     ],
-    "topic": "fundamentals"
+    "topic": "fundamentals",
+    "role": "entry",
+    "seo_title": "第一次读 SGLang 源码：从一次 Decode 看懂推理链路",
+    "seo_summary": "沿 DeepSeek-V4 的一次 Decode 串起 ScheduleBatch、ForwardBatch、KV Cache、MoE、LM Head 与 Sampling。"
   },
   "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md": {
     "summary": "用 Maintainer 视角重读 SGLang PR #39871：从 TP16/DP2 却打印 AttnTP16 的错误日志出发，追踪 parallel width 的前置设计背景、Runtime Derivation、Impact/Validation Surface，并提炼 Configured Value 与 Derived Runtime Value 的 Review Pattern。",
@@ -319,7 +358,8 @@
       "Runtime Derivation",
       "Observability"
     ],
-    "topic": "pr-reviews"
+    "topic": "pr-reviews",
+    "role": "deep"
   },
   "docs/pr-reviews/sglang-pr-39120-tensor-view-storage-cache.md": {
     "summary": "从 SGLang PR #39120 的 multimodal embedding cache 问题出发，解释 torch.split View 为什么会保活整个 Batch Storage，以及 Cache accounting 如何通过 clone 重新对齐 ownership 与 lifetime。",
@@ -331,6 +371,21 @@
       "Storage",
       "Memory Accounting"
     ],
-    "topic": "pr-reviews"
+    "topic": "pr-reviews",
+    "role": "deep"
+  },
+  "docs/distributed/why-large-models-need-multi-card-tp-dp-ep.md": {
+    "summary": "从 DeepSeek-V4 的模型规模与 Ascend 910C HBM 约束出发，解释为什么单卡放不下模型，并区分 TP、DP、EP 在权重、请求和专家维度上的分工。",
+    "category": "分布式基础",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "TP/DP/EP",
+      "分布式并行"
+    ],
+    "topic": "distributed",
+    "role": "entry",
+    "seo_title": "大模型为什么需要多卡？TP、DP、EP 一次讲清",
+    "seo_summary": "从 DeepSeek-V4 模型规模和 Ascend 910C 显存约束出发，解释单卡为什么放不下，以及 TP、DP、EP 分别切什么。"
   }
 }
