@@ -1,7 +1,19 @@
 [
   {
-    "id": "sglang-source",
-    "title": "SGLang 源码系列",
+    "id": "ai-infra-foundation",
+    "title": "AI Infra 基础",
+    "topic": "fundamentals",
+    "items": [
+      {
+        "path": "docs/fundamentals/ai-infra-working-glossary.md",
+        "label": "工作知识地图",
+        "description": "从 Token、Runtime、分布式到 Ascend Kernel 建立全局坐标"
+      }
+    ]
+  },
+  {
+    "id": "sglang-core",
+    "title": "SGLang 核心执行链",
     "topic": "sglang",
     "items": [
       {
@@ -28,6 +40,23 @@
         "path": "docs/sglang/deepseek-v4-moe-source-analysis.md",
         "label": "MoE 与 Expert Parallel",
         "description": "沿路由、分发与专家计算理解 MoE"
+      }
+    ]
+  },
+  {
+    "id": "distributed-inference",
+    "title": "DeepSeek-V4 分布式推理",
+    "topic": "distributed",
+    "items": [
+      {
+        "path": "docs/distributed/sglang-rank-group-deepseek-v4.md",
+        "label": "Rank / Group",
+        "description": "先建立进程、坐标系与通信组直觉"
+      },
+      {
+        "path": "docs/distributed/sglang-collectives-deepseek-v4.md",
+        "label": "Collective 与 Tensor Ownership",
+        "description": "看清 AllReduce、Gather、ReduceScatter 与 A2A 到底搬什么"
       },
       {
         "path": "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md",
@@ -40,9 +69,31 @@
         "description": "理解 Draft 与 Target 的布局边界"
       },
       {
+        "path": "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md",
+        "label": "多卡一致性",
+        "description": "理解 Draft、Verify 与 Accept 如何跨 Rank 保持一致"
+      },
+      {
+        "path": "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md",
+        "label": "Prefill / Decode 分离",
+        "description": "理解跨实例请求与缓存状态交接"
+      }
+    ]
+  },
+  {
+    "id": "speculative-decoding",
+    "title": "DeepSeek-V4 投机推理",
+    "topic": "speculative-decoding",
+    "items": [
+      {
         "path": "docs/sglang/deepseek-v4-speculative-decoding-source-analysis.md",
         "label": "投机推理执行链",
-        "description": "串起候选生成、验证与状态提交"
+        "description": "串起 Draft、Verify、Accept 与状态提交"
+      },
+      {
+        "path": "docs/sglang/sglang-speculative-decoding-scheduler-source-analysis.md",
+        "label": "Speculative Scheduler",
+        "description": "理解 ScheduleBatch 如何管理 Draft / Verify / Accept 状态机"
       },
       {
         "path": "docs/sglang/deepseek-v4-mtp-speculative-decoding-source-analysis.md",
@@ -62,22 +113,39 @@
       {
         "path": "docs/sglang/deepseek-v4-accept-decision-source-analysis.md",
         "label": "Accept Decision",
-        "description": "理解 Tree / Chain 如何收敛成唯一 accepted path"
+        "description": "理解候选如何收敛成唯一 accepted path"
       },
       {
         "path": "docs/sglang/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md",
-        "label": "Speculative KV Commit",
+        "label": "KV Commit / Compact / Rollback",
         "description": "把 Accept 结果落实到 KV 与缓存生命周期"
       },
       {
-        "path": "docs/sglang/deepseek-v4-speculative-distributed-consistency-source-analysis.md",
-        "label": "多卡一致性",
-        "description": "理解 Draft、Verify 与 Accept 如何跨 rank 保持一致"
+        "path": "docs/sglang/deepseek-v4-speculative-performance-analysis.md",
+        "label": "性能 Break-even",
+        "description": "理解 Acceptance Rate、Draft Cost 与 Verify Cost 的收益边界"
       },
       {
-        "path": "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md",
-        "label": "Prefill / Decode 分离",
-        "description": "理解跨实例请求与缓存状态交接"
+        "path": "docs/sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md",
+        "label": "Ascend Critical Path",
+        "description": "拆解 Graph、Multi-Stream 与 Communication Overlap"
+      },
+      {
+        "path": "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md",
+        "label": "Ascend 910C Profiling",
+        "description": "把源码阶段映射到真实 NPU 时间线"
+      }
+    ]
+  },
+  {
+    "id": "ascend-execution",
+    "title": "Ascend 910C 执行链",
+    "topic": "ascend",
+    "items": [
+      {
+        "path": "docs/ascend/deepseek-v4-w8a8-ascend-910c.md",
+        "label": "W8A8 与 INT8 Kernel",
+        "description": "从 ModelSlim 量化权重追到 ACLNN、CANN 与 AI Core"
       }
     ]
   }
