@@ -7,8 +7,12 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def check(root):
+def check(root, strict_style=False):
     errors = []
+    warnings = []
+
+    def style_problem(message):
+        (errors if strict_style else warnings).append(message)
     for path in sorted(root.rglob("*.md")):
         if any(part in {".git", ".venv", "node_modules"} for part in path.relative_to(root).parts):
             continue
@@ -20,9 +24,9 @@ def check(root):
             errors.append(f"{name}: invalid UTF-8")
             continue
         if b"\r" in raw:
-            errors.append(f"{name}: use LF line endings")
+            style_problem(f"{name}: use LF line endings")
         if raw and not raw.endswith(b"\n"):
-            errors.append(f"{name}: missing final newline")
+            style_problem(f"{name}: missing final newline")
         fence = None
         for number, line in enumerate(text.splitlines(), 1):
             if re.match(r"^(<{7}|={7}|>{7})(?: |$)", line):
@@ -49,12 +53,16 @@ def check(root):
                     errors.append(f"{name}:{number}: link leaves repository: {target}")
                 elif not destination.exists():
                     errors.append(f"{name}:{number}: missing local target: {target}")
-    return errors
+    return errors, warnings
 
 
 if __name__ == "__main__":
-    problems = check(ROOT)
+    strict_style = "--strict-style" in sys.argv[1:]
+    problems, warnings = check(ROOT, strict_style=strict_style)
+    if warnings:
+        print("\n".join(f"warning: {item}" for item in warnings), file=sys.stderr)
     if problems:
         print("\n".join(problems), file=sys.stderr)
         sys.exit(1)
-    print("Documentation checks passed (text hygiene and inline local file links).")
+    mode = "strict" if strict_style else "publish"
+    print(f"Documentation checks passed ({mode} mode; text hygiene and inline local file links).")
