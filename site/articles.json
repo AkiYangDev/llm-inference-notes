@@ -149,5 +149,89 @@
       "TP/DP/EP",
       "投机推理"
     ]
+  },
+  "docs/fundamentals/ai-infra-working-glossary.md": {
+    "summary": "从 Token、Tensor、Attention、KV Cache、Scheduler、分布式通信一路连接到 CANN 与 Ascend 910C Kernel，作为整个仓库的工作知识地图与源码阅读入口。",
+    "category": "基础原理",
+    "tags": [
+      "AI Infra",
+      "SGLang",
+      "DeepSeek-V4",
+      "Ascend 910C"
+    ]
+  },
+  "docs/distributed/sglang-rank-group-deepseek-v4.md": {
+    "summary": "从 WORLD、TP Group 和局部 Rank 出发，画清 DeepSeek-V4 Attention 与 MoE 中 TP / DP / EP 多套逻辑坐标，以及 Ascend 910C 上独立 MoE EP Group 的边界。",
+    "category": "分布式基础",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Rank / Group",
+      "TP/DP/EP"
+    ]
+  },
+  "docs/distributed/sglang-collectives-deepseek-v4.md": {
+    "summary": "沿 Tensor ownership 解释 AllReduce、AllGather、ReduceScatter 与 All-to-All 到底搬什么，并把 DPA、MoE、DeepEP 与 FuseEP 的通信方向落到当前 SGLang 源码。",
+    "category": "分布式基础",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V4",
+      "Collective",
+      "DeepEP",
+      "分布式并行"
+    ]
+  },
+  "docs/sglang/sglang-speculative-decoding-scheduler-source-analysis.md": {
+    "summary": "从 Req、ScheduleBatch、ForwardBatch 与 FutureMap 追踪 Draft、Verify、Accept 状态机，重点解释 overlap 下的多时钟、publish fence、forward isolation 与 mixed-tail late binding。",
+    "category": "源码解析",
+    "tags": [
+      "SGLang",
+      "Scheduler",
+      "ScheduleBatch",
+      "投机推理"
+    ]
+  },
+  "docs/sglang/deepseek-v4-speculative-performance-analysis.md": {
+    "summary": "从 Accept Length、strict Accept Rate、Draft / Verify 成本与 Ragged Verify 出发，建立投机推理何时加速、何时反而变慢的性能 break-even 模型。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "投机推理",
+      "Acceptance Rate",
+      "性能模型"
+    ]
+  },
+  "docs/sglang/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
+    "summary": "沿 Draft Graph、Target Verify、Plan Stream、Attention Multi-Stream 与 DeepEP async event 拆解 Ascend 910C 上一轮投机推理的真实 critical path 与 overlap 边界。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "NPU Graph",
+      "Communication Overlap",
+      "投机推理"
+    ]
+  },
+  "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md": {
+    "summary": "把 DSpark Draft / Verify、NPU Graph replay、Accept / Commit 与 DeepEP 通信映射到 Ascend 910C Profiling 时间线，用源码边界解释真实 Host / Device gap。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "Profiling",
+      "DSpark",
+      "投机推理"
+    ]
+  },
+  "docs/ascend/deepseek-v4-w8a8-ascend-910c.md": {
+    "summary": "从官方 ModelSlim W8A8_DYNAMIC 配方出发，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ 到 ACLNN / CANN AI Core 的量化执行链。",
+    "category": "Ascend 实践",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "W8A8",
+      "ModelSlim",
+      "CANN"
+    ]
   }
 }
