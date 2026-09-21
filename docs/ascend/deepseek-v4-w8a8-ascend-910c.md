@@ -82,7 +82,7 @@ BF16 output
 
 ---
 
-## 一、先纠正一个最关键的误区：DeepSeek-V4-Flash W8A8 的主线其实是 W8A8_DYNAMIC
+## 一、Checkpoint 到 ModelSlim Scheme：先确定到底哪些层是 W8A8
 
 SGLang 的 ModelSlim 并不是看到模型名里有 `w8a8`，就把所有 Linear 一刀切成同一种量化实现。
 
@@ -259,7 +259,7 @@ down_proj
 
 ---
 
-## 二、Dense W8A8_DYNAMIC：一层 Linear 从 BF16 到 INT8，再回到 BF16
+## 二、Dense W8A8：BF16 Hidden 如何进入 INT8 MatMul，再回到 BF16
 
 先看最简单的普通 Linear：
 
@@ -424,7 +424,7 @@ W8A8 Weight / Activation 与 KV Cache dtype 是两套完全独立的设计维度
 
 ---
 
-## 三、静态 W8A8 的 `deq_scale / quant_bias` 到底是什么：公式成立，但不是这个 checkpoint 的主路径
+### 静态 W8A8 对照：`deq_scale / quant_bias` 的公式成立，但不是当前主线
 
 初稿把静态 W8A8 当成主线解释了 `deq_scale` 和 `quant_bias`。
 
@@ -570,7 +570,7 @@ npu_quant_matmul
 
 ---
 
-## 四、MoE W8A8：为什么 Expert 走 `npu_grouped_matmul`，而不是普通 QuantMatmul
+## 三、MoE W8A8 与 DeepEP：Grouped MatMul、INT8 Wire 与二次量化边界
 
 DeepSeek-V4 的 MoE 与普通 Linear 有一个根本区别：
 
@@ -688,7 +688,7 @@ npu_grouped_matmul
 
 ---
 
-## 五、DeepEP W8A8：INT8 Dispatch 后，到 W13 之前会不会再量化一次？
+### DeepEP INT8 Dispatch 到 W13：什么时候完全避免二次量化
 
 这是最容易因为模块分层而误判的一段。
 
@@ -855,7 +855,7 @@ Expert 前补做一次动态量化
 
 ---
 
-## 六、`npu_quant_matmul` 往下到底去哪：SGLang → op-plugin → ACLNN → CANN AI Core
+## 四、从 `npu_quant_matmul` 到 CANN：FRACTAL_NZ、ACLNN、Tiling 与 AI Core
 
 现在进入本文最底层。
 
@@ -1014,16 +1014,15 @@ matmul/
     └── tests
 ```
 
-其 README 明确写出：
+在 CANN 8.5.0 的 `quant_batch_matmul_v3` README 中，`aclnnQuantMatmulWeightNz` 被明确列为该算子的调用入口，且对应 API 头仍位于 `quant_batch_matmul_v3`。当前源码树同时存在专门承载 `aclnnQuantMatmulV5` 的 `quant_batch_matmul_v4`，因此本文只把下面这条关系钉死：
 
 ```text
-aclnnQuantMatmulV3
-aclnnQuantMatmulV4
-aclnnQuantMatmulWeightNz
-aclnnQuantMatmulV5
+FRACTAL_NZ W8A8
+→ aclnnQuantMatmulWeightNz
+→ QuantBatchMatmulV3
 ```
 
-等接口可以进入 QuantBatchMatmulV3 家族；而当前公开目录中 `aclnnQuantMatmulWeightNz` 的 API 头仍位于 `quant_batch_matmul_v3`。
+至于 ND Weight 下的 `aclnnQuantMatmulV5` 最终由哪个 CANN 版本/实现目录承载，应以实际安装版本为准，不把它和 V3 写成永久绑定。
 
 对 Ascend 910C 所属的 Atlas A3 产品分支，公开算子说明支持：
 
@@ -1067,7 +1066,7 @@ Weight = FRACTAL_NZ ?
               ↓
            aclnnQuantMatmulV5
               ↓
-           newer QuantMatmul dispatch path
+           version-dependent V5 path
 ```
 
 ### 5. 再往下就是 Host Tiling → AI Core Kernel
@@ -1115,7 +1114,7 @@ Ascend 910C AI Core Quantized MatMul
 
 ---
 
-## 七、为什么这里仍然不能写死某个 Tiling Key 或 Kernel Variant
+### 为什么不能写死某个 Tiling Key 或 Kernel Variant
 
 到这里很容易继续写：
 
@@ -1216,7 +1215,7 @@ duration
 
 ---
 
-## 八、把 DeepSeek-V4-Flash W8A8 的真实一层重新画出来
+## 五、把 DeepSeek-V4-Flash W8A8 的真实执行链重新拼起来
 
 经过四轮严格 Review 后，这篇文章最应该留下的不是“W8A8=INT8”的概念，而是下面这张执行图：
 
@@ -1275,7 +1274,62 @@ W8A8 不是把系统里所有 Tensor 都压成 INT8。
 
 ---
 
-## 九、源码阅读地图
+### 证据边界：哪些已经证实，哪些仍要靠真实 910C 环境确认
+
+为了避免“越往底层越靠猜”，最后把证据边界明确列出来。
+
+### 已经由源码直接确认
+
+- DeepSeek-V4-Flash 官方 W8A8 配方主线是 `W8A8_DYNAMIC`；
+- Activation 是 per-token INT8，Weight 是 per-channel INT8；
+- 多个 `wo_a / wo_b / compressor / indexer` 投影以及 FFN gate 被官方配方排除；
+- SGLang Dense 动态 W8A8 使用 `npu_dynamic_quant → npu_quant_matmul`；
+- Weight 在加载阶段被尝试转为 FRACTAL_NZ；
+- W8A8 MoE 使用 `NPUW8A8Int8MoEMethod → npu_grouped_matmul`；
+- DeepEP INT8 dispatch 能把 `hidden_states_scale` 一路传到 W13，从而避免第二次 activation quant；
+- op-plugin 对 FRACTAL_NZ Weight 选择 `aclnnQuantMatmulWeightNz`；
+- `aclnnQuantMatmulWeightNz` 属于当前公开 CANN `QuantBatchMatmulV3` 家族；
+- 该算子由 AI Core 执行，并存在独立 host tiling 与 device kernel 层。
+
+### 必须结合具体 checkpoint / runtime 再确认
+
+- 某个下载下来的 `DeepSeek-V4-Flash-0731-w8a8` 是否完全按当前官方 recipe 导出；
+- 每一个具体模块在它的 `quant_model_description.json` 中最终是什么 Scheme；
+- DeepEP legacy runtime 是否真正启用了 INT8 wire path；
+- FRACTAL_NZ cast 是否因为某个特殊 shape 失败并退回 ND；
+- 实际容器中的 CANN 版本最终命中哪个 tiling strategy。
+
+### 没有 profiler / tiling log 就不应该宣称
+
+- 某个固定 tiling key；
+- 某个固定内部 kernel specialization；
+- Prefill / Decode 必然使用同一个 QuantBatchMatmul kernel variant；
+- “INT8 MatMul Kernel 就一定是当前端到端瓶颈”。
+
+到这里，我们才真正把：
+
+```text
+DeepSeek-V4 W8A8
+```
+
+从一个模型目录上的标签，拆成了：
+
+```text
+量化配置
+→ Layer Scheme
+→ Weight Layout
+→ Activation Quant
+→ INT8 GEMM
+→ DeepEP / MoE Grouped GEMM
+→ op-plugin
+→ ACLNN
+→ CANN Tiling
+→ Ascend 910C AI Core
+```
+
+一条可以逐层用源码和 profiler 验证的工程执行链。
+
+## 六、源码阅读地图与版本入口
 
 如果要自己复核，建议按下面顺序追：
 
@@ -1355,65 +1409,9 @@ quant_batch_matmul_v3/
 
 ---
 
-## 十、这篇文章最终能证明到哪里
+### 参考源码
 
-为了避免“越往底层越靠猜”，最后把证据边界明确列出来。
-
-### 已经由源码直接确认
-
-- DeepSeek-V4-Flash 官方 W8A8 配方主线是 `W8A8_DYNAMIC`；
-- Activation 是 per-token INT8，Weight 是 per-channel INT8；
-- 多个 `wo_a / wo_b / compressor / indexer` 投影以及 FFN gate 被官方配方排除；
-- SGLang Dense 动态 W8A8 使用 `npu_dynamic_quant → npu_quant_matmul`；
-- Weight 在加载阶段被尝试转为 FRACTAL_NZ；
-- W8A8 MoE 使用 `NPUW8A8Int8MoEMethod → npu_grouped_matmul`；
-- DeepEP INT8 dispatch 能把 `hidden_states_scale` 一路传到 W13，从而避免第二次 activation quant；
-- op-plugin 对 FRACTAL_NZ Weight 选择 `aclnnQuantMatmulWeightNz`；
-- `aclnnQuantMatmulWeightNz` 属于当前公开 CANN `QuantBatchMatmulV3` 家族；
-- 该算子由 AI Core 执行，并存在独立 host tiling 与 device kernel 层。
-
-### 必须结合具体 checkpoint / runtime 再确认
-
-- 某个下载下来的 `DeepSeek-V4-Flash-0731-w8a8` 是否完全按当前官方 recipe 导出；
-- 每一个具体模块在它的 `quant_model_description.json` 中最终是什么 Scheme；
-- DeepEP legacy runtime 是否真正启用了 INT8 wire path；
-- FRACTAL_NZ cast 是否因为某个特殊 shape 失败并退回 ND；
-- 实际容器中的 CANN 版本最终命中哪个 tiling strategy。
-
-### 没有 profiler / tiling log 就不应该宣称
-
-- 某个固定 tiling key；
-- 某个固定内部 kernel specialization；
-- Prefill / Decode 必然使用同一个 QuantBatchMatmul kernel variant；
-- “INT8 MatMul Kernel 就一定是当前端到端瓶颈”。
-
-到这里，我们才真正把：
-
-```text
-DeepSeek-V4 W8A8
-```
-
-从一个模型目录上的标签，拆成了：
-
-```text
-量化配置
-→ Layer Scheme
-→ Weight Layout
-→ Activation Quant
-→ INT8 GEMM
-→ DeepEP / MoE Grouped GEMM
-→ op-plugin
-→ ACLNN
-→ CANN Tiling
-→ Ascend 910C AI Core
-```
-
-一条可以逐层用源码和 profiler 验证的工程执行链。
-
-
-## 参考源码
-
-- SGLang `b63f8416b3b73bafdec029005c5db36bad207b44`
+- [SGLang `b63f8416b3b73bafdec029005c5db36bad207b44`](https://github.com/sgl-project/sglang/tree/b63f8416b3b73bafdec029005c5db36bad207b44)
   - `python/sglang/srt/layers/quantization/modelslim/modelslim.py`
   - `python/sglang/srt/layers/quantization/modelslim/schemes/modelslim_w8a8_int8.py`
   - `python/sglang/srt/layers/quantization/modelslim/schemes/modelslim_w8a8_int8_moe.py`
@@ -1421,13 +1419,12 @@ DeepSeek-V4 W8A8
   - `python/sglang/srt/hardware_backend/npu/quantization/moe_methods.py`
   - `python/sglang/srt/layers/moe/moe_runner/ascend.py`
   - `python/sglang/srt/layers/moe/token_dispatcher/deepep.py`
-- msModelSlim `85d6c6f0266fd1fd77aa19ac26086670ca92d1db`
+- [msModelSlim `85d6c6f0266fd1fd77aa19ac26086670ca92d1db`](https://github.com/Ascend/msmodelslim/tree/85d6c6f0266fd1fd77aa19ac26086670ca92d1db)
   - `lab_practice/deepseek_v4/deepseek_v4_flash_w8a8.yaml`
   - `msmodelslim/core/quant_service/modelslim_v1/save/ascendv1.py`
-- Ascend op-plugin `e89cc608309341298193f957fa87c964ee561781`
+- [Ascend op-plugin `e89cc608309341298193f957fa87c964ee561781`](https://github.com/Ascend/op-plugin/tree/e89cc608309341298193f957fa87c964ee561781)
   - `op_plugin/ops/opapi/QuantMatmulKernelNpuOpApi.cpp`
-- CANN ops-nn
-  - `matmul/quant_batch_matmul_v3`
-  - `matmul/quant_batch_matmul_v4`
+- [CANN ops-nn / `quant_batch_matmul_v3`](https://gitcode.com/cann/ops-nn/tree/8.5.0/matmul/quant_batch_matmul_v3)
+- [CANN ops-nn / `quant_batch_matmul_v4`](https://gitcode.com/cann/ops-nn/tree/8.5.0/matmul/quant_batch_matmul_v4)
 
 版本变化后，请重新核对这些入口；尤其是 DeepEP dispatcher dtype、QuantMatmul ACLNN 分流和 CANN tiling。
