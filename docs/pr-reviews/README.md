@@ -13,6 +13,7 @@
 ## 已发布
 
 - [PR #39871：为什么 TP16 不是 AttnTP16？](sglang-pr-39871-attention-parallel-widths.md)：从一个日志修复切入，理解 DP Attention 下的 `tp_size / attn_dp_size / attn_cp_size / attn_tp_size`，以及 Config Value、Runtime Derived Value 与 Single Source of Truth。
+- [PR #39120：一个 Tensor 明明很小，为什么却偷偷占着整个 Batch？](sglang-pr-39120-tensor-view-storage-cache.md)：从 `torch.split` View 保活整块 Batch Storage 的问题切入，理解 Logical Payload、Backing Storage、Ownership、Lifetime 与 Cache Memory Accounting。
 
 ## 怎么读这个栏目
 

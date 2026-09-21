@@ -320,5 +320,17 @@
       "Rank / Group"
     ],
     "topic": "pr-reviews"
+  },
+  "docs/pr-reviews/sglang-pr-39120-tensor-view-storage-cache.md": {
+    "summary": "从 SGLang PR #39120 的 multimodal embedding cache 问题出发，解释 torch.split View 为什么会保活整个 Batch Storage，以及 Cache accounting 如何通过 clone 重新对齐 ownership 与 lifetime。",
+    "category": "PR 精读",
+    "tags": [
+      "SGLang",
+      "PR 精读",
+      "PyTorch View",
+      "Storage",
+      "Memory Accounting"
+    ],
+    "topic": "pr-reviews"
   }
 }

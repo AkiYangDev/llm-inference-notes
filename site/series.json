@@ -62,6 +62,11 @@
         "path": "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md",
         "label": "PR #39871 · Attention 并行宽度",
         "description": "从一个日志修复学 tp_size、attn_tp_size、Rank / Group 与 Runtime Derivation"
+      },
+      {
+        "path": "docs/pr-reviews/sglang-pr-39120-tensor-view-storage-cache.md",
+        "label": "PR #39120 · View 与 Storage",
+        "description": "从 multimodal cache 学 Logical Payload、Backing Storage、Ownership 与 Lifetime"
       }
     ]
   },
