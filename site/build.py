@@ -299,10 +299,22 @@ def build():
         output.write_text(shell(title, body, 'article-page', 'articles/' + slug + '/', excerpt, dates), encoding='utf-8')
     topics = sorted({a['topic_id'] for a in articles})
     topic_links = ''.join(f'<a class="topic-link" href="{BASE}topics/{t}/">{esc(TOPICS.get(t,t))}<span>{sum(a["topic_id"] == t for a in articles):02d}</span></a>' for t in topics)
-    featured_url = articles[0]['url'] if articles else BASE + 'articles/'
+    # Keep the homepage entry point stable as new topic directories are added.
+    # Using articles[0] made "开始阅读" depend on alphabetical path ordering;
+    # adding docs/ascend therefore unexpectedly changed the beginner entry to W8A8.
+    start_path = (ROOT / 'docs/fundamentals/ai-infra-working-glossary.md').resolve()
+    start_url = routes.get(start_path)
+    start_article = next((a for a in articles if a['url'] == start_url), articles[0] if articles else None)
+    featured_url = start_article['url'] if start_article else BASE + 'articles/'
     latest = sorted(articles, key=lambda a: (a.get('published', ''), a['url']), reverse=True)[:3]
     cards = ''.join(card(a, i + 1) for i, a in enumerate(latest))
-    recommended = ''.join(f'<a class="recommend-link" href="{a["url"]}"><span>{label}</span><strong>{title_html(a["title"])}</strong><span aria-hidden="true">→</span></a>' for a, label in [(articles[0], '从这里开始'), (next(a for a in articles if 'distributed-parallel' in a['url']), '理解并行')])
+    picks = []
+    if start_article:
+        picks.append((start_article, '从这里开始'))
+    distributed_pick = next((a for a in articles if 'distributed-parallel' in a['url']), None)
+    if distributed_pick:
+        picks.append((distributed_pick, '理解并行'))
+    recommended = ''.join(f'<a class="recommend-link" href="{a["url"]}"><span>{label}</span><strong>{title_html(a["title"])}</strong><span aria-hidden="true">→</span></a>' for a, label in picks)
     knowledge_map = reading_map(series_list, articles)
     body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AI INFRA NOTES</p><h1 id="hero-title">把推理原理，<br><span>写成读得懂的手记。</span></h1><p class="hero-description">DeepSeek · SGLang · Ascend<br>记录推理系统的原理、源码与工程实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">开始阅读 <span aria-hidden="true">↗</span></a><a class="text-link hero-secondary" href="{BASE}series/">阅读地图 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend NPU</span><span>LLM Inference</span></div></div><div class="hero-art hero-scene"><img src="{BASE}assets/whale-hero-v2.webp" alt="蓝发鲸尾女仆站在蓝白科技海洋场景中" width="1000" height="450" fetchpriority="high" decoding="async"></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新手记</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div></section><section class="reading-entry wrap" aria-label="阅读路线"><span class="mascot mascot-reading" aria-hidden="true"></span><div><p class="eyebrow">READING SERIES</p><h2>沿着源码，逐步深入</h2><p>请求执行 · 模型内部 · 分布式并行 · 投机推理</p></div><a class="text-link" href="{BASE}series/">查看完整阅读地图 →</a></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
     if skills:
