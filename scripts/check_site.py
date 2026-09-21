@@ -74,6 +74,9 @@ print(f'Site checks passed: {len(pages)} pages, {len(urls)} sitemap URLs, {len(i
 # Tag archives must contain exactly their members, and card links cannot nest.
 import hashlib
 articles = [a for a in json.loads((ROOT / 'search.json').read_text()) if a.get('kind') != 'skill']
+ROLES = {'entry', 'advanced', 'deep', 'reference'}
+assert {a.get('role') for a in articles} <= ROLES, 'Unknown content role in search index'
+assert all(a.get('role') in ROLES for a in articles), 'Every article needs a content role'
 
 # Every published Markdown document must have a generated article route.
 source_docs = sorted(
@@ -113,5 +116,11 @@ for tag in {t for a in articles for t in a['tags']}:
     assert set(parsed.urls) == {a['url'] for a in articles if tag in a['tags']}, tag
     assert parsed.active == [BASE + route], (tag, parsed.active)
 
+for role in ROLES:
+    route = f'levels/{role}/'
+    parsed = Cards((ROOT / route / 'index.html').read_text())
+    assert set(parsed.urls) == {a['url'] for a in articles if a['role'] == role}, role
+    assert parsed.active == [BASE + route], (role, parsed.active)
+
 for page in pages: Cards(page.read_text())
-print('Tag membership, selected filter and non-nested navigation checks passed.')
+print('Tag/role membership, selected filters and non-nested navigation checks passed.')
