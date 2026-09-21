@@ -265,16 +265,20 @@ def build():
         if not heading:
             continue
         title = heading.group(1)
-        topic_id = path.parent.name
-        topic = TOPICS.get(topic_id, topic_id)
-        slug = topic_id + '/' + path.stem
+        entry = editorial.get(path.relative_to(ROOT).as_posix(), {})
+        topic_id = entry.get('topic', path.parent.name)
+        if topic_id not in TOPICS:
+            raise ValueError(f'Unknown topic {topic_id!r} for {path}')
+        topic = TOPICS[topic_id]
+        # Keep article URLs stable and tied to repository paths even when the
+        # editorial topic differs from the physical docs directory.
+        slug = path.parent.name + '/' + path.stem
         url = routes[path.resolve()]
         minutes = max(1, round(len(re.sub(r'```[\s\S]*?```', '', source)) / 650))
         md, rendered = render_document(path, routes)
         parser = SearchSections()
         parser.feed(rendered)
         sections = parser.result()
-        entry = editorial.get(path.relative_to(ROOT).as_posix(), {})
         excerpt = entry.get('summary') or sections[0]['text'][:110]
         a = {'title': title, 'topic': topic, 'topic_id': topic_id, 'url': url, 'minutes': minutes, 'excerpt': excerpt, 'sections': sections}
         a['category'] = entry.get('category', {'ascend': '部署实践', 'fundamentals': '基础原理'}.get(topic_id, '推理工程'))
