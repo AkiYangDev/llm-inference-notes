@@ -61,7 +61,7 @@
       {
         "path": "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md",
         "label": "PR #39871 · Attention 并行宽度",
-        "description": "从一个日志修复学 tp_size、attn_tp_size、Rank / Group 与 Runtime Derivation"
+        "description": "从错误日志追到 Runtime Derivation、Single Source of Truth 与 Maintainer Review Questions"
       },
       {
         "path": "docs/pr-reviews/sglang-pr-39120-tensor-view-storage-cache.md",

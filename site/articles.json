@@ -310,14 +310,14 @@
     "topic": "fundamentals"
   },
   "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md": {
-    "summary": "从 SGLang PR #39871 的一条错误日志出发，解释 TP16 为什么在 DP Attention 下可以派生为 AttnTP8，并把配置值、运行时派生值、Rank / Group、Single Source of Truth 与可观测性连成一条完整工程链路。",
+    "summary": "用 Maintainer 视角重读 SGLang PR #39871：从 TP16/DP2 却打印 AttnTP16 的错误日志出发，追踪 parallel width 的前置设计背景、Runtime Derivation、Impact/Validation Surface，并提炼 Configured Value 与 Derived Runtime Value 的 Review Pattern。",
     "category": "PR 精读",
     "tags": [
       "SGLang",
       "PR 精读",
       "DP Attention",
-      "TP/DP/CP",
-      "Rank / Group"
+      "Runtime Derivation",
+      "Observability"
     ],
     "topic": "pr-reviews"
   },
