@@ -1,3 +1,5 @@
+import {rankSearchResults} from './search.mjs';
+function safeFragment(hash) { try { return decodeURIComponent(hash.slice(1)); } catch { return hash.slice(1); } }
 const base = new URL('../', import.meta.url);
 const $ = selector => document.querySelector(selector);
 const theme = $('.theme-toggle');
@@ -13,11 +15,18 @@ media.addEventListener('change', event => { try { if (localStorage.getItem('aki-
 const search = $('#search-dialog'), input = $('#search-input'), results = $('#search-results');
 let indexPromise, searchRevision = 0, searchTimer;
 function highlight(node, value, query) {
-  if (!query) { node.textContent = value; return; }
-  let cursor = 0, at;
-  const lower = value.toLowerCase(), needle = query.toLowerCase();
-  while ((at = lower.indexOf(needle, cursor)) !== -1) { node.append(document.createTextNode(value.slice(cursor, at))); const mark = document.createElement('mark'); mark.textContent = value.slice(at, at + query.length); node.append(mark); cursor = at + query.length; }
-  node.append(document.createTextNode(value.slice(cursor)));
+  const terms = [...new Set(query.trim().toLowerCase().split(/\s+/).filter(Boolean))];
+  if (!terms.length) { node.textContent = value; return; }
+  const lower = value.toLowerCase();
+  let cursor = 0;
+  while (cursor < value.length) {
+    const hits = terms.map(term => ({term, at: lower.indexOf(term, cursor)})).filter(hit => hit.at >= 0).sort((a,b) => a.at - b.at || b.term.length - a.term.length);
+    if (!hits.length) { node.append(document.createTextNode(value.slice(cursor))); break; }
+    const {term, at} = hits[0];
+    node.append(document.createTextNode(value.slice(cursor, at)));
+    const mark = document.createElement('mark'); mark.textContent = value.slice(at, at + term.length); node.append(mark);
+    cursor = at + term.length;
+  }
 }
 async function searchArticles() {
   const revision = ++searchRevision, query = input.value.trim(), needle = query.toLowerCase();
@@ -25,23 +34,19 @@ async function searchArticles() {
     if (!indexPromise) indexPromise = fetch(new URL('search.json', base), {cache:'no-cache'}).then(r => { if (!r.ok) throw Error(); return r.json(); }).catch(error => { indexPromise = null; throw error; });
     const articles = await indexPromise;
     if (revision !== searchRevision) return;
-    const found = [];
-    for (const article of articles) {
-      if (!needle || article.title.toLowerCase().includes(needle) || article.topic.toLowerCase().includes(needle) || (article.tags || []).some(tag => tag.toLowerCase().includes(needle))) found.push({article, heading:'', text:article.excerpt, anchor:'', score:3});
-      if (needle) for (const section of article.sections) { const headingMatch = section.heading.toLowerCase().includes(needle); if (headingMatch || section.text.toLowerCase().includes(needle)) found.push({article, ...section, score:headingMatch ? 2 : 1}); }
-    }
-    found.sort((a,b) => b.score - a.score);
+    const found = rankSearchResults(articles, query);
     results.replaceChildren();
     if (!found.length) {
       const empty = document.createElement('div'); empty.className = 'search-empty';
       const mascot = document.createElement('span'); mascot.className = 'mascot mascot-lost'; mascot.setAttribute('aria-hidden', 'true');
       const message = document.createElement('p'); message.textContent = '还没有找到相关内容，换一个关键词试试。'; empty.append(mascot, message); results.append(empty); return;
     }
+    const count = document.createElement('p'); count.className = 'search-count'; count.textContent = `找到 ${found.length} 篇内容${found.length > 15 ? '，显示前 15 篇；可增加关键词缩小范围' : ''}`; results.append(count);
     for (const result of found.slice(0, 15)) {
       const link = document.createElement('a'); link.href = result.article.url + (result.anchor ? '#' + encodeURIComponent(result.anchor) : ''); link.className = 'search-result';
       const title = document.createElement('strong'); highlight(title, result.article.title, query); link.append(title); const type = document.createElement('span'); type.className = 'result-heading'; type.textContent = result.article.kind === 'skill' ? 'Skill · 介绍与使用' : '文章 · ' + result.article.topic; link.append(type);
       if (result.heading) { const heading = document.createElement('span'); heading.className = 'result-heading'; highlight(heading, result.heading + ' ↗', query); link.append(heading); }
-      const excerpt = document.createElement('span'); excerpt.className = 'result-excerpt'; const pos = result.text.toLowerCase().indexOf(needle); const start = Math.max(0, pos - 28); const snippet = (start ? '…' : '') + result.text.slice(start, start + 130) + (result.text.length > start + 130 ? '…' : ''); highlight(excerpt, snippet, query); link.append(excerpt);
+      const excerpt = document.createElement('span'); excerpt.className = 'result-excerpt'; const positions = needle.split(/\s+/).filter(Boolean).map(term => result.text.toLowerCase().indexOf(term)).filter(at => at >= 0); const pos = positions.length ? Math.min(...positions) : 0; const start = Math.max(0, pos - 28); const snippet = (start ? '…' : '') + result.text.slice(start, start + 130) + (result.text.length > start + 130 ? '…' : ''); highlight(excerpt, snippet, query); link.append(excerpt);
       link.addEventListener('click', () => search.close()); results.append(link);
     }
   } catch { if (revision === searchRevision) results.textContent = '搜索暂时无法加载，请稍后重试，或从文章目录浏览。'; }
@@ -87,7 +92,7 @@ if ($('.prose')) {
         } while (pending);
         rendering = false;
         // Re-align deep links after diagrams change the document height.
-        if (location.hash && !updateDiagrams.aligned) { updateDiagrams.aligned = true; requestAnimationFrame(() => requestAnimationFrame(() => { const target = document.getElementById(decodeURIComponent(location.hash.slice(1))); if (target) window.scrollTo({top:window.scrollY + target.getBoundingClientRect().top - $('.header').getBoundingClientRect().height - 24, behavior:'instant'}); })); }
+        if (location.hash && !updateDiagrams.aligned) { updateDiagrams.aligned = true; requestAnimationFrame(() => requestAnimationFrame(() => { const target = document.getElementById(safeFragment(location.hash)); if (target) window.scrollTo({top:window.scrollY + target.getBoundingClientRect().top - $('.header').getBoundingClientRect().height - 24, behavior:'instant'}); })); }
       };
       await updateDiagrams();
       for (const {node} of diagrams) { const button = document.createElement('button'); button.textContent = '放大查看'; button.className = 'expand-diagram'; button.addEventListener('click', () => { const svg = node.querySelector('svg'); if (!svg) return; $('#diagram-view').replaceChildren(svg.cloneNode(true)); $('#diagram-dialog').showModal(); zoom = 1; applyZoom(); }); node.parentElement.append(button); }
@@ -245,3 +250,16 @@ if ('IntersectionObserver' in window && !arrivalPreference.matches) {
   });
 }
 
+
+// Load the formula renderer only on pages that contain display mathematics.
+if (document.querySelector('.math-block')) {
+  (async () => {
+    try {
+      const {default: katex} = await import('https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.mjs');
+      const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css'; document.head.append(css);
+      document.querySelectorAll('.math-block').forEach(node => {
+        katex.render(node.textContent, node, {displayMode:true, throwOnError:false, trust:false, output:'htmlAndMathml'});
+      });
+    } catch { /* Preserve readable TeX if the CDN is unavailable. */ }
+  })();
+}

@@ -68,7 +68,7 @@ Next Draft State
 
 ---
 
-# 一、先定义清楚：一次 DSpark Step 的源码边界
+## 一、先定义清楚：一次 DSpark Step 的源码边界
 
 当前 [DSparkWorkerV2](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py) 的 Decode 主线可以抽象成：
 
@@ -125,7 +125,7 @@ End-to-End Step Wall Time
 
 ---
 
-# 二、Strict Review ①：draft_gpu_ms / target_verify_gpu_ms 在 Ascend 上的真实计时语义
+## 二、Strict Review ①：draft_gpu_ms / target_verify_gpu_ms 在 Ascend 上的真实计时语义
 
 当前 DSpark 阶段计时代码位于：
 
@@ -152,7 +152,7 @@ elapsed_ms = start.elapsed_time(end)
 
 问题是：这是 Ascend 910C，为什么仍然写 torch.cuda.Event？
 
-## 2.1 NPU 文本路径会加载 transfer_to_npu
+### 2.1 NPU 文本路径会加载 transfer_to_npu
 
 SGLang NPU 初始化在：
 
@@ -176,7 +176,7 @@ Ascend PyTorch 的 [transfer_to_npu.py](https://github.com/Ascend/pytorch/blob/7
 
 因此在本文讨论的标准 SGLang NPU 文本路径中，DSpark observability 写出的 torch.cuda.Event，运行时语义实际上是 NPU Event。
 
-## 2.2 Event elapsed 不是所有 Kernel duration 的求和
+### 2.2 Event elapsed 不是所有 Kernel duration 的求和
 
 两个 Event 都在调用 record() 时记录到当前执行流。
 
@@ -217,7 +217,7 @@ Draft End Event ◄────────────────────�
 
 > **源码阶段定义下的 current-stream device elapsed anchor。**
 
-## 2.3 end.synchronize() 不在 Draft → Verify 边界立即发生
+### 2.3 end.synchronize() 不在 Draft → Verify 边界立即发生
 
 另一个必须核清的问题是 end.synchronize() 会不会强制 Draft 与 Verify 串行。
 
@@ -229,7 +229,7 @@ Draft End Event ◄────────────────────�
 
 不过开启详细 observability 仍然有测量成本，所以正式 benchmark 应区分“常规运行结果”和“详细 Profile 结果”。
 
-## 2.4 如何正确使用三个 GPU 时间
+### 2.4 如何正确使用三个 GPU 时间
 
 当前最有用的是同时记录：
 
@@ -259,7 +259,7 @@ Accept / Finalize / TP Sync / Commit
 
 ---
 
-# 三、Strict Review ②：当前 910C 不会把 Accept / Commit folded 进 Target Verify Graph
+## 三、Strict Review ②：当前 910C 不会把 Accept / Commit folded 进 Target Verify Graph
 
 这是本轮 Review 中最重要的修正。
 
@@ -275,7 +275,7 @@ Accept / Finalize / TP Sync / Commit
 
 > **NPU 上它会不会被创建？**
 
-## 3.1 创建 guard 明确要求 is_cuda()
+### 3.1 创建 guard 明确要求 is_cuda()
 
 回到：
 
@@ -300,7 +300,7 @@ SGLang 的 is_cuda() 要求真实 CUDA availability；Ascend NPU 初始化又重
 
 > **Ascend 910C 不会构造 DsparkVerifyEpilogue。**
 
-## 3.2 于是 folded_accept / folded_commit 在 NPU 上都是 False
+### 3.2 于是 folded_accept / folded_commit 在 NPU 上都是 False
 
 Decode 里 fold_eligible 的第一个条件就是：
 
@@ -365,7 +365,7 @@ KV / hidden commit
 
 而不是继续把所有时间归到 Target Verify Forward。
 
-## 3.3 CUDA folded path只能作为对照
+### 3.3 CUDA folded path只能作为对照
 
 在 CUDA 支持路径上，folded Accept 还要求 proposal folded、greedy sampling、没有额外 logits adjustments、没有 simulate_acc_len、没有 grammar、Graph 可运行，并且 verify mode 满足 compact / static 条件。
 
@@ -377,7 +377,7 @@ folded Commit 还需要 epilogue.folds_commit 成立。
 
 ---
 
-# 四、Strict Review ③：DeepSeek-V4 TARGET_VERIFY 当前绕开 graph.update(actual_seq_kvlen)
+## 四、Strict Review ③：DeepSeek-V4 TARGET_VERIFY 当前绕开 graph.update(actual_seq_kvlen)
 
 当前：
 
@@ -397,7 +397,7 @@ actual_seq_kvlen
 
 对 DeepSeek-V4 来说，这个结论是错的。
 
-## 4.1 Generic NPU Graph 路径确实会同步等待 update
+### 4.1 Generic NPU Graph 路径确实会同步等待 update
 
 先看：
 
@@ -429,7 +429,7 @@ graph.replay
 
 NPUGraph.update 是 Replay 的真实 Host-side prerequisite，理论上可以形成可见的 pre-replay gap。
 
-## 4.2 DeepSeek-V4 被明确排除
+### 4.2 DeepSeek-V4 被明确排除
 
 但 NPUGraphRunner.execute() 最后的实际分支是：
 
@@ -461,7 +461,7 @@ replay_with_input_update(...)
 
 不能把 Replay 前的 Host gap 归因于 graph.update(actual_seq_kvlen)，因为当前路径根本没有执行它。
 
-## 4.3 DSV4 的动态 KV / Query metadata走自己的 backend
+### 4.3 DSV4 的动态 KV / Query metadata走自己的 backend
 
 这并不意味着 DSV4 Graph 使用固定 capture-time 长度。
 
@@ -497,7 +497,7 @@ NPUGraph.update(actual_seq_kvlen)
 replay
 ~~~
 
-## 4.4 如果 DSV4 Replay 前有 Host gap，应该查什么
+### 4.4 如果 DSV4 Replay 前有 Host gap，应该查什么
 
 建议按顺序看：
 
@@ -523,7 +523,7 @@ replay
 
 ---
 
-# 五、Strict Review ④：DeepEP async_finish / recv_hook 到底能隐藏哪一段通信
+## 五、Strict Review ④：DeepEP async_finish / recv_hook 到底能隐藏哪一段通信
 
 通信 overlap 是最容易把“API 有 async”误写成“性能已经 overlap”的地方。
 
@@ -531,7 +531,7 @@ replay
 
 > **async_finish=True 或 return_recv_hook=True 只说明 Runtime 把“发起通信”和“等待结果可消费”解耦了。是否形成性能收益，取决于两者之间有没有独立的有用工作。**
 
-## 5.1 Ascend + ZBAL 仍复用同一 Dispatcher 状态机
+### 5.1 Ascend + ZBAL 仍复用同一 Dispatcher 状态机
 
 当前：
 
@@ -559,7 +559,7 @@ DeepEP Buffer or ZBAL Buffer
 Ascend communication implementation
 ~~~
 
-## 5.2 deepep-mode auto 在 Decode / TARGET_VERIFY 解析成 low_latency
+### 5.2 deepep-mode auto 在 Decode / TARGET_VERIFY 解析成 low_latency
 
 当前：
 
@@ -584,7 +584,7 @@ else:
 
 这意味着分析 DSpark Verify 时，更应该理解 low-latency recv-hook 语义。
 
-## 5.3 Normal Mode：async_finish主要把等待变成 Stream dependency
+### 5.3 Normal Mode：async_finish主要把等待变成 Stream dependency
 
 Normal path 中，dispatch_a 首先捕获 previous_event；dispatch_b 才真正执行 get_dispatch_layout / buffer.dispatch，并在 async_finish 下调用：
 
@@ -610,7 +610,7 @@ Dispatch 与自己的 Expert GEMM 无依赖并发
 
 同一批 Token 的 Expert GEMM 必须消费 Dispatch 后的 recv data，这个数据依赖无法凭 async flag 消失。
 
-## 5.4 Low-Latency Mode：recv_hook真正创造“发起 → 消费”的窗口
+### 5.4 Low-Latency Mode：recv_hook真正创造“发起 → 消费”的窗口
 
 low-latency path 中当前 SGLang 传入 return_recv_hook=True。
 
@@ -647,7 +647,7 @@ Combine 同理。
 
 > **把同步点向真正消费数据的位置推迟。**
 
-## 5.5 但当前 DeepSeek-V4 Decode / TARGET_VERIFY 没有 TBO
+### 5.5 但当前 DeepSeek-V4 Decode / TARGET_VERIFY 没有 TBO
 
 Two-Batch Overlap 最适合利用这种 A/B 分段：
 
@@ -685,19 +685,19 @@ DECODE / TARGET_VERIFY
 
 这条实现不存在。
 
-## 5.6 当前 910C 仍可能出现哪些真实 overlap
+### 5.6 当前 910C 仍可能出现哪些真实 overlap
 
 仍然有几类，但必须由 Timeline 证明。
 
-### 独立 Side Stream Work
+#### 独立 Side Stream Work
 
 通信在独立 Stream 飞行期间，如果其他 Stream 已经有与 recv data 无依赖的工作，可以形成真实 overlap。
 
-### Shared Expert / Routed Expert overlap
+#### Shared Expert / Routed Expert overlap
 
 DeepSeek MoE 还有 shared expert side-stream 等独立优化。这可能覆盖部分通信，但它和 TBO / recv_hook 不是同一个机制。
 
-### Low-latency Combine overlap_args
+#### Low-latency Combine overlap_args
 
 Combine 路径支持额外 overlap stream 协调；只有上层实际配置并触发时才有意义。
 
@@ -717,7 +717,7 @@ T_comm_exposed
 
 ---
 
-# 六、四点 Review 后，910C 的 DSpark Timeline 应该重新画成什么样
+## 六、四点 Review 后，910C 的 DSpark Timeline 应该重新画成什么样
 
 当前更合理的时间线是：
 
@@ -766,7 +766,7 @@ Host / Scheduler
 
 ---
 
-# 七、第一层采集：先用 DSpark 自带 Observability
+## 七、第一层采集：先用 DSpark 自带 Observability
 
 真正做实验时，不建议第一步就录几十秒 msprof。
 
@@ -837,7 +837,7 @@ Target Verify GPU
 
 在当前 Ascend 路径中尤其有价值，因为我们已经确认 Accept / Commit 位于 Target Verify segment 之外。
 
-## step_cpu_ms 不是 NPU Event 时间
+### step_cpu_ms 不是 NPU Event 时间
 
 step_cpu_ms 来自 Host monotonic clock 的 step 间隔。
 
@@ -861,7 +861,7 @@ Observability overhead
 
 ---
 
-# 八、第二层采集：SGLang Ascend Profiler 抓稳定 Decode Window
+## 八、第二层采集：SGLang Ascend Profiler 抓稳定 Decode Window
 
 SGLang 当前 Ascend Profiling 入口：
 
@@ -891,7 +891,7 @@ curl -X POST http://127.0.0.1:30000/start_profile \
 
 Ascend 环境仍使用 CPU / GPU 这个 Profiler Activity 表达，是因为 torch_npu compatibility patch 会把对应 CUDA profiler activity 映射到 NPU activity。
 
-## 为什么 detailed_annotations 很重要
+### 为什么 detailed_annotations 很重要
 
 Target Verify 的 workload 不能只用 BS 表示。
 
@@ -910,7 +910,7 @@ N_KV
 
 ---
 
-# 九、第三层采集：msprof / MindStudio 看真正 Critical Path
+## 九、第三层采集：msprof / MindStudio 看真正 Critical Path
 
 SGLang internal record 回答：
 
@@ -924,15 +924,15 @@ Verify 慢？
 
 建议顺序如下。
 
-## 9.1 先定位 Step Wall Window
+### 9.1 先定位 Step Wall Window
 
 先找稳定的 Step N / N+1 / N+2，不要一上来做 Operator Ranking。
 
-## 9.2 用 forward_ct / BS / verify tokens 对齐 DSpark record
+### 9.2 用 forward_ct / BS / verify tokens 对齐 DSpark record
 
 这样 Timeline 中的某一个异常 Step 才有 workload context。
 
-## 9.3 重点看 Target Verify 后面的 eager tail
+### 9.3 重点看 Target Verify 后面的 eager tail
 
 当前 NPU Accept / Commit 不 folded，所以：
 
@@ -946,13 +946,13 @@ Accept / Sync / Commit tail
 
 如果 Post-Verify Proxy 很大，就优先从这里找。
 
-## 9.4 Replay 前有 Host gap时，不要先找 graph.update
+### 9.4 Replay 前有 Host gap时，不要先找 graph.update
 
 DSV4 当前绕开 generic graph.update 分支。
 
 先检查 batch、buffer、metadata、shape/bucket 和 replay launch。
 
-## 9.5 DeepEP 看“等了多久”，不只看“通信跑了多久”
+### 9.5 DeepEP 看“等了多久”，不只看“通信跑了多久”
 
 真正应该标：
 
@@ -970,7 +970,7 @@ hook / wait
 
 ---
 
-# 十、把性能模型从 Kernel Ranking 升级成 Effective Progress
+## 十、把性能模型从 Kernel Ranking 升级成 Effective Progress
 
 经过严格 Review 后，更合适的模型是：
 
@@ -1024,7 +1024,7 @@ Commit Cost ↑
 
 ---
 
-# 十一、建议的第一轮 A/B 实验
+## 十一、建议的第一轮 A/B 实验
 
 | 实验 | 控制变量 | 主要观察 |
 | --- | --- | --- |
@@ -1053,7 +1053,7 @@ Profiler config
 
 ---
 
-# 十二、一张最终检查表
+## 十二、一张最终检查表
 
 | Timeline 现象 | 第一检查点 | 不要过早下的结论 |
 | --- | --- | --- |

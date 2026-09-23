@@ -228,7 +228,7 @@ v0.2 的 PR Reviewer 会先问一个以前容易忽略的问题：**这个规则
 
 在 #39871 之前约两周，SGLang 合入了 [PR #38113](https://github.com/sgl-project/sglang/pull/38113)。那次配置系统整理明确强调：`attn_tp_size` 等 parallel quotients 是由 configured leaves 派生的值，相关 arithmetic 应该有统一来源，而不是让各个消费者各写一份。
 
-#38113 不是本文能够证明的“Bug introducing PR”。我没有找到可靠证据说明错误 warning 就是由它引入；因此更准确的 History Chain 是：
+PR #38113 不是本文能够证明的“Bug introducing PR”。我没有找到可靠证据说明错误 warning 就是由它引入；因此更准确的 History Chain 是：
 
 ```text
 #38113

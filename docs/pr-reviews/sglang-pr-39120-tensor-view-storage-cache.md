@@ -487,13 +487,13 @@ logical view
 
 **第二层：Memory Accounting 必须和 Ownership / Lifetime 对齐。**
 
-#39871 学到的是：
+PR #39871 学到的是：
 
 ```text
 Configured Value ≠ Derived Runtime Value
 ```
 
-#39120 学到的是：
+PR #39120 学到的是：
 
 ```text
 Logical Tensor Payload ≠ Physical Retained Storage

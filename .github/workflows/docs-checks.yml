@@ -20,3 +20,17 @@ jobs:
           persist-credentials: false
       - name: Check documentation
         run: python3 scripts/check_docs.py --strict-style
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r site/requirements.txt
+      - name: Build and validate reading site
+        run: |
+          python3 scripts/check_math.py
+          python3 site/build.py
+          python3 scripts/check_site.py
+          node scripts/check_search.mjs
+          node --input-type=module --check < site/assets/app.js

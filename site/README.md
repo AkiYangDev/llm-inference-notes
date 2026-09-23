@@ -11,13 +11,15 @@ python3 -m pip install -r site/requirements.txt
 python3 site/build.py
 ```
 
-生成目录为 `_site/`。站点基础路径为 `/llm-inference-notes/`，部署路径变化时需要同步调整 `site/build.py` 的 BASE。\n\n首页高质量看板图由 `site/asset-payloads/whale-hero-v2/` 的文本分片在构建时还原为单张 `whale-hero-v2.webp`；`site/build.py` 会校验长度和 SHA-256，分片缺失或损坏会让构建直接失败。
+生成目录为 `_site/`。站点基础路径为 `/llm-inference-notes/`，部署路径变化时需要同步调整 `site/build.py` 的 BASE。
+
+首页高质量看板图由 `site/asset-payloads/whale-hero-v2/` 的文本分片在构建时还原为单张 `whale-hero-v2.webp`；`site/build.py` 会校验长度和 SHA-256，分片缺失或损坏会让构建直接失败。
 
 ## 界面资源
 
 配色与响应式布局位于 `site/assets/style.css`，搜索、主题切换、复制与图表放大位于 `site/assets/app.js`。搜索索引从文章正文生成。
 
-Mermaid 与代码高亮使用固定版本的 jsDelivr 模块；网络不可用时保留可阅读正文和源码。字体加载失败时使用系统字体。网站没有访问统计或跟踪脚本；本地存储用于主题偏好与当前浏览器的阅读进度。
+Mermaid、KaTeX 公式与代码高亮按需使用固定版本的 jsDelivr 模块；网络不可用时保留可阅读正文和源码。字体加载失败时使用系统字体。网站没有访问统计或跟踪脚本；本地存储用于主题偏好与当前浏览器的阅读进度。
 
 角色图片为用户指定的 DeepSeek 鲸鱼娘主题插画，原始链接见 [素材来源](assets/SOURCES.md)。本站为独立个人技术站，不代表 DeepSeek 官方。
 
@@ -34,10 +36,10 @@ Mermaid 与代码高亮使用固定版本的 jsDelivr 模块；网络不可用�
 
 每篇公开文章都在 `site/articles.json` 中声明一个 `role`，用于区分文章在增长与阅读路径中的主要职责，而不是替代专题分类。
 
-- `entry` / 流量入口：回答更广泛的搜索问题，降低第一次进入 AI Infra / SGLang 的阅读门槛。
+- `entry` / 入门：回答更广泛的搜索问题，降低第一次进入 AI Infra / SGLang 的阅读门槛。
 - `advanced` / 进阶：从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
-- `deep` / 深水：源码、性能、投机解码、Ascend Profiling 与 PR 级工程细节。
-- `reference` / Reference：适合反复查阅的名词表、Rank / Group、Collective 与知识地图。
+- `deep` / 深入研究：源码、性能、投机解码、Ascend Profiling 与 PR 级工程细节。
+- `reference` / 速查：适合反复查阅的名词表、Rank / Group、Collective 与知识地图。
 
 `/articles/` 默认按这四层组织，并生成 `/levels/entry/`、`/levels/advanced/`、`/levels/deep/`、`/levels/reference/` 四个独立归档页。首页同时提供层级入口；专题、标签和系列阅读仍保留，四层结构与原有信息架构并行存在。
 
@@ -96,3 +98,24 @@ SGLang 系列顺序为请求执行全链路、Scheduler、ModelRunner、Attentio
 首页采用雾白、紫蓝与蓝白鲸鱼娘立绘，最新文章保持自动生成；完整阅读地图位于 `/series/`，首页用简洁入口连接。手机端首屏上下排列，正文延续独立阅读排版。
 
 `whale-hero-v2.webp` 为首页宽幅看板图：桌面端整幅铺入 Hero，并在左侧叠加阅读友好的渐变；移动端使用同一资源做右侧焦点裁切，避免再下载一张移动端大图。`whale-states.webp` 仍为 Q 版四宫格，CSS 的 `.mascot-*` 用于阅读入口、搜索、完成操作与 404；`whale-editor.webp` 保留为此前首屏版本的历史素材。素材来源页区分角色设计与 AI 延展素材。减少动态效果设置关闭动画与过渡。
+
+## 阅读体验与回归检查
+
+文章目录直接展示文章；全量标签默认折叠，阅读地图使用单独入口。手机导航保留文章、阅读地图、Skills、搜索与主题切换。对外层级名称为「入门 / 进阶 / 深入研究 / 速查」，内部 role 标识和已发布 URL 保持稳定。
+
+搜索支持空格分隔的多个关键词，每篇内容只显示一个最佳结果；标题优先，其次章节标题，再次正文。章节命中继续跳到具体章节，结果数按文章和 Skill 数量统计。
+
+独占行的 `$$` 和 `\[` / `\]` 公式块在 Markdown 解析前保留原始 TeX；代码围栏里的示例不参与公式渲染。KaTeX 加载失败时保留公式源码。旧文章地址的脚本跳转保留查询参数与章节锚点，无 JavaScript 时仍提供跳转和手动链接。
+
+PR 检查与正式发布均运行文档、站点构建、站内锚点与静态资源、数学公式、搜索排序及 JavaScript 语法检查：
+
+```bash
+python3 scripts/check_docs.py
+python3 scripts/check_math.py
+python3 site/build.py
+python3 scripts/check_site.py
+node scripts/check_search.mjs
+node --input-type=module --check < site/assets/app.js
+```
+
+这些检查不能代替真实浏览器的视觉、交互、CDN 可达性与 Search Console 收录验证。

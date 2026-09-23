@@ -18,9 +18,16 @@ REDIRECT_INDEXES = {
 
 class Page(HTMLParser):
     def __init__(self, text):
-        super().__init__(); self.meta = {}; self.links = []; self.schema = ''; self.in_schema = False; self.feed(text)
+        super().__init__(); self.meta = {}; self.links = []; self.schema = ''; self.in_schema = False
+        self.ids = set(); self.assets = []; self.h1_count = 0
+        self.feed(text)
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if 'id' in a:
+            assert a['id'] not in self.ids, ('Duplicate HTML id', a['id'])
+            self.ids.add(a['id'])
+        if tag == 'h1': self.h1_count += 1
+        if tag in ('img', 'script') and a.get('src'): self.assets.append(a['src'])
         if tag == 'meta': self.meta[a.get('name', a.get('property'))] = a.get('content', '')
         if tag in ('a', 'link') and 'href' in a: self.links.append(a)
         if tag == 'script' and a.get('type') == 'application/ld+json': self.in_schema = True
@@ -31,10 +38,11 @@ class Page(HTMLParser):
 
 urls = {node.text for node in ET.parse(ROOT / 'sitemap.xml').findall('.//{*}loc')}
 pages = list(ROOT.rglob('*.html'))
+parsed_pages = {path: Page(path.read_text()) for path in pages}
 for path in pages:
     relative = path.relative_to(ROOT).as_posix()
     route = relative.removesuffix('index.html')
-    page = Page(path.read_text())
+    page = parsed_pages[path]
     canonical = [a['href'] for a in page.links if a.get('rel') == 'canonical']
     assert page.meta.get('description'), (relative, 'description')
 
@@ -45,7 +53,11 @@ for path in pages:
         assert 'noindex' in page.meta.get('robots', ''), (relative, 'redirect robots')
         assert target_url in urls, (relative, 'redirect target missing from sitemap')
     else:
+        assert page.h1_count == 1, (relative, 'Expected one main heading')
         assert canonical == [ORIGIN + BASE + route], (relative, 'canonical')
+        assert page.meta.get('og:url') == canonical[0], (relative, 'Open Graph URL')
+        assert page.meta.get('og:title') and page.meta.get('og:description'), (relative, 'Open Graph text')
+        assert page.meta.get('og:image') == page.meta.get('twitter:image'), (relative, 'Social cover')
         schema = json.loads(page.schema)
         assert schema['url'] == canonical[0]
         is_tag_archive = relative.startswith('tags/')
@@ -56,12 +68,19 @@ for path in pages:
         if relative.startswith('articles/') and relative != 'articles/index.html':
             assert schema['@type'] == 'BlogPosting'
 
-    for a in page.links:
-        url = urlsplit(a['href'])
-        if not url.netloc and url.path.startswith(BASE):
+    for href in [a['href'] for a in page.links] + page.assets + [page.meta.get('og:image', '')]:
+        url = urlsplit(href)
+        if url.netloc and url.netloc != urlsplit(ORIGIN).netloc: continue
+        if url.path.startswith(BASE):
             target = ROOT / unquote(url.path[len(BASE):])
             if url.path.endswith('/'): target /= 'index.html'
-            assert target.exists(), (relative, a['href'])
+        elif not url.path and url.fragment:
+            target = path
+        else:
+            continue
+        assert target.exists(), (relative, href)
+        if url.fragment and target in parsed_pages:
+            assert unquote(url.fragment) in parsed_pages[target].ids, (relative, 'Missing anchor', href)
 
 tag_pages = [p for p in pages if p.relative_to(ROOT).as_posix().startswith('tags/')]
 assert len(urls) == len(pages) - 1 - len(REDIRECT_INDEXES) - len(tag_pages)
