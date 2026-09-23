@@ -54,10 +54,11 @@ def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=Non
 <script type="module" src="{BASE}assets/app.js?v={version}"></script></head><body class="{kind}" id="top">
 <a class="skip" href="#main">跳至正文</a><header class="header"><div class="header-inner">
 <a class="brand" href="{BASE}" aria-label="AkiYang 首页"><span class="brand-icon" aria-hidden="true">A<span>.</span></span><span>AkiYang<span class="brand-caption">推理工程手记</span></span></a>
-<nav aria-label="主导航"><a class="nav-articles" href="{BASE}articles/"{' aria-current="page"' if kind == 'archive-page' else ''}>文章</a><a class="nav-series" href="{BASE}series/"{' aria-current="page"' if kind == 'series-index-page' else ''}>阅读地图</a><a class="nav-skills" href="{BASE}skills/"{' aria-current="page"' if 'skill' in kind else ''}>Skills</a><a class="nav-github" href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章与 Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索</span><kbd>/</kbd></button><button class="theme-toggle icon-button" aria-label="切换深色模式" title="切换深色模式"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button></nav></div></header>
+<nav aria-label="主导航"><a class="nav-home" href="{BASE}"{' aria-current="page"' if kind == 'home' else ''}>首页</a><a class="nav-articles" href="{BASE}articles/"{' aria-current="page"' if kind == 'archive-page' else ''}>文章</a><a class="nav-series" href="{BASE}series/"{' aria-current="page"' if kind == 'series-index-page' else ''}>阅读地图</a><a class="nav-skills" href="{BASE}skills/"{' aria-current="page"' if 'skill' in kind else ''}>Skills</a><a class="nav-github" href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章与 Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索</span><kbd>/</kbd></button><button class="theme-toggle icon-button" aria-label="切换深色模式" title="切换深色模式"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button><button class="menu-toggle" aria-label="打开导航菜单" aria-controls="menu-dialog" hidden>菜单</button></nav></div></header>
 {body}
-<footer class="footer wrap"><a href="{BASE}" class="footer-brand">AkiYang<span>推理工程手记</span></a><div><a href="{BASE}feed.xml">RSS 订阅</a><a href="{BASE}sitemap.xml">站点地图</a><a href="{BASE}credits/">插画来源</a><a href="{REPO}">源代码 ↗</a><span>独立个人站 · 非 DeepSeek 官方</span></div></footer>
-<dialog id="search-dialog" aria-labelledby="search-title"><div class="dialog-top"><h2 id="search-title"><span class="mascot mascot-search" aria-hidden="true"></span>搜索文章与 Skills</h2><button class="close-search icon-button" aria-label="关闭搜索">×</button></div><label for="search-input" class="sr-only">搜索标题、章节或正文</label><input id="search-input" type="search" placeholder="搜索标题、章节或正文…" autocomplete="off"><div id="search-results" aria-live="polite"></div><p class="dialog-hint">↑ ↓ 选择 · Enter 打开 · Esc 关闭</p></dialog>
+<footer class="footer wrap"><a href="{BASE}" class="footer-brand">AkiYang<span>推理工程手记</span></a><div><a href="{BASE}articles/?saved=1">稍后阅读</a><a href="{BASE}feed.xml">RSS 订阅</a><a href="{BASE}sitemap.xml">站点地图</a><a href="{BASE}credits/">插画来源</a><a href="{REPO}">源代码 ↗</a><span>独立个人站 · 非 DeepSeek 官方</span></div></footer>
+<dialog id="menu-dialog" aria-labelledby="menu-title"><div class="dialog-top"><h2 id="menu-title">探索手记</h2><button class="close-menu icon-button" aria-label="关闭导航菜单">×</button></div><nav aria-label="移动端导航"><a href="{BASE}">首页</a><a href="{BASE}articles/">全部文章</a><a href="{BASE}series/">阅读地图</a><a href="{BASE}articles/?saved=1">稍后阅读</a><a href="{BASE}skills/">Skills</a><a href="{BASE}feed.xml">RSS 订阅</a><a href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav></dialog>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="dialog-top"><h2 id="search-title"><span class="mascot mascot-search" aria-hidden="true"></span>搜索文章与 Skills</h2><button class="close-search icon-button" aria-label="关闭搜索">×</button></div><label for="search-input" class="sr-only">搜索标题、章节或正文</label><input id="search-input" type="search" placeholder="搜索标题、章节或正文…" autocomplete="off"><div class="search-suggestions" aria-label="常用搜索"><button data-search-query="SGLang">SGLang</button><button data-search-query="KV Cache">KV Cache</button><button data-search-query="DSpark">DSpark</button><button data-search-query="Ascend 910C">Ascend 910C</button></div><div id="search-results" aria-live="polite"></div><p class="dialog-hint">↑ ↓ 选择 · Enter 打开 · Esc 关闭 · Ctrl / ⌘ K 搜索</p></dialog>
 <dialog id="diagram-dialog" aria-labelledby="diagram-title"><div class="dialog-top"><h2 id="diagram-title">工程图</h2><div class="diagram-controls"><button class="zoom-out icon-button" aria-label="缩小工程图">−</button><button class="zoom-reset" aria-label="工程图适应窗口">适应窗口</button><button class="zoom-in icon-button" aria-label="放大工程图">+</button><button class="close-diagram icon-button" aria-label="关闭工程图">×</button></div></div><div id="diagram-view" tabindex="0" aria-label="工程图，可滚动查看"></div></dialog>
 <div class="toast" role="status" aria-live="polite"></div></body></html>'''
 
@@ -102,7 +103,28 @@ def tag_links(tags):
 
 
 def card(a, number=1):
-    return f'''<article class="article-card"><div class="card-index">{number:02d}<span> / ARTICLE</span></div><div class="card-content"><div class="card-meta"><span class="card-category">{esc(a['role_label'])} · {esc(a['category'])}</span><span>约 {a['minutes']} 分钟阅读</span></div><a class="card-main" href="{a['url']}"><h3>{title_html(a['title'])}</h3><p>{esc(a['excerpt'])}</p><div class="card-bottom"><span>阅读全文</span><span aria-hidden="true">↗</span></div></a><nav class="article-tags" aria-label="文章标签">{tag_links(a['tags'])}</nav></div></article>'''
+    search_text = ' '.join([a['title'], a['excerpt'], a['topic'], *a['tags']])
+    date = a.get('modified', '')
+    stamp = f'<time datetime="{esc(date)}">更新于 {date[:10]}</time>' if date else ''
+    return f'''<article class="article-card" data-url="{a['url']}" data-search="{esc(search_text)}" data-minutes="{a['minutes']}" data-modified="{esc(date)}"><div class="card-content"><div class="card-meta"><span class="card-category">{esc(a['role_label'])} / {esc(a['category'])}</span><span class="read-badge" hidden>已读</span>{bookmark_button(a['url'], a['title'])}</div><a class="card-main" href="{a['url']}"><h3>{title_html(a['title'])}</h3><p>{esc(a['excerpt'])}</p></a><nav class="article-tags" aria-label="文章标签">{tag_links(a['tags'])}</nav><div class="card-bottom"><span>{a['minutes']} 分钟阅读</span>{stamp}<a href="{a['url']}" aria-label="阅读全文：{esc(a['title'])}">阅读全文 <span aria-hidden="true">↗</span></a></div></div></article>'''
+
+
+def bookmark_button(url, title):
+    return f'''<button class="bookmark-button" type="button" data-bookmark="{url}" data-title="{esc(title)}" aria-pressed="false" aria-label="稍后阅读：{esc(title)}" title="稍后阅读" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4Z"/></svg><span>稍后读</span></button>'''
+
+
+def reading_toolbar(url, title):
+    return f'''<div class="reading-toolbar" role="group" aria-label="阅读工具" hidden>{bookmark_button(url, title)}<div class="font-controls"><span>字号</span><button class="font-smaller" aria-label="减小正文字号">A−</button><output class="font-value" aria-live="polite">18</output><button class="font-larger" aria-label="增大正文字号">A+</button></div><button class="focus-toggle" aria-pressed="false">专注阅读</button></div>'''
+
+
+def related_articles(article, articles):
+    def score(other):
+        return 3 * (article['topic_id'] == other['topic_id']) + len(set(article['tags']) & set(other['tags']))
+    candidates = sorted((a for a in articles if a['url'] != article['url'] and score(a)), key=score, reverse=True)[:3]
+    if not candidates:
+        return ''
+    links = ''.join(f'<a href="{a["url"]}"><span>{esc(a["topic"])} · {a["minutes"]} 分钟</span><strong>{esc(a["title"])}</strong></a>' for a in candidates)
+    return f'<section class="related-articles" aria-label="延伸阅读"><h2>接着读</h2><div>{links}</div></section>'
 
 
 def render_document(path, routes):
@@ -286,7 +308,7 @@ def build():
         # editorial topic differs from the physical docs directory.
         slug = path.parent.name + '/' + path.stem
         url = routes[path.resolve()]
-        minutes = max(1, round(len(re.sub(r'```[\s\S]*?```', '', source)) / 650))
+        minutes = max(1, round(len(re.sub(r'(```|~~~)[\s\S]*?\1', '', source)) / 650))
         md, rendered = render_document(path, routes)
         parser = SearchSections()
         parser.feed(rendered)
@@ -311,13 +333,17 @@ def build():
         series_nav = series_navigation(current_series, current_path)
         pager = series_pager(current_series, current_path)
         if current_series:
-            pager = f'<div class="reading-actions"><span class="mascot mascot-complete" aria-hidden="true"></span><button class="reading-complete" data-article-url="{url}" aria-pressed="false">标记为已读</button><a class="text-link" href="{BASE}series/">返回阅读地图 →</a></div>' + pager
+            series_nav = f'<details class="article-series"><summary>系列阅读 · {esc(current_series["title"])}<span>展开篇目</span></summary>{series_nav}</details>'
+        pager = f'<div class="reading-actions"><span class="mascot mascot-complete" aria-hidden="true"></span><button class="reading-complete" data-article-url="{url}" aria-pressed="false">标记为已读</button><a class="text-link" href="{BASE}series/">返回阅读地图 →</a></div>' + pager
         title_parts = title.split('：', 1)
         display_title = title_html(title_parts[0]) + (f'<span class="title-sub">{title_html(title_parts[1])}</span>' if len(title_parts) == 2 else '')
-        body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}articles/">文章</a><span>/</span><a href="{BASE}topics/{topic_id}/">{esc(topic)}</a></nav><header class="article-header"><h1>{display_title}</h1><div class="article-meta"><span>AkiYang</span><span>约 {minutes} 分钟阅读</span><a href="{REPO}/blob/main/{path.relative_to(ROOT).as_posix()}" target="_blank" rel="noopener noreferrer">阅读源码文档 ↗</a><button class="copy-link">复制链接</button></div><nav class="article-tags header-tags" aria-label="文章标签"><a class="content-tag" href="{BASE}levels/{a['role']}/">{esc(a['role_label'])}</a>{tag_links(a["tags"])}</nav>{publication}<div class="resume-reading" hidden><button class="resume-position">继续上次阅读</button><button class="forget-position">清除位置</button><span>位置仅保存在当前浏览器</span></div></header>{series_nav}<details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article>{pager}<div class="article-end"><div><span class="eyebrow">读到这里</span><p>从一条请求，看见整个系统。</p></div><a href="{BASE}articles/" class="text-link">返回文章目录 <span aria-hidden="true">↗</span></a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
+        body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}articles/">文章</a><span>/</span><a href="{BASE}topics/{topic_id}/">{esc(topic)}</a></nav><header class="article-header"><h1>{display_title}</h1><div class="article-meta"><span>AkiYang</span><span>约 {minutes} 分钟阅读</span><a href="{REPO}/blob/main/{path.relative_to(ROOT).as_posix()}" target="_blank" rel="noopener noreferrer">阅读源码文档 ↗</a><button class="copy-link">复制链接</button></div><nav class="article-tags header-tags" aria-label="文章标签"><a class="content-tag" href="{BASE}levels/{a['role']}/">{esc(a['role_label'])}</a>{tag_links(a["tags"])}</nav><details class="source-details"><summary>版本与源码依据</summary>{publication}</details><div class="resume-reading" hidden><button class="resume-position">继续上次阅读</button><button class="forget-position">清除位置</button><span>位置仅保存在当前浏览器</span></div></header>{reading_toolbar(url, title)}{series_nav}<details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article>{pager}<!--related-articles--><div class="article-end"><div><span class="eyebrow">读到这里</span><p>从一条请求，看见整个系统。</p></div><a href="{BASE}articles/" class="text-link">返回文章目录 <span aria-hidden="true">↗</span></a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
         output = OUT / 'articles' / slug / 'index.html'
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(shell(title, body, 'article-page', 'articles/' + slug + '/', excerpt, dates, browser_title=entry.get('seo_title'), meta_description=entry.get('seo_summary', excerpt)), encoding='utf-8')
+    for a in articles:
+        output = OUT / a['url'].removeprefix(BASE) / 'index.html'
+        output.write_text(output.read_text(encoding='utf-8').replace('<!--related-articles-->', related_articles(a, articles)), encoding='utf-8')
     # Preserve legacy article URLs after information-architecture moves.
     # GitHub Pages cannot emit HTTP 301 responses, so old routes are static
     # noindex redirect pages with a canonical link to the new location.
@@ -344,18 +370,17 @@ def build():
     start_article = next((a for a in articles if a['url'] == start_url), articles[0] if articles else None)
     featured_url = start_article['url'] if start_article else BASE + 'articles/'
     latest = sorted(articles, key=lambda a: (a.get('published', ''), a['url']), reverse=True)[:3]
-    cards = ''.join(card(a, i + 1) for i, a in enumerate(latest))
-    picks = []
-    if start_article:
-        picks.append((start_article, '从这里开始'))
-    distributed_pick = next((a for a in articles if 'distributed-parallel' in a['url']), None)
-    if distributed_pick:
-        picks.append((distributed_pick, '理解并行'))
-    recommended = ''.join(f'<a class="recommend-link" href="{a["url"]}"><span>{label}</span><strong>{title_html(a["title"])}</strong><span aria-hidden="true">→</span></a>' for a, label in picks)
+    cards = ''.join(card(a) for a in latest)
     knowledge_map = reading_map(series_list, articles)
-    body = f'''<main id="main"><section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="tiny-line" aria-hidden="true"></span> AI INFRA NOTES</p><h1 id="hero-title">把推理原理，<br><span>写成读得懂的手记。</span></h1><p class="hero-description">DeepSeek · SGLang · Ascend<br>记录推理系统的原理、源码与工程实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">开始阅读 <span aria-hidden="true">↗</span></a><a class="text-link hero-secondary" href="{BASE}series/">阅读地图 <span aria-hidden="true">→</span></a></div><div class="hero-topics"><span>SGLang</span><span>Ascend 910C</span><span>LLM Inference</span></div></div><div class="hero-art hero-scene"><img src="{BASE}assets/whale-hero-v2.webp" alt="蓝发鲸尾女仆站在蓝白科技海洋场景中" width="1000" height="450" fetchpriority="high" decoding="async"></div></section><section id="articles" class="articles-section wrap"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2>最新手记</h2></div><a href="{BASE}articles/" class="text-link">浏览全部 <span aria-hidden="true">↗</span></a></div><div class="article-list home-article-list">{cards}</div><div class="topic-strip"><span>按专题阅读</span>{topic_links}</div><div class="topic-strip"><span>按阅读层级</span>{role_links}</div></section><section class="reading-entry wrap" aria-label="阅读路线"><span class="mascot mascot-reading" aria-hidden="true"></span><div><p class="eyebrow">READING SERIES</p><h2>沿着源码，逐步深入</h2><p>请求执行 · 模型内部 · 分布式并行 · 投机解码</p></div><a class="text-link" href="{BASE}series/">查看完整阅读地图 →</a></section><section class="home-recommended wrap" aria-labelledby="recommended-title"><div class="section-heading"><div><p class="eyebrow">EDITOR’S PICKS</p><h2 id="recommended-title">推荐阅读</h2></div></div><div class="recommend-list">{recommended}</div></section></main>'''
+    topic_tiles = ''.join(f'<a href="{BASE}topics/{t}/"><span>{esc(TOPICS[t])}</span><span>{sum(a["topic_id"] == t for a in articles):02d} 篇 <b aria-hidden="true">↗</b></span></a>' for t in TOPICS if t in topics)
+    routes_preview = ''.join(f'<a class="route-preview" href="{group["url"]}"><span>{len(group["items"]):02d} 篇</span><strong>{esc(group["title"])}</strong><span aria-hidden="true">→</span></a>' for group in series_list[:3])
+    body = f'''<main id="main">
+<section class="hero wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">AI INFRA / ENGINEERING NOTES</p><h1 id="hero-title">大模型推理<span>工程手记。</span></h1><p class="hero-description">SGLang 源码、Ascend 910C 部署<br>与 DeepSeek 推理实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">从基础开始 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">浏览全部文章 →</a></div><div class="hero-stats"><span><strong>{len(articles):02d}</strong> 篇手记</span><span><strong>{len(topics):02d}</strong> 个专题</span><a href="{BASE}feed.xml">RSS 订阅 ↗</a></div></div><div class="hero-art"><img src="{BASE}assets/whale-hero-v2.webp" alt="蓝发鲸尾女仆与蓝白海洋科技场景" width="1000" height="450" fetchpriority="high" decoding="async"></div><span class="hero-caption" aria-hidden="true">FIELD NOTES · SOURCE &amp; SYSTEMS</span></section>
+<div class="home-entry wrap"><a href="{BASE}levels/entry/"><span>01 / START</span><strong>第一次来，从基础开始</strong><span>Token、推理阶段与多卡并行 →</span></a><a href="{BASE}series/"><span>02 / EXPLORE</span><strong>沿着源码，串起系统</strong><span>请求、调度、模型与缓存 →</span></a><a href="{BASE}levels/reference/"><span>03 / REFERENCE</span><strong>遇到概念，随时查阅</strong><span>名词、通信与并行拓扑 →</span></a></div>
+<div class="home-columns wrap"><section class="articles-section" aria-labelledby="latest-title"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2 id="latest-title">最新手记</h2></div><a href="{BASE}articles/" class="text-link">全部 {len(articles)} 篇 ↗</a></div><div class="article-list home-article-list">{cards}</div></section><aside class="home-sidebar" aria-label="阅读入口"><a class="last-reading" data-last-reading hidden><span>继续上次阅读</span><strong></strong><span>回到阅读位置 →</span></a><section class="sidebar-panel"><p class="eyebrow">BROWSE BY TOPIC</p><h2>按专题探索</h2><div class="topic-tiles">{topic_tiles}</div></section><section class="sidebar-panel atlas-teaser"><span class="mascot mascot-reading" aria-hidden="true"></span><p class="eyebrow">THE READING ATLAS</p><h2>把知识连成一条线</h2><p>按推荐顺序阅读已发布系列。</p>{routes_preview}<a class="text-link" href="{BASE}series/">完整阅读地图 →</a></section><a class="saved-entry" href="{BASE}articles/?saved=1">稍后阅读 <span>打开已收藏的文章 →</span></a></aside></div>
+</main>'''
     if skills:
-        skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">METHODS &amp; PRACTICE</p><h2 id="home-skills-title">Skills <span class="count">{len(skills):02d}</span></h2></div><a class="text-link" href="{BASE}skills/">浏览 Skills <span aria-hidden="true">↗</span></a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills[:3])}</div></section>'''
+        skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">TOOLS &amp; METHODS</p><h2 id="home-skills-title">可复用的工程方法</h2></div><a class="text-link" href="{BASE}skills/">全部 Skills ↗</a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills)}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
     series_page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">THE READING ATLAS</p><h1>源码阅读地图</h1><p>从整体请求到模型内部，沿着已发布的文章深入系统。</p></div></div>{knowledge_map}<p class="map-note">这里展示文章的推荐阅读顺序，并非运行时调用图。读完文章后可在文末标记已读。</p></main>'''
     (OUT / 'series').mkdir(exist_ok=True)
@@ -394,22 +419,10 @@ def build():
             for role, spec in CONTENT_ROLES.items()
         )
         tag_filters = ''.join(f'<a href="{BASE}tags/{tag_slug(t)}/"' + (' aria-current="page"' if active_tag == t else '') + f'>{esc(t)}<span>{sum(t in a["tags"] for a in articles)}</span></a>' for t in all_tags)
-        series_overview = f'<p class="archive-series-link"><a class="text-link" href="{BASE}series/">想按顺序阅读？查看阅读地图 →</a></p>' if not active_tag and not active_role else ''
         if not topic_id and not active_tag and not active_role:
-            archive_cards = ''.join(
-                f'<section class="journal-category"><h2 class="category-label">{esc(spec["label"])}</h2>'
-                + ''.join(card(a, i + 1) for i, a in enumerate(selected) if a['role'] == role)
-                + '</section>'
-                for role, spec in CONTENT_ROLES.items()
-            )
-        else:
-            archive_cards = ''.join(
-                f'<section class="journal-category"><h2 class="category-label">{esc(category)}</h2>'
-                + ''.join(card(a, i + 1) for i, a in enumerate(selected) if a['category'] == category)
-                + '</section>'
-                for category in dict.fromkeys(a['category'] for a in selected)
-            )
-        page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">INFERENCE ARCHIVE</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>{esc(description)}</p></div><button class="archive-search">搜索文章 <span aria-hidden="true">↗</span></button></div><nav class="topic-filters" aria-label="筛选专题">{filters}</nav><div class="tag-browser"><span class="filter-label">按阅读层级浏览</span><nav class="tag-filters" aria-label="筛选阅读层级">{role_filters}</nav></div><details class="tag-browser tag-disclosure"{' open' if active_tag else ''}><summary>按内容标签查找 <span>{len(all_tags)} 个标签</span></summary><nav class="tag-filters" aria-label="筛选内容标签">{tag_filters}</nav></details>{series_overview}<div class="archive-list">{archive_cards}</div></main>'''
+            selected.sort(key=lambda a: list(CONTENT_ROLES).index(a['role']))
+        archive_cards = ''.join(card(a) for a in selected)
+        page = f'''<main id="main" class="archive wrap"><div class="archive-heading"><div><p class="eyebrow">THE KNOWLEDGE SHELF</p><h1>{esc(label)}<span class="count">{len(selected):02d}</span></h1><p>{esc(description)}</p></div><a class="text-link" href="{BASE}series/">按顺序阅读 →</a></div><div class="archive-layout"><aside class="archive-sidebar" aria-label="文章分类"><details class="catalog-filters" open><summary>浏览分类<span aria-hidden="true">⌄</span></summary><div class="catalog-filter-body"><span class="filter-label">专题</span><nav class="topic-filters" aria-label="筛选专题">{filters}</nav><span class="filter-label">阅读层级</span><nav class="tag-filters role-filters" aria-label="筛选阅读层级">{role_filters}</nav><details class="tag-disclosure"{' open' if active_tag else ''}><summary>全部标签 <span>{len(all_tags)}</span></summary><nav class="tag-filters" aria-label="筛选内容标签">{tag_filters}</nav></details></div></details><a class="sidebar-map-link" href="{BASE}series/">阅读地图<span>按系列逐步深入 ↗</span></a></aside><section class="archive-results" aria-label="文章列表"><div class="catalog-tools" hidden><label class="catalog-query"><span class="sr-only">筛选当前目录</span><input id="catalog-query" type="search" placeholder="筛选标题、摘要、标签…" autocomplete="off"></label><label class="catalog-sort-label"><span class="sr-only">文章排序</span><select id="catalog-sort"><option value="recommended">推荐顺序</option><option value="updated">最近更新</option><option value="shortest">阅读时间短 → 长</option></select></label><button class="saved-filter" aria-pressed="false">稍后读</button><button class="catalog-reset" aria-label="重置筛选">重置</button></div><div class="catalog-status"><span data-catalog-count aria-live="polite">{len(selected)} 篇文章</span><button class="archive-search" hidden>搜索全文 ↗</button></div><div class="archive-list">{archive_cards}</div><div class="catalog-empty" hidden><span class="mascot mascot-lost" aria-hidden="true"></span><h2>没有找到符合条件的文章</h2><p>换个关键词，或清除“稍后读”筛选。收藏仅保存在当前浏览器。</p><button class="catalog-clear">清除筛选</button><a href="{BASE}articles/">查看全部文章</a></div></section></div></main>'''
         dest = OUT / route / 'index.html'
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(shell(label, page, 'archive-page', route, description, indexable=not bool(active_tag)), encoding='utf-8')
@@ -425,4 +438,3 @@ def build():
 
 if __name__ == '__main__':
     build()
-

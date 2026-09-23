@@ -70,7 +70,7 @@ for (const link of document.querySelectorAll('.mobile-toc a')) link.addEventList
 if ($('.prose')) {
   const progress = $('.reading-progress'), headings = [...document.querySelectorAll('.prose h2, .prose h3')], links = [...document.querySelectorAll('.toc a')];
   let scheduled = false;
-  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (heading.getBoundingClientRect().top < $('.header').getBoundingClientRect().height + 55) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
+  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (heading.getBoundingClientRect().top < $('.header').getBoundingClientRect().height + 110) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
   window.addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, {passive:true}); window.addEventListener('resize', update); update();
   // Highlighting and diagrams load independently; failure of one does not delay the other.
   (async () => { try { const {default:hljs} = await import('https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js'); const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/styles/github-dark.min.css'; document.head.append(css); document.querySelectorAll('.prose pre code').forEach(c => hljs.highlightElement(c)); } catch {} })();
@@ -112,6 +112,7 @@ const readingKey = 'aki-reading-v1';
 let readingState = {};
 try { const value = JSON.parse(localStorage.getItem(readingKey) || '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) readingState = value; } catch {}
 function refreshReading() {
+  document.querySelectorAll('.article-card[data-url]').forEach(card => { const badge = card.querySelector('.read-badge'); if (badge) badge.hidden = readingState[card.dataset.url] !== true; });
   document.querySelectorAll('[data-reading-group]').forEach(group => {
     const items = [...group.querySelectorAll('[data-reading-item]')];
     let count = 0;
@@ -184,13 +185,13 @@ window.addEventListener('hashchange', highlightCodeLine);
 
 // Deliberate shortcuts: no navigation while typing, selecting, or using dialogs.
 document.addEventListener('keydown', event => {
-  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat || !['ArrowLeft','ArrowRight'].includes(event.key)) return;
+  if (!event.altKey || event.ctrlKey || event.metaKey || !event.shiftKey || event.repeat || !['ArrowLeft','ArrowRight'].includes(event.key)) return;
   const active = document.activeElement;
   if (/INPUT|TEXTAREA|SELECT/.test(active.tagName) || active.isContentEditable || document.querySelector('dialog[open]') || String(window.getSelection())) return;
   const link = document.querySelector(`.series-pager [rel="${event.key === 'ArrowLeft' ? 'prev' : 'next'}"]`);
   if (link) { event.preventDefault(); location.assign(link.href); }
 });
-if ($('.series-pager')) { const hint = document.createElement('p'); hint.className = 'reading-shortcuts'; hint.textContent = '系列切换：Alt + ← 上一篇 · Alt + → 下一篇'; $('.series-pager').after(hint); }
+if ($('.series-pager')) { const hint = document.createElement('p'); hint.className = 'reading-shortcuts'; hint.textContent = '系列切换：Alt + Shift + ← 上一篇 · Alt + Shift + → 下一篇'; $('.series-pager').after(hint); }
 
 // Remember a stable section anchor and its local offset, not the whole page height.
 if (document.body.classList.contains('article-page') && !document.body.classList.contains('skill-page')) {
@@ -212,44 +213,11 @@ if (document.body.classList.contains('article-page') && !document.body.classList
     if (!allowSave || window.scrollY < 250) return;
     const headings=[...document.querySelectorAll('.prose h2,.prose h3')];
     const heading=headings.filter(h=>h.getBoundingClientRect().top<=100).at(-1);
-    if (heading) try {localStorage.setItem(positionKey,JSON.stringify({anchor:heading.id,offset:Math.max(0,-heading.getBoundingClientRect().top)}));}catch {}
+    if (heading) try {localStorage.setItem('aki-last-reading-v1', JSON.stringify({url:location.pathname,title:$('.article-header h1').textContent})); localStorage.setItem(positionKey,JSON.stringify({anchor:heading.id,offset:Math.max(0,-heading.getBoundingClientRect().top)}));}catch {}
   }
   window.addEventListener('scroll',()=>{clearTimeout(timer);timer=setTimeout(savePosition,450);},{passive:true});
   window.addEventListener('pagehide',savePosition);
 }
-
-// Pause ambient motion when the introduction is off screen or the tab is hidden.
-const heroArt = document.querySelector('.hero-art');
-if (heroArt) {
-  let heroVisible = true;
-  const updateMotion = () => heroArt.classList.toggle('motion-paused', document.hidden || !heroVisible);
-  if ('IntersectionObserver' in window) new IntersectionObserver(entries => { heroVisible = entries[0].isIntersecting; updateMotion(); }).observe(heroArt);
-  document.addEventListener('visibilitychange', updateMotion);
-  updateMotion();
-}
-
-// Animate once on arrival; content stays visible without JavaScript or observers.
-const arrivalPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
-if ('IntersectionObserver' in window && !arrivalPreference.matches) {
-  const arrivals = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (!entry.isIntersecting) return;
-      if (!arrivalPreference.matches) entry.target.classList.add('reveal-arrive');
-      arrivals.unobserve(entry.target);
-    });
-  }, {threshold: 0.08});
-  document.querySelectorAll('.home .map-step,.home .article-card,.home .recommend-link,.home .skill-card').forEach(el => {
-    el.addEventListener('animationend', () => el.classList.remove('reveal-arrive'), {once: true});
-    arrivals.observe(el);
-  });
-  arrivalPreference.addEventListener('change', event => {
-    if (event.matches) {
-      arrivals.disconnect();
-      document.querySelectorAll('.reveal-arrive').forEach(el => el.classList.remove('reveal-arrive'));
-    }
-  });
-}
-
 
 // Load the formula renderer only on pages that contain display mathematics.
 if (document.querySelector('.math-block')) {
@@ -262,4 +230,82 @@ if (document.querySelector('.math-block')) {
       });
     } catch { /* Preserve readable TeX if the CDN is unavailable. */ }
   })();
+}
+
+// Progressive enhancements remain optional: all article links work without storage or JS.
+const menu = $('#menu-dialog'), menuButton = $('.menu-toggle');
+menuButton.hidden = false;
+menuButton.addEventListener('click', () => menu.showModal());
+$('.close-menu').addEventListener('click', () => menu.close());
+for (const button of document.querySelectorAll('[data-search-query]')) button.addEventListener('click', () => { input.value = button.dataset.searchQuery; input.focus(); searchArticles(); });
+document.addEventListener('keydown', event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !event.altKey) {
+    if (document.querySelector('dialog[open]') && !search.open) return;
+    event.preventDefault(); if (search.open) search.close(); else openSearch();
+  }
+});
+function readObject(key) { try { const value = JSON.parse(localStorage.getItem(key)); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } }
+const bookmarkKey = 'aki-bookmarks-v1';
+let bookmarks = readObject(bookmarkKey), refreshCatalog = () => {};
+function refreshBookmarks() {
+  document.querySelectorAll('[data-bookmark]').forEach(button => {
+    const saved = bookmarks[button.dataset.bookmark] === true;
+    button.hidden = false; button.setAttribute('aria-pressed', String(saved));
+    button.setAttribute('aria-label', (saved ? '取消收藏：' : '稍后阅读：') + button.dataset.title);
+    button.title = saved ? '取消收藏' : '稍后阅读'; button.querySelector('span').textContent = saved ? '已收藏' : '稍后读';
+  });
+  refreshCatalog();
+}
+for (const button of document.querySelectorAll('[data-bookmark]')) button.addEventListener('click', () => {
+  const next = {...readObject(bookmarkKey)}, url = button.dataset.bookmark;
+  if (next[url] === true) delete next[url]; else next[url] = true;
+  try { localStorage.setItem(bookmarkKey, JSON.stringify(next)); bookmarks = next; refreshBookmarks(); toast(next[url] ? '已加入稍后读 · 仅保存在当前浏览器' : '已取消收藏'); } catch { toast('浏览器无法保存收藏，请检查存储设置'); }
+});
+function refreshLastReading() {
+  const link = $('[data-last-reading]'); if (!link) return;
+  const record = readObject('aki-last-reading-v1'); link.hidden = true;
+  try { const url = new URL(record.url, location.origin); if (typeof record.title !== 'string' || !record.title || url.origin !== location.origin || !url.pathname.startsWith(base.pathname + 'articles/') || url.pathname === base.pathname + 'articles/') return;
+    link.href = url.pathname; link.querySelector('strong').textContent = record.title.slice(0, 200); link.hidden = false;
+  } catch {}
+}
+window.addEventListener('storage', event => { if (event.key === bookmarkKey || event.key === null) { bookmarks = readObject(bookmarkKey); refreshBookmarks(); } refreshLastReading(); });
+window.addEventListener('pageshow', () => { bookmarks = readObject(bookmarkKey); refreshBookmarks(); refreshLastReading(); });
+refreshBookmarks(); refreshLastReading();
+
+const catalog = $('.archive-list');
+if (catalog) {
+  const cards = [...catalog.querySelectorAll('.article-card')], query = $('#catalog-query'), sort = $('#catalog-sort'), savedButton = $('.saved-filter');
+  let savedOnly = false;
+  $('.catalog-tools').hidden = false; $('.archive-search').hidden = false;
+  function restoreFilters() { const params = new URL(location.href).searchParams; query.value = params.get('q') || ''; sort.value = ['updated','shortest'].includes(params.get('sort')) ? params.get('sort') : 'recommended'; savedOnly = params.get('saved') === '1'; refreshCatalog(); }
+  refreshCatalog = () => {
+    const terms = query.value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    const ordered = [...cards];
+    if (sort.value === 'updated') ordered.sort((a,b) => b.dataset.modified.localeCompare(a.dataset.modified));
+    if (sort.value === 'shortest') ordered.sort((a,b) => Number(a.dataset.minutes) - Number(b.dataset.minutes));
+    let count = 0;
+    for (const card of ordered) { card.hidden = !terms.every(term => card.dataset.search.toLocaleLowerCase().includes(term)) || (savedOnly && bookmarks[card.dataset.url] !== true); if (!card.hidden) count++; catalog.append(card); }
+    $('[data-catalog-count]').textContent = count + ' / ' + cards.length + ' 篇文章'; $('.catalog-empty').hidden = count !== 0; savedButton.setAttribute('aria-pressed', String(savedOnly));
+  };
+  function updateFilters() { refreshCatalog(); const url = new URL(location.href); for (const [key,value] of [['q',query.value.trim()],['sort',sort.value === 'recommended' ? '' : sort.value],['saved',savedOnly ? '1' : '']]) { if (value) url.searchParams.set(key,value); else url.searchParams.delete(key); } history.replaceState(null,'',url); }
+  query.addEventListener('input', updateFilters); sort.addEventListener('change', updateFilters);
+  savedButton.addEventListener('click', () => { savedOnly = !savedOnly; updateFilters(); });
+  const reset = () => { query.value = ''; sort.value = 'recommended'; savedOnly = false; updateFilters(); query.focus(); };
+  $('.catalog-reset').addEventListener('click', reset); $('.catalog-clear').addEventListener('click', reset);
+  window.addEventListener('popstate', restoreFilters); restoreFilters();
+  if (matchMedia('(max-width:800px)').matches) $('.catalog-filters').open = false;
+}
+const toolbar = $('.reading-toolbar');
+if (toolbar) {
+  toolbar.hidden = false;
+  let fontSize = 18;
+  try { const value = Number(localStorage.getItem('aki-font-size-v1')); if (Number.isInteger(value) && value >= 16 && value <= 22) fontSize = value; } catch {}
+  function updateFont() { document.documentElement.style.setProperty('--prose-size', fontSize + 'px'); $('.font-value').textContent = String(fontSize); $('.font-smaller').disabled = fontSize <= 16; $('.font-larger').disabled = fontSize >= 22; }
+  for (const [selector,delta] of [['.font-smaller',-1],['.font-larger',1]]) $(selector).addEventListener('click', () => { fontSize = Math.min(22,Math.max(16,fontSize+delta)); updateFont(); try { localStorage.setItem('aki-font-size-v1',String(fontSize)); } catch {} });
+  updateFont();
+  $('.focus-toggle').addEventListener('click', event => { const focused = document.body.classList.toggle('focus-reading'); event.currentTarget.setAttribute('aria-pressed',String(focused)); event.currentTarget.textContent = focused ? '退出专注' : '专注阅读'; });
+}
+for (const heading of document.querySelectorAll('.prose h2[id],.prose h3[id]')) {
+  const anchor = document.createElement('a'); anchor.className = 'heading-anchor'; anchor.href = '#' + encodeURIComponent(heading.id); anchor.textContent = '#'; anchor.setAttribute('aria-label','复制本节链接：' + heading.textContent);
+  anchor.addEventListener('click', event => { event.preventDefault(); copyText(anchor.href,null,'本节链接已复制'); }); heading.append(anchor);
 }

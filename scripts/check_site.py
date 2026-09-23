@@ -120,7 +120,7 @@ class Cards(HTMLParser):
         super().__init__(); self.urls = []; self.active = []; self.depth = 0; self.in_tags = False; self.feed(text)
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
-        if tag == 'nav' and a.get('class') == 'tag-filters': self.in_tags = True
+        if tag == 'nav' and 'tag-filters' in a.get('class', '').split(): self.in_tags = True
         if tag == 'a':
             assert not self.depth, 'Nested anchors break tag navigation'
             self.depth += 1
