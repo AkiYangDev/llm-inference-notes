@@ -1,0 +1,6 @@
+stage,client_concurrency,num_prompts,target_shared_prefix_tokens,target_question_tokens,cache_hit_rate_pct,mean_ttft_ms,mean_tpot_ms,mean_e2e_ms,output_throughput_tok_s,successful_requests,total_input_tokens,total_cached_tokens,total_generated_tokens,benchmark_duration_s,accept_length,evidence
+initial,32,64,30000,2768,85.8,,24.90,,817.58,64,,,65536,,,retained_run_summary
+calibrated,48,64,31900,868,91.8,15283.01,20.33,36079.04,934.30,64,2143110,1968128,65536,70.14,5.68,terminal_log_and_per_request_length_check
+concurrency_up,72,96,31900,868,91.8,30578.72,20.10,51145.44,1073.83,96,,,98304,,,retained_run_summary
+concurrency_down,36,96,31900,868,91.8,10597.34,21.58,32677.36,952.87,96,3214586,2951168,98304,103.17,5.73,terminal_log_and_per_request_length_check
+concurrency_down,24,96,31900,868,91.8,5240.74,20.55,26265.41,860.60,96,3214586,2951168,98304,114.23,5.68,terminal_log_aggregate_only

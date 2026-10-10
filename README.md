@@ -35,6 +35,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
 
+- [从缓存校准到并发取舍：DeepSeek-V4-Pro 在 Ascend 910C 上的一次 32k/1k 调优记录](docs/performance/deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md)：从 85.8%→91.8% 的缓存校准，到 C24/C36/C72 的吞吐与等待时间对照，解释 TPOT 的非单调变化和压测日志的统计口径。
 - [GSM8K 精度未达标，应该怎样定位？一次从 200 题到全量评测的排查记录](docs/sglang/gsm8k-accuracy-debugging-from-200-to-full-evaluation.md)：记录 DeepSeek-V2-Lite-W8A8 的配置对照、原始评测器核对与两轮全量结果，解释为什么准确率过线和逐题输出稳定需要分别判断。
 - [DeepSeek-V4 W8A8 推理在 Ascend 910C 上到底发生了什么？从量化权重到 INT8 MatMul Kernel](docs/ascend/deepseek-v4-w8a8-ascend-910c.md)：严格区分官方 `W8A8_DYNAMIC` 主路径与静态 W8A8 对照路径，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ → `aclnnQuantMatmulWeightNz` → CANN QuantBatchMatmulV3。
 - [SGLang Scheduler 源码解析：一个请求是如何被组批、调度并送进 ModelRunner 的](docs/sglang/sglang-scheduler-source-analysis.md)：从 `Req`、`ScheduleBatch`、`ForwardBatch` 三个生命周期切入，追踪 admission、Prefix Cache、Prefill / Decode 与 ModelRunner 边界。

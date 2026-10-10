@@ -402,5 +402,20 @@
     "role": "advanced",
     "seo_title": "GSM8K 精度不达标怎么排查？从 200 题到全量评测",
     "seo_summary": "记录 DeepSeek-V2-Lite-W8A8 在 Ascend 上的 GSM8K 精度排查：200 题对照、1314 题全量实验、答案提取规则与测试用例修改建议。"
+  },
+  "docs/performance/deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md": {
+    "summary": "记录 DeepSeek-V4-Pro-W4A8 在 Ascend 910C 上的 32k/1k 调优：先校准缓存命中率，再对照 C24、C36、C72 的吞吐与首 Token 等待，解释 TPOT、预热和峰值并发的统计口径。",
+    "category": "调优实践",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "SGLang",
+      "性能调优",
+      "Prefix Cache"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "DeepSeek-V4-Pro 性能调优：缓存命中、并发与 TTFT/TPOT",
+    "seo_summary": "Ascend 910C 双机 DP8 的 32k/1k 实测记录：缓存从85.8%校准到91.8%，对比C24/C36/C72的TTFT、TPOT和输出吞吐，附测试脚本与CSV。"
   }
 }

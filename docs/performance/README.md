@@ -2,6 +2,10 @@
 
 时延、吞吐、显存、算子、通信与 Profiling。这里重点回答的不只是“哪个 Kernel 最慢”，而是如何从源码建立性能假设，再用 Ascend 910C 的真实 Timeline 验证。
 
+## 调优实践
+
+- [从缓存校准到并发取舍：DeepSeek-V4-Pro 在 Ascend 910C 上的一次 32k/1k 调优记录](deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md)：记录共享前缀命中率校准、C24/C36/C72 的同 N 对照，结合 TTFT、TPOT、输出吞吐与客户端统计口径分析取舍；附实验 CSV 和测试脚本。
+
 ## 性能直觉入口
 
 - [为什么 Prefill 和 Decode 明明跑的是同一个模型，性能却完全不同？](../fundamentals/prefill-vs-decode-performance.md)：先用 DeepSeek-V4 的 Dense M、Expert M_e、SWA/C4/C128 与 Ascend 910C PMU 指标建立性能分析坐标，再进入具体算子和 Profiling。
