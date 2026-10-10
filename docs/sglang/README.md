@@ -16,6 +16,10 @@
 - [DeepSeek-V4 Attention 源码解析：一个 ForwardBatch 如何变成 Query，并通过 KV Cache 找回历史上下文](deepseek-v4-attention-source-analysis.md)：从 `MQALayer` 追到 Query、SWA/C4/C128 缓存、page table 与 Ascend DSV4 Attention backend。
 - [DeepSeek-V4 MoE 推理源码解析：一个 Token 如何经过 Router、All-to-All 和 Expert Parallel 完成一次前向计算](deepseek-v4-moe-source-analysis.md)：解释 V4 Router / HashTopK、shared experts、EP token routing、DeepEP 与 Ascend FuseEP 的 runtime 边界。
 
+## 评测与故障排查
+
+- [GSM8K 精度未达标，应该怎样定位？一次从 200 题到全量评测的排查记录](gsm8k-accuracy-debugging-from-200-to-full-evaluation.md)：从固定 200 题的失败、DeepEP 配置对照与逐题输出，追到 1314 题全量评测，区分门禁覆盖、输出稳定性和代码回退。
+
 ## 相关专题
 
 - [分布式推理](../distributed/README.md)：TP / DP / EP、Rank / Group、Collective、DSpark Parallel Layout 与多卡一致性。

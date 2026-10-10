@@ -387,5 +387,20 @@
     "role": "entry",
     "seo_title": "大模型为什么需要多卡？TP、DP、EP 一次讲清",
     "seo_summary": "从 DeepSeek-V4 模型规模和 Ascend 910C 显存约束出发，解释单卡为什么放不下，以及 TP、DP、EP 分别切什么。"
+  },
+  "docs/sglang/gsm8k-accuracy-debugging-from-200-to-full-evaluation.md": {
+    "summary": "从 DeepSeek-V2-Lite-W8A8 的 200 题精度失败出发，核对 DeepEP 配置对照、提示词与评分规则，再用两轮 1314 题全量实验区分评测覆盖和输出稳定性。",
+    "category": "工程排查",
+    "tags": [
+      "SGLang",
+      "DeepSeek-V2-Lite",
+      "GSM8K",
+      "精度评测",
+      "Ascend"
+    ],
+    "topic": "sglang",
+    "role": "advanced",
+    "seo_title": "GSM8K 精度不达标怎么排查？从 200 题到全量评测",
+    "seo_summary": "记录 DeepSeek-V2-Lite-W8A8 在 Ascend 上的 GSM8K 精度排查：200 题对照、1314 题全量实验、答案提取规则与测试用例修改建议。"
   }
 }

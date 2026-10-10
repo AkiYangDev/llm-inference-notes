@@ -35,6 +35,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
 
+- [GSM8K 精度未达标，应该怎样定位？一次从 200 题到全量评测的排查记录](docs/sglang/gsm8k-accuracy-debugging-from-200-to-full-evaluation.md)：记录 DeepSeek-V2-Lite-W8A8 的配置对照、原始评测器核对与两轮全量结果，解释为什么准确率过线和逐题输出稳定需要分别判断。
 - [DeepSeek-V4 W8A8 推理在 Ascend 910C 上到底发生了什么？从量化权重到 INT8 MatMul Kernel](docs/ascend/deepseek-v4-w8a8-ascend-910c.md)：严格区分官方 `W8A8_DYNAMIC` 主路径与静态 W8A8 对照路径，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ → `aclnnQuantMatmulWeightNz` → CANN QuantBatchMatmulV3。
 - [SGLang Scheduler 源码解析：一个请求是如何被组批、调度并送进 ModelRunner 的](docs/sglang/sglang-scheduler-source-analysis.md)：从 `Req`、`ScheduleBatch`、`ForwardBatch` 三个生命周期切入，追踪 admission、Prefix Cache、Prefill / Decode 与 ModelRunner 边界。
 - [SGLang ModelRunner 源码解析：ForwardBatch 如何驱动 DeepSeek 完成一次 Prefill / Decode](docs/sglang/sglang-modelrunner-source-analysis.md)：沿 `ForwardBatch → ModelRunner → DeepSeek-V4 → LogitsProcessor → Sampling` 追踪一次 Prefill / Decode 的真实执行边界。
