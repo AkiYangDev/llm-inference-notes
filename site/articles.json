@@ -417,5 +417,20 @@
     "role": "advanced",
     "seo_title": "DeepSeek-V4-Pro 性能调优：缓存命中、并发与 TTFT/TPOT",
     "seo_summary": "Ascend 910C 双机 DP8 的 32k/1k 实测记录：缓存从85.8%校准到91.8%，对比C24/C36/C72的TTFT、TPOT和输出吞吐，附测试脚本与CSV。"
+  },
+  "docs/performance/ascend-950dt-single-node-pd-optimization.md": {
+    "summary": "记录 Ascend 950DT 单机 128K/1K、90% Cache 的 PD 调优：P 端关闭 HiCache、多流和 WAR barrier，D 端启用 DSPARK，并结合 dispatch 容量、图档位与完整压测结果分析首字等待。",
+    "category": "调优实践",
+    "tags": [
+      "SGLang",
+      "Ascend 950DT",
+      "PD 分离",
+      "DSPARK",
+      "性能调优"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "Ascend 950DT 单机 PD 调优：128K 长上下文的 TTFT 与吞吐",
+    "seo_summary": "一次 128K/1K、90% Cache 的单机 PD 调优记录。用四张工程图解释 HiCache、DSPARK、图 padding 与时延分布，结合 N192/C48 实测分析 TTFT、TPOT 和平均输出吞吐。"
   }
 }

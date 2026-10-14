@@ -1,9 +1,10 @@
 # 性能分析
 
-时延、吞吐、显存、算子、通信与 Profiling。这里重点回答的不只是“哪个 Kernel 最慢”，而是如何从源码建立性能假设，再用 Ascend 910C 的真实 Timeline 验证。
+时延、吞吐、显存、算子、通信与 Profiling。这里重点回答的不只是“哪个 Kernel 最慢”，而是如何从源码建立性能假设，再用 Ascend 的真实运行数据与 Timeline 验证。
 
 ## 调优实践
 
+- [Ascend 950DT 单机 PD 调优：128K/1K、90% Cache，首字为什么还要等十几秒？](ascend-950dt-single-node-pd-optimization.md)：从 P 端缓存与执行方式、D 端 DSPARK 和图配置，到 N192/C48 完整实测；用四张图解释首字等待、投机接受边界与 batch padding。
 - [从缓存校准到并发取舍：DeepSeek-V4-Pro 在 Ascend 910C 上的一次 32k/1k 调优记录](deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md)：记录共享前缀命中率校准、C24/C36/C72 的同 N 对照，结合 TTFT、TPOT、输出吞吐与客户端统计口径分析取舍；附实验 CSV 和测试脚本。
 
 ## 性能直觉入口
