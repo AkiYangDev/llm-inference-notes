@@ -308,7 +308,7 @@ SGLang 使用 Prefix Cache 复用已有 KV。当前源码中非常直接的入�
 当前源码非常适合用下面这条链来读：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     A[Req] --> B[Scheduler]
     B --> C[ScheduleBatch]
     C --> D[ForwardBatch]
@@ -546,7 +546,7 @@ Speculative Decoding 的核心思想是：
 最简化状态机是：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     A[Committed History] --> B[Draft]
     B --> C[Candidate Tokens]
     C --> D[Target Verify]

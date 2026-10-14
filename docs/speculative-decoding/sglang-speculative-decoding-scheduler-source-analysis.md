@@ -1,4 +1,4 @@
-# SGLang Speculative Decoding Scheduler 源码解析：ScheduleBatch 如何管理 Draft、Verify、Accept 状态机？
+# SGLang 投机解码调度：跨轮状态、KV 预留与 Overlap
 
 前面的几篇文章已经分别拆过 Draft、Target Verify、Tree Attention、Accept Decision、KV Commit / Compact / Rollback，以及多卡场景下 Draft / Verify / Accept 如何保持一致。
 
@@ -302,7 +302,7 @@ ScheduleBatch.forward_mode == DECODE
 
 ---
 
-## 二、六个核心对象与三套时钟：Overlap 下它们穵竟允许错开多少？
+## 二、六个核心对象与三套时钟：Overlap 下它们究竟允许错开多少？
 
 真正理解 Scheduler，要先分清六个对象：
 
@@ -464,7 +464,7 @@ Req.kv.kv_committed_len
 
 ---
 
-### 严格 Review 结论：允许错开“最多一个 Verify iteration”，不是“一个 Token”
+### 允许错开“最多一个 Verify iteration”，不是“一个 Token”
 
 这点源码里有非常直接的注释：
 
@@ -962,9 +962,9 @@ DSpark Planner 怎么决定 verify token budget
 
 ---
 
-### 严格 Review：所有 `on_publish(new_seq_lens)` 的语义边界是一致的，但物理位置不完全一致
+### 所有 `on_publish(new_seq_lens)` 的语义边界是一致的，但物理位置不完全一致
 
-这是第二个 Review 点最重要的结论。
+下面对比各算法的 publish 位置。
 
 #### EAGLE / Multi-layer EAGLE / Frozen-KV MTP
 
@@ -1178,7 +1178,7 @@ batch.seq_lens
 
 ## 五、`_forward_isolation()`：Spec Worker 可以临时改 ScheduleBatch，但一律不能偷走 Scheduler Ownership
 
-这是第三个 Strict Review 点。
+这里要区分字段替换和共享对象修改。
 
 Spec Worker 在一轮内部会临时修改大量 `ScheduleBatch` 字段：
 
@@ -1207,7 +1207,7 @@ DECODE
 TARGET_VERIFY
 ```
 
-或者临旵：
+或者临时：
 
 ```text
 batch.spec_info = EagleVerifyInput
@@ -1224,7 +1224,7 @@ TARGET_VERIFY
 
 ---
 
-### 严格 Review 结论：Spec V2 不是“回滚几个字段”，而是回滚整个 ScheduleBatch dataclass
+### `_forward_isolation()` 恢复字段绑定，不深拷贝整个 Batch
 
 `Scheduler._forward_isolation()` 当前实现：
 
@@ -1248,15 +1248,17 @@ for name, value in sched_snapshot.items():
 
 [`Scheduler._forward_isolation()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)
 
-因此最准确的表述不是：
+这里保存的是每个字段原来指向的对象，退出时再用 `setattr` 恢复。它是一份浅快照：
 
-> “forward_mode / spec_info 要 rollback。”
+| Worker 内的操作 | 退出 isolation 后 |
+| --- | --- |
+| `batch.seq_lens = new_tensor` | 字段重新指向原 Tensor |
+| `batch.seq_lens.add_(1)` | 原 Tensor 的内容已改变，恢复引用不能撤销它 |
+| 修改字段所引用的列表或嵌套对象 | 不会因 `setattr` 自动恢复内部内容 |
 
-而是：
+因此，所有 dataclass 字段都被纳入引用恢复范围，不等于所有 mutation 都能回滚。共享对象的原地写入仍需要各自的 ownership、拷贝或同步约束。下文 `sampling_info.copy_for_forward()` 的独立处理也不能用字段快照来替代。
 
-> **对 Spec V2，ScheduleBatch 的全部 dataclass fields 默认都属于 Scheduler transaction state；Worker forward 期间的 mutation 结束后全部回滚。**
-
-这是一个非常强的 ownership boundary。
+这条边界隔离的是临时字段替换。
 
 ---
 
@@ -1340,7 +1342,7 @@ GPU tensor lifetime
 Isolation 的设计是：
 
 ```text
-先全部 rollback
+先恢复快照中的字段绑定
 ```
 
 然后：
@@ -1488,7 +1490,7 @@ END
 
 ## 六、FutureMap 的 `new_seq_lens + 1` 为什么只出现在 Mixed Tail 重建，而且它不是 DP Attention 的通用规则？
 
-这是第四个 Review 点，也是最容易因为代码局部看起来奇怪而误解的地方。
+局部代码看起来的偏移，需要放回 mixed-tail 的执行语境。
 
 `FutureMap.resolve_mixed_spec_tails()` 中有：
 
@@ -1970,7 +1972,7 @@ Future
 
 ---
 
-### 最值得记住的四个 Strict Review 结论
+### 四个跨轮状态边界
 
 **第一，Overlap 下 `ScheduleBatch.seq_lens` 可以领先 `Req.kv.kv_committed_len` 最多一个 Verify iteration，而不是一个 token。**
 
@@ -1980,9 +1982,9 @@ Future
 
 不同算法 publish 后仍可能继续 Draft Extend、Mamba commit、hidden → draft KV materialization。
 
-**第三，`_forward_isolation()` 对 Spec V2 默认 rollback 的是整个 `ScheduleBatch` dataclass。**
+**第三，`_forward_isolation()` 对 Spec V2 保存并恢复全部 dataclass 字段的引用。**
 
-Worker 的所有 mid-forward mutation 都是 transaction-local；真正跨轮的状态只能通过 `GenerationBatchResult / FutureMap / explicit recommit` 重新进入 Scheduler state。
+字段替换在退出时恢复，需跨轮保留的新绑定通过 `GenerationBatchResult / FutureMap / explicit recommit` 交接。Tensor 原地修改和嵌套对象修改不在这份浅快照的撤销能力之内。
 
 **第四，`new_seq_lens + 1` 只属于 mixed speculative tail 的 1-token EXTEND 语义。**
 

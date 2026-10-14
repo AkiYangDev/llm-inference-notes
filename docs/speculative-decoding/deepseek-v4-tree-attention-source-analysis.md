@@ -88,11 +88,11 @@ Tree Traversal / Accept
 >
 > **DeepSeek-V4 当前边界**：固定版本中，DeepSeek-V4 的 EAGLE 配置仍要求 `speculative_eagle_topk == 1`；CUDA/HIP DSV4 Attention backend 还会独立 assert `topk in [0, 1]`。因此本文的 multi-branch Tree Attention 是对 **SGLang 通用 EAGLE Tree Verify 机制，以及 DeepSeek-V4 若未来放开 topk>1 所必须满足的 correctness contract** 的源码解析，而不是声称当前 DeepSeek-V4 生产路径已经在跑多分支 Tree Attention。
 
-## Strict Review 结论先行
+## 实现范围与关键区别
 
 这次发布前重点复核了四个容易写错的点。
 
-| Review 点 | 固定源码结论 |
+| 核对问题 | 固定源码结论 |
 | --- | --- |
 | `FULL_MASK / QLEN_ONLY` 的 prefix 语义 | 对**支持 EAGLE tree verify 的 backend**，逻辑语义是一致的：candidate 可看完整 KV-ready prefix，再加自己的 ancestor path。`FULL_MASK / QLEN_ONLY` 是不同物化方式，不是跨 backend 的统一 kernel ABI；而且有的 backend 根本不读取 mask buffer。 |
 | root / bonus 的 Position 与 KV-ready boundary | 上一轮 terminal bonus 在下一轮成为 root。它虽然已经作为 token 输出，但其 KV 尚未进入 `[0, seq_len)`；下一轮 tree builder 将它放在 `position = seq_len`，Target Verify 才真正为它写 KV。当前轮新 terminal bonus 再次留在新的 KV-ready boundary 外。 |
@@ -610,7 +610,7 @@ Tree Position
 
 ## 四、Root / Bonus 与 KV-ready Boundary：跨轮时其实存在一枚 Token 的 Frontier Gap
 
-这是这次严格 Review 后，正文最需要强化的一点。
+这决定了后面 mask 与位置映射必须同时满足的约束。
 
 直觉上容易认为：
 
@@ -877,7 +877,7 @@ R  D1 D2 D3
 
 ## 五、FULL_MASK 与 QLEN_ONLY：语义一致，不代表所有 Backend 都读同一种 Mask
 
-现在终于可以精确回答第一个 Review 问题。
+现在可以回到本节开头的问题。
 
 当前 SGLang 定义：
 
@@ -972,7 +972,7 @@ O(B × N × (L + N))
 O(B × N²)
 ~~~
 
-### 但严格 Review 后，不能写成“所有 backend 都在 FULL 与 QLEN 两者中二选一读取”
+### 各后端如何消费 FULL 与 QLEN
 
 当前还有：
 
@@ -1091,7 +1091,7 @@ Tree Attention semantics
 
 ## 六、FlashAttention Cascade：可以叫 Tree Attention，但必须说清它是怎样实现的
 
-这是第三个严格 Review 点。
+这里还要看具体后端的消费方式。
 
 当前 FlashAttention backend 在：
 
@@ -1322,7 +1322,7 @@ if cfg.speculative_algorithm == "EAGLE":
 
 似乎就能尝试 `topk>1`。
 
-严格 Review 后，这个理解是不够的。
+仅有这个理解，还无法解释后端的实际执行。
 
 ### 第一层：模型配置层已经把能力整体封死
 
@@ -1484,7 +1484,7 @@ ancestors(v)
 {v}
 ~~~
 
-注意这里严格冝的是：
+这里具体指的是：
 
 ~~~text
 KV-ready prefix
@@ -1641,7 +1641,7 @@ KV Mapping
 
 共同保持一致。
 
-而这次 Strict Review 后还可以再加一句更精确的话：
+结合不同后端的实现，还需要补充：
 
 > **Tree Verify 每一轮都围绕一个 KV-ready boundary 运转：上一轮 terminal bonus 位于这个 boundary 上，下一轮成为 root 并 materialize KV；新的 terminal bonus 又成为下一个 frontier。Tree Position 与 Tree Attention 都必须以这个 KV-ready boundary，而不是“用户已经看见了多少 token”，作为真正的坐标原点。**
 

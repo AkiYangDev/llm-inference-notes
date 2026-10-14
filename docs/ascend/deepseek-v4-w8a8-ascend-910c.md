@@ -426,9 +426,7 @@ W8A8 Weight / Activation 与 KV Cache dtype 是两套完全独立的设计维度
 
 ### 静态 W8A8 对照：`deq_scale / quant_bias` 的公式成立，但不是当前主线
 
-初稿把静态 W8A8 当成主线解释了 `deq_scale` 和 `quant_bias`。
-
-严格 Review 后，这部分需要重新定位。
+下面用静态 W8A8 作对照，说明 `deq_scale` 和 `quant_bias` 为什么不能直接套进本文的动态量化主线。
 
 结论是：
 
@@ -813,7 +811,7 @@ pertoken_scale != None
 所以正确配置下完整路径是：
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["BF16 local hidden"]
     B["DeepEP INT8 dispatch"]
     C["INT8 recv hidden + per-token scale"]
@@ -1217,7 +1215,7 @@ duration
 
 ## 五、把 DeepSeek-V4-Flash W8A8 的真实执行链重新拼起来
 
-经过四轮严格 Review 后，这篇文章最应该留下的不是“W8A8=INT8”的概念，而是下面这张执行图：
+把量化描述、激活路径和算子入口放在一起，可以得到下面这张执行图：
 
 ```mermaid
 flowchart TD
@@ -1229,8 +1227,8 @@ flowchart TD
 
     B -->|"W8A8_DYNAMIC Dense"| D["npu_dynamic_quant"]
     D --> E["INT8 activation + per-token scale"]
-    E --> F["INT8 FRACTAL_NZ weight"]
-    F --> G["npu_quant_matmul"]
+    E --> G["npu_quant_matmul"]
+    F["INT8 FRACTAL_NZ weight"] --> G
     G --> H["op-plugin: QuantMatmulKernel"]
     H --> I{"Weight format"}
     I -->|"FRACTAL_NZ"| J["aclnnQuantMatmulWeightNz"]

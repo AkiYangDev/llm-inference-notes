@@ -1,4 +1,4 @@
-# 模型为什么必须多卡？从一张 Ascend 910C 放不下 DeepSeek-V4 到 TP / DP / EP
+# 模型怎样跨多卡运行：从显存容量到 TP、DP Attention 与 EP
 
 第一次接触大模型分布式推理时，最容易把多卡理解成一句话：**一张卡显存不够，所以多插几张卡。**
 
@@ -42,8 +42,10 @@ HBM
 ├── Attention / MoE Workspace
 ├── Communication Buffers
 ├── Graph / Static Buffers
-└── Allocator Reserved Memory / Fragmentation
+└── 分配器空闲保留块与碎片
 ```
+
+这里不能再把 allocator 的总 `reserved` 与权重、KV 等活跃分配相加：`reserved` 已包含分配器管理的活跃块，额外占用应看其中尚未使用的保留空间及碎片。
 
 DeepSeek-V4 又有自己的压缩缓存与 Attention 实现，因此这里不能直接拿传统 MHA 的 KV Cache 公式硬套。我们只需要得到一个更基础的结论：
 
@@ -54,7 +56,7 @@ DeepSeek-V4 又有自己的压缩缓存与 Attention 实现，因此这里不能
 但多张 NPU 也不会自动拼成一块更大的统一 HBM。每个 Rank 仍然有自己的本地权重、Tensor 和缓存，跨设备数据必须显式通过 collective 或点对点通信移动。
 
 ```mermaid
-flowchart LR
+flowchart TD
     R0["Rank 0<br/>Local HBM"]
     R1["Rank 1<br/>Local HBM"]
     R2["Rank 2<br/>Local HBM"]

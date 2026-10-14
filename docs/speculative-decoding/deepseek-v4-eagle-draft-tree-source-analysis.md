@@ -1,4 +1,4 @@
-# DeepSeek-V4 Speculative Decoding 源码解析：EAGLE Draft Tree 如何组织多分支候选，并驱动一次 Verify
+# SGLang EAGLE Draft Tree：候选搜索、树构建与 DeepSeek-V4 能力边界
 
 上一篇把 DeepSeek-V4 的 MTP / NextN Draft 拆开以后，我们看到的是最简单的一条 speculative chain：
 
@@ -46,7 +46,7 @@ Draft 可以暂时保留多条未来，再让 Target 一次验证。
 
 > **NextN logits 怎样形成多分支搜索？累计路径 score 到底是什么？`parent_list` 和 `selected_index` 为什么需要两个索引空间？Tree Mask 怎样让兄弟分支在一次 Target Forward 中互不污染？Target 最后又如何只提交其中一条路径？**
 
-> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。正文分析 SGLang EAGLE Runtime 中真实存在的 `topk>1` Draft Tree 机制，并以 DeepSeek-V4 / NextN 为模型背景。当前 DeepSeek-V4 + Ascend 官方部署使用 `--attention-backend dsv4`、`page_size=128`、`speculative_eagle_topk=1`；固定源码会拒绝 `dsv4 + page_size>1 + topk>1`。因此本文讲的是 DeepSeek-V4 所使用的 EAGLE Runtime 的 Tree 能力，以及它为什么在当前 Ascend DSV4 官方配置中退化成 Chain，而不是宣称当前 Ascend DSV4 已经开放多分支 Tree 生产配置。
+> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。正文分析 SGLang EAGLE Runtime 中真实存在的 `topk>1` Draft Tree 机制，并以 DeepSeek-V4 / NextN 为模型背景。当前 DeepSeek-V4 + Ascend 官方部署使用 `--attention-backend dsv4`、`page_size=128`、`speculative_eagle_topk=1`；同一版本的 DeepSeek-V4 模型配置 hook 对 EAGLE 直接要求 `topk=1`；另有 `dsv4 + page_size>1 + topk>1` 的后端 guard。因此本文讲的是 DeepSeek-V4 所使用的 EAGLE Runtime 的 Tree 能力，以及它为什么在当前 Ascend DSV4 官方配置中退化成 Chain，而不是宣称当前 Ascend DSV4 已经开放多分支 Tree 生产配置。
 
 ## 一、Draft Tree 不是完整 k 叉树：EAGLE 保留的是有限宽度的高分路径
 
@@ -1179,9 +1179,9 @@ autoregressive chain
 
 ---
 
-## 七、Ascend `dsv4 + page_size>1 + topk>1` Guard 限制的是 Draft Decode 的 Paged-Tree KV Layout，不是 Tree 算法本身
+## 七、DeepSeek-V4 的模型限制与 Paged-Tree 后端限制
 
-最后回到 DeepSeek-V4 + Ascend。
+最后回到 DeepSeek-V4 + Ascend。首先要检查模型级限制，而不只是后端 allowlist。同一固定版本的 [`deepseek_v4_hook.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/arg_groups/deepseek_v4_hook.py) 在 EAGLE 配置下直接断言 `speculative_eagle_topk == 1`。因此，前面的多分支树解释的是通用 EAGLE Runtime；当前 DeepSeek-V4 配置只开放 Chain。
 
 固定版本官方配置：
 
@@ -1348,38 +1348,9 @@ triton
 
 `dsv4` 没在 allowlist 里，因此固定版本不允许该组合。
 
-### 它没有证明 page_size=1 的 DSV4 Tree 已完成生产验证
+### 改成 `page_size=1` 也不会绕过模型级限制
 
-Guard 条件包含：
-
-~~~text
-page_size > 1
-~~~
-
-所以从纯逻辑上：
-
-~~~text
-dsv4 + page_size=1 + topk>1
-~~~
-
-不会触发这一条 guard。
-
-但这只能说明：
-
-> **这一条 startup guard 不拒绝它。**
-
-不能继续推导：
-
-> **所以它已经在 Ascend DeepSeek-V4 上经过完整生产验证。**
-
-官方 DeepSeek-V4 Ascend recipe 仍然使用：
-
-~~~text
-page_size = 128
-topk = 1
-~~~
-
-也没有足够的固定版本测试证据证明 `dsv4 + page_size=1 + topk>1` 已经覆盖 Graph、ModelSlim、DP Attention、DeepEP 等生产组合。
+`page_size=1` 不触发这一条 paged-tree guard，但 DeepSeek-V4 模型 hook 的 `topk=1` 断言仍然成立。这里不是“尚缺生产验证”的程度，而是固定版本的配置入口就不接受多分支 EAGLE。要扩展该能力，必须同时处理模型约束、KV 布局和后端支持，不能只改 page size。
 
 因此当前最严谨的结论是：
 

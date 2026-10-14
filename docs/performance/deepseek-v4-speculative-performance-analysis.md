@@ -31,14 +31,14 @@ high-throughput→ 直接关闭 MTP
 
 > **源码基线**：本文基于 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。这个 commit 本身更新了 Ascend/NPU performance testing framework，并开始把 speculative acceptance 纳入性能 CI。
 
-## Strict Review 结论先行
+## 实现范围与关键区别
 
-| Review 点 | 固定源码结论 |
+| 核对问题 | 固定源码结论 |
 | --- | --- |
 | `accept_length / step_time` 是否只是低并发近似 | **不是只适用于低并发。** `bench_speculative.py` 在每个固定 `batch_size` 下都用它做配置排序。但它没有乘 batch size，更准确是“固定 operating point 下的 per-request progress proxy”，不能直接跨 batch size 当 aggregate throughput 比。 |
 | runtime strict `accept_rate` 与 Ascend CI `accept_rate` | 两者**不是同一个指标**。runtime 是 `correct_drafts / proposed_drafts`，严格不含 bonus；Ascend CI 当前变量名 `accept_rate` 实际是 `accept_length / speculative_num_draft_tokens`，只是 performance baseline proxy。 |
 | Block Size 增大后哪些成本可 amortize | 能 amortize 的主要是 fixed / latency-dominated 部分：launch、调度、部分同步延迟、权重读取与 GEMM 利用率。不会消失的是随真实 verify token 数增长的 Target compute、MoE routing/expert work、KV/state write 与通信字节。 |
-| Ragged Verify 是否破坏固定 `N+1` 模型 | **会。** `static` 模式下每个请求确实 Verify `gamma+1`；`compact / cap-accept` 会给每个请求不同的 `verify_len ∈ [1, gamma+1]`。真实 token work 应改看 `sum(verify_lens)`，而 graph 还可能 pad 到更大的 `graph_num_tokens`。 |
+| Ragged Verify 是否破坏固定 `N+1` 模型 | **取决于执行模式。** `static` 和 `cap-accept` 仍执行固定宽度 `B*(gamma+1)`；`cap-accept` 只限制可接受的前缀。真正执行 compact 时，逻辑 Token 行数才是 `sum(verify_lens)`，Graph 还可能增加 padding。 |
 
 ---
 
@@ -132,7 +132,7 @@ speed = 1 / step_time * acc_length
 speed=\frac{accept\_length}{step\_time}
 \]
 
-但严格 Review 后必须讲清三个边界。
+这里需要区分三个边界。
 
 ### 1. 它不是 `bs=1` 专用
 
@@ -501,7 +501,7 @@ CAP_ACCEPT = "cap-accept"
 COMPACT = "compact"
 ```
 
-非 static 模式下，DSpark planner 会使用 confidence head 的 per-position survival probability 和 global token budget，给每个请求安排不同 Verify Length。
+非 static 模式下，DSpark planner 会使用 confidence head 的 per-position survival probability 和 global token budget，为请求选择不同前缀长度。但 planner 选出的长度不等于 Target 实际执行的行数：`cap-accept` 保留固定宽度 forward，只在接受阶段应用长度上限。
 
 固定实现：
 
@@ -536,19 +536,19 @@ req2 verify_len = 1
 req3 verify_len = 4
 ```
 
-真实 scheduled verify tokens：
+三种模式应分开计数：
 
-\[
-\boxed{
-M=\sum_r verify\_len_r
-}
-\]
+| 模式 / 执行路径 | Target 的逻辑输入行数 | `verify_lens` 的作用 |
+| --- | --- | --- |
+| `static` | `B*(gamma+1)` | 全窗口验证与接受 |
+| `cap-accept` | `B*(gamma+1)` | 限制每个请求可接受的前缀，不缩减 forward |
+| 实际进入 compact 路径 | `sum(verify_lens)` | 压紧输入与元数据；Graph 可能另有 padding |
 
-不再是：
+Worker 用 `should_run_compact(layout)` 决定是否调用 compact forward；配置了调度长度，也可能仍走 non-compact 路径。核算节省的计算量时，要看实际执行路径。
 
-\[
-B(\gamma+1)
-\]
+固定实现：[`dspark_worker_v2.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)、[`dspark_verify.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_verify.py)。
+
+下面的 Graph tier 分析针对实际支持并启用 compact 的后端；不能据此认定 Ascend NPU 的 static 配置也减少了 Verify 行数。
 
 ---
 
@@ -926,7 +926,7 @@ thinking / non-thinking
 | strict `spec_accept_rate` | Draft 本身预测质量 |
 | accept histogram | 均值背后的分布 |
 | avg / P99 `verify_len` | Ragged 实际探索深度 |
-| `total_verify_tokens` | 真正 scheduled candidate work |
+| `total_verify_tokens` | Planner 分配的逻辑预算，需与实际 forward 行数、Graph padding 分开记录 |
 | `graph_num_tokens` | graph tier / padding |
 | step time | speculative critical path proxy |
 | TPOT / P99 ITL | 用户侧延迟 |
@@ -962,7 +962,7 @@ Step Time ↑↑
 R\approx\frac{AcceptLength}{StepTime}
 \]
 
-严格 Review 后，更完整的版本应该是：
+把这些因素补齐，得到：
 
 \[
 \boxed{
@@ -1057,12 +1057,12 @@ Actual Speculative Critical Path
 
 最大。
 
-严格 Review 后，可以得到四条特别重要的工程结论：
+前面的分析对应四条工程结论：
 
 1. **`accept_length / step_time` 不是低并发专属，但只能在固定 workload geometry 下作为配置 proxy；跨 batch size 比 aggregate throughput 必须把 request count 算进去。**
 2. **runtime `spec_accept_rate` 与 Ascend CI 当前名为 `accept_rate` 的 proxy 不是同一个指标。**
 3. **Block Size 增大后，被 amortize 的是 fixed / latency-dominated overhead；Target Compute、MoE Token Work、KV/State 与通信字节不会消失，只可能 per-token 更高效。**
-4. **Ragged Verify 下，“每个请求固定 Verify N+1”已经不成立；`gamma+1` 是上界，真实 work 是 `sum(verify_lens)`，而真正 wall-clock 还受到 graph tier 与 KV history geometry 影响。**
+4. **实际执行 compact 时，逻辑 Verify 行数为 `sum(verify_lens)`；`cap-accept` 仍按固定宽度执行。耗时还取决于 Graph padding、KV history geometry 和实际后端。**
 
 所以未来真正成熟的 DSpark 调优会越来越接近：
 

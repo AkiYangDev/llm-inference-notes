@@ -1,4 +1,4 @@
-# DeepSeek-V4 Attention 源码解析：一个 ForwardBatch 如何变成 Query，并通过 KV Cache 找回历史上下文
+# DeepSeek-V4 Attention：Query 生成、缓存写入与历史寻址
 
 上一篇《[SGLang ModelRunner 源码解析：ForwardBatch 如何驱动 DeepSeek 完成一次 Prefill / Decode](sglang-modelrunner-source-analysis.md)》把执行链追到了 `DeepseekV4DecoderLayer`。从这里继续往下一层，就是推理引擎里最核心的一段：当前 token 怎样形成 Query，又怎样准确找到属于自己这条请求的历史缓存。
 
@@ -481,7 +481,7 @@ flowchart TD
 
 ## 五、SWA / C4 / C128 不是三路同时开启，而是每个 Attention Layer 按 compress_ratio 选择自己的历史结构
 
-初稿最容易造成误解的地方，是把 SWA、C4、C128 画成了 Query 同时扇出到三路。
+SWA、C4、C128 的关系需要按具体层和后端展开，不能把它们统一画成 Query 同时扇出的三条支路。
 
 真实源码不是这样。
 

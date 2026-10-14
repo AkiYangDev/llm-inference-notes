@@ -1,6 +1,6 @@
 # DeepSeek-V4 MoE 推理源码解析：一个 Token 如何经过 Router、All-to-All 和 Expert Parallel 完成一次前向计算
 
-上一篇《[DeepSeek-V4 Attention 源码解析：一个 ForwardBatch 如何变成 Query，并通过 KV Cache 找回历史上下文](deepseek-v4-attention-source-analysis.md)》把 Decoder Layer 的 Attention 主线追到了输出。DeepSeek-V4 的一层还没有结束：Attention 之后，hidden states 会继续进入 MoE。
+上一篇《[DeepSeek-V4 Attention：Query 生成、缓存写入与历史寻址](deepseek-v4-attention-source-analysis.md)》把 Decoder Layer 的 Attention 主线追到了输出。DeepSeek-V4 的一层还没有结束：Attention 之后，hidden states 会继续进入 MoE。
 
 这篇文章真正要追的是：
 
@@ -248,7 +248,7 @@ hidden_states, _ = buf.fused_deep_moe(
 所以 Ascend Python 视角是：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     H[hidden_states] --> R[Router / TopK]
     R --> F[fused_deep_moe]
     F --> O[MoE output]

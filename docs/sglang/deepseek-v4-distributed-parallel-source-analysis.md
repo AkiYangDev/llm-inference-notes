@@ -179,12 +179,22 @@ self.wo_b = RowParallelLinear(
 
 源码：[`wo_b`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L904-L913)。
 
-`RowParallelLinear` 先让各 Rank 计算 partial output，需要合并时调用 `tensor_model_parallel_all_reduce(output_parallel)`。固定源码：[`RowParallelLinear`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/linear.py#L1422-L1696)。
+`RowParallelLinear` 先让各 Rank 计算 partial output。是否在内部归约，要看 `reduce_results`；不能把它内部的 global-TP AllReduce 当成所有 Attention 配置的路径。固定源码：[`RowParallelLinear`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/linear.py#L1422-L1696)。
+
+DeepSeek-V4 默认构造下的归约位置如下：
+
+| Attention TP 布局 | 输出归约 |
+| --- | --- |
+| `attn_tp_size = 1` | 无需 Attention TP 归约 |
+| `attn_tp_size = global_tp_size > 1` | `wo_b` 内部执行 TP AllReduce |
+| `1 < attn_tp_size < global_tp_size` | 关闭 `wo_b` 内部归约，随后显式调用 `attn_tp_all_reduce` |
+
+本文 `TP32 / DP16` 的例子属于最后一行：归约发生在两个 Rank 的 Attention TP 子组。依据同一版本模型中的 [`reduce_results` 与 `attn_tp_all_reduce`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py)。
 
 所以 Attention TP 的典型逻辑是：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     X[hidden states] --> C[Column-parallel Query projection]
     C --> T0[attn TP rank 0]
     C --> T1[attn TP rank 1]
@@ -195,7 +205,7 @@ flowchart LR
     A0 --> R[Row-parallel output]
     A1 --> R
     AN --> R
-    R --> RED[TP reduction]
+    R --> RED[Attention TP group reduction]
     RED --> Y[replicated post-attention hidden rows]
 ~~~
 

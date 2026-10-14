@@ -3,6 +3,7 @@
 如果只看 benchmark，Speculative Decoding 的性能问题似乎很简单：
 
 ~~~text
+示意数字（非实测）：
 Spec OFF    → 100 tokens/s
 DSpark ON   → 135 tokens/s
 
@@ -39,18 +40,18 @@ Ascend 910C Timeline
 
 ---
 
-## Strict Review 结论先行
+## 实现范围与关键区别
 
 这篇文章最容易被写错的四个地方已经逐项核过。
 
-| Review 点 | 当前源码结论 | 对 Profiling 的影响 |
+| 核对问题 | 当前源码结论 | 对 Profiling 的影响 |
 | --- | --- | --- |
 | draft_gpu_ms / target_verify_gpu_ms 在 Ascend 上到底测什么 | SGLang NPU 文本路径会加载 torch_npu.contrib.transfer_to_npu，因此 DSpark 里的 torch.cuda.Event 实际映射为 NPU Event。它测的是**当前执行流两个 Event 之间的设备 elapsed time**，不是全设备所有 Stream 的 Kernel Duration 求和。 | 可以用它做 Draft / Verify 阶段级时间锚点，但不能把它当“总 NPU Busy Time”。Side Stream 若未在结束 Event 前 join，可能不完整计入。 |
 | folded Accept / Commit 是否会进入 Ascend NPU Graph | **当前不会。** DsparkVerifyEpilogue 的创建条件明确包含 is_cuda()；Ascend NPU 初始化又把 torch.cuda.is_available() 重新设为 False，所以 910C 上 epilogue 不创建，folded_accept=False、folded_commit=False。 | 在当前 910C DSpark 路径中，Accept / Finalize / TP Sync / Commit 应当视为 **Target Verify 之后的 eager Device Work**，而不是 Verify Graph 内部工作。 |
 | TARGET_VERIFY Replay 前是否会执行 graph.update(actual_seq_kvlen) | **DeepSeek-V4 当前不会走 generic update 分支。** NPUGraphRunner.execute() 对 DeepSeek-V4 / DSA 明确走 backend.replay(graph_key, forward_batch)，绕过 replay_with_input_update()。 | 如果 DSV4 Verify Graph 前出现 Host gap，不应直接归因于 NPUGraph.update。应先查 ForwardBatch / buffer copy、attention metadata、bucket / layout preparation 和 replay launch。 |
 | DeepEP async_finish / recv_hook 能隐藏什么 | deepep-mode=auto 在 Decode / Target Verify 会解析成 low-latency；low-latency 的 return_recv_hook 把“发起通信”和“等待数据真正可消费”拆开。但 DeepSeek-V4 当前 Decode / TARGET_VERIFY 的 TBO 尚未实现。 | API 提供的是**创造 overlap window 的机制**，不是“通信已经被隐藏”的证据。当前 DSpark Verify 不能用“V4 Decode TBO”解释通信隐藏；最终仍要看 Timeline 上 Dispatch / Expert Compute / Combine 是否实际重叠。 |
 
-经过 Review 后，当前 Ascend 910C 的 DSpark 主线应该先画成：
+固定版本中，Ascend 910C 的 DSpark 主线如下：
 
 ~~~text
 Draft
@@ -125,7 +126,7 @@ End-to-End Step Wall Time
 
 ---
 
-## 二、Strict Review ①：draft_gpu_ms / target_verify_gpu_ms 在 Ascend 上的真实计时语义
+## 二、draft_gpu_ms / target_verify_gpu_ms 在 Ascend 上的真实计时语义
 
 当前 DSpark 阶段计时代码位于：
 
@@ -259,9 +260,9 @@ Accept / Finalize / TP Sync / Commit
 
 ---
 
-## 三、Strict Review ②：当前 910C 不会把 Accept / Commit folded 进 Target Verify Graph
+## 三、当前 910C 不会把 Accept / Commit folded 进 Target Verify Graph
 
-这是本轮 Review 中最重要的修正。
+这一点决定了后处理应怎样计时。
 
 跨平台 DSpark 源码里确实存在 DsparkVerifyEpilogue，它可以在支持路径上把 Accept、Finalize、Out Token，甚至某些 Commit 注入动作捕获进 Target Verify Graph。
 
@@ -341,7 +342,7 @@ commit_hidden()
 因此可以构造一个很有用的诊断 proxy：
 
 ~~~text
-Post-Verify Residual
+Unattributed Step Time
 ≈
 step_gpu_ms
 -
@@ -350,9 +351,9 @@ draft_gpu_ms
 target_verify_gpu_ms
 ~~~
 
-它不是严格的物理可加分解，因为仍可能有 multi-stream overlap，但在当前 NPU 路径里很适合发现 Verify 之后的尾部是否异常变大。
+这个差值包含 Draft、Verify 计时区间之外的工作：可能是前置规划、阶段间空隙，也可能是 Accept / Commit。多流重叠还会影响可加性，所以它只能提示未归属时间变化，不能单凭差值把问题定位到 Verify 之后。
 
-当 residual 突然增大时，优先看：
+差值增大后，应在时间线上核对前置规划、阶段间空隙，以及以下后处理：
 
 ~~~text
 Accept kernels
@@ -377,7 +378,7 @@ folded Commit 还需要 epilogue.folds_commit 成立。
 
 ---
 
-## 四、Strict Review ③：DeepSeek-V4 TARGET_VERIFY 当前绕开 graph.update(actual_seq_kvlen)
+## 四、DeepSeek-V4 TARGET_VERIFY 当前绕开 graph.update(actual_seq_kvlen)
 
 当前：
 
@@ -523,7 +524,7 @@ replay
 
 ---
 
-## 五、Strict Review ④：DeepEP async_finish / recv_hook 到底能隐藏哪一段通信
+## 五、DeepEP async_finish / recv_hook 到底能隐藏哪一段通信
 
 通信 overlap 是最容易把“API 有 async”误写成“性能已经 overlap”的地方。
 
@@ -717,7 +718,7 @@ T_comm_exposed
 
 ---
 
-## 六、四点 Review 后，910C 的 DSpark Timeline 应该重新画成什么样
+## 六、把阶段边界放回 910C 的 DSpark Timeline
 
 当前更合理的时间线是：
 
@@ -816,7 +817,7 @@ commit_lens
 
 第一张性能表应该长这样：
 
-| Step | BS | Verify Tokens | Step GPU | Draft GPU | Verify GPU | Post-Verify Proxy | Avg Commit |
+| Step | BS | Verify Tokens | Step GPU | Draft GPU | Verify GPU | Unattributed Step Time | Avg Commit |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | N | ... | ... | ... | ... | ... | ... | ... |
 | N+1 | ... | ... | ... | ... | ... | ... | ... |
@@ -824,7 +825,7 @@ commit_lens
 其中：
 
 ~~~text
-Post-Verify Proxy
+Unattributed Step Time
 =
 Step GPU
 -
@@ -944,7 +945,7 @@ Accept / Sync / Commit tail
 
 本身就是重要分析对象。
 
-如果 Post-Verify Proxy 很大，就优先从这里找。
+如果 Unattributed Step Time 很大，先在时间线上确认多出的时间是否确实位于这一段，再检查 Accept / Commit。
 
 ### 9.4 Replay 前有 Host gap时，不要先找 graph.update
 
@@ -972,7 +973,7 @@ hook / wait
 
 ## 十、把性能模型从 Kernel Ranking 升级成 Effective Progress
 
-经过严格 Review 后，更合适的模型是：
+结合阶段边界，得到下面的模型：
 
 ~~~text
 T_step_wall
@@ -1073,7 +1074,7 @@ flowchart TD
     B --> C{哪段变慢}
     C --> D[Draft]
     C --> E[Target Verify]
-    C --> F[Post-Verify tail]
+    C --> F[阶段外时间差]
 
     D --> G[SGLang torch_npu trace]
     E --> G
@@ -1137,7 +1138,7 @@ flowchart TD
 forward_ct
 Draft ms
 Verify ms
-Post-Verify residual
+Unattributed Step Time
 DeepEP exposed communication
 NPU Graph pre-replay gap
 Commit Length

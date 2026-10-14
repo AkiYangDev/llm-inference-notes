@@ -222,7 +222,7 @@ attn_tp_size == 1
 
 ## 三、History + Root Cause：规则已经统一了，为什么日志还会漂移？
 
-v0.2 的 PR Reviewer 会先问一个以前容易忽略的问题：**这个规则在 #39871 之前是怎样组织的？**
+**在 #39871 之前，Attention TP 的派生规则是怎样组织的？**
 
 这里能找到一个很有价值的前置设计背景。
 
@@ -396,7 +396,7 @@ Many consumers reuse it
 
 ## 五、Validation Surface：这个 PR 到底验证了什么，又没有验证什么？
 
-旧版文章只强调“这是 log-only”，v0.2 还要继续问：**证据真正覆盖到了哪里？**
+这次改动属于 log-only；下面分别核对日志变化、测试覆盖和行为范围。
 
 先做 Evidence Ladder：
 

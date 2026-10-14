@@ -1,4 +1,4 @@
-# DeepSeek-V4 Speculative Decoding 源码解析：MTP（Multi-Token Prediction）如何让 Draft 一次预测多个 Token
+# DeepSeek-V4 MTP / NextN：草稿候选如何逐步生成并交给 Target 验证
 
 前一篇已经把一轮 speculative decoding 的闭环串了起来：
 

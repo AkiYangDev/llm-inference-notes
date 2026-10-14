@@ -221,7 +221,7 @@ kernel-facing
 到这里，整个控制边界可以画成：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     R["Req<br/>请求生命周期"]
     SB["ScheduleBatch<br/>调度状态"]
     FB["ForwardBatch<br/>一次 Forward 快照"]
@@ -256,7 +256,7 @@ input_ids
 hidden_states = self.embed_tokens(input_ids)
 ~~~
 
-DeepSeek-V4 的 hidden size 是 4096，于是先得到：
+这里采用 DeepSeek-V4-Flash 的 `hidden_size=4096` 作为具体示例，于是先得到：
 
 ~~~text
 [3]
@@ -521,7 +521,7 @@ Router 回答的是：
 如果选中的 Expert 不在当前 Rank，就必须把这行 hidden state 发给 Expert owner，于是出现 Dispatch / All-to-All。
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     T["Token hidden rows<br/>Token order"]
     R["Router / TopK"]
     D["Dispatch / A2A"]
@@ -677,7 +677,7 @@ Group 是 <code>tp_sync_group</code>。因此 DP Attention 下这里是 <code>at
 到这里，自回归循环闭环：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     H["hidden<br/>[B_local,H]"]
     LM["Vocab-sharded LM Head"]
     G["Logits gather / row restore"]

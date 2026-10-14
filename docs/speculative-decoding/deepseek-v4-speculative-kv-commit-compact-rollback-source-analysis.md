@@ -16,7 +16,7 @@ logical sequence position
 physical KV slot
 ~~~
 
-如果把这些索引空间混在一起，就很容易把 `accept_index` 当成 KV 地址、把 `accept_lens - 1` 理解成“bonus 不提交”，或者把 reject 想成“立刻 free 那几块 KV”。
+如果把这些索引空间混在一起，就很容易把 `accept_index` 当成 KV 地址、把新 bonus 的输出误当成它的 KV 已经提交，或者把 reject 想成“立刻 free 那几块 KV”。
 
 本文把这条链一次追到底。
 
@@ -24,14 +24,14 @@ physical KV slot
 
 ## Review 结论先行
 
-这次严格 Review 重点核了四个容易写错的点，结论如下。
+先区分四个直接影响缓存提交的概念。
 
-| Review 点 | 固定源码结论 |
+| 核对问题 | 固定源码结论 |
 | --- | --- |
 | `move_kv_cache()` 的 src/dst 方向 | API 是 `move_kv_cache(tgt_loc, src_loc)`，实际语义是 **`dst <- src`**。EAGLE commit 时 `accept_out_cache_loc` 是 source candidate KV，`tgt_cache_loc` 是 destination committed KV。 |
 | `accept_index` 是否包含 bonus | **有效前缀长度等于 `accept_lens`，最后一个有效 index 承载 bonus。** 但 bonus 不是额外创建一个 tree node；它写入“最后一个 accepted verify row”的 `predict` 槽位。 |
 | Spec V2 overshoot 什么时候真正 free | 正常 reject 后**不会每轮立即 free**。allocated-but-uncommitted tail 通常留作 reserve/reuse；真正回收发生在 request release/finish/abort、decode retract/preempt，以及 StreamingSession 的 trim/rewind 等生命周期点。 |
-| Ascend DSV4 C4/C128 cleanup | 必须区分 **KV page 回收** 与 **compressor state 清理**。`clear_unaccepted_c128_draft_states()` 清的是 C128 state ring，不是释放 C128 KV pages；C4 state 跟随 SWA physical pages，不能套用同一个 request-scoped cleanup 模型。 |
+| Ascend DSV4 C4/C128 cleanup | 必须区分 **KV page 回收** 与 **compressor state 清理**。`clear_unaccepted_c128_draft_states()` 清的是 C128 state ring，不是释放 C128 KV pages；pre-A5 的 C4 state 跟随 SWA physical pages；A5 的 CYCLE state 则按请求索引，须分别处理。 |
 
 这四个结论会贯穿全文。
 
@@ -423,7 +423,7 @@ sgl_kernel_npu.sample
 
 ---
 
-## 三、KV Commit：`move_kv_cache(tgt, src)` 到底谁搬到谁，以及 `accept_lens - 1` 为什么没有丢掉 bonus
+## 三、KV Commit：`move_kv_cache(tgt, src)` 到底谁搬到谁，以及输出与缓存为什么相差一位
 
 Target Verify 得到：
 
@@ -444,66 +444,21 @@ move_accept_tokens_to_target_kvcache(
 
 这里有两个非常容易误读的点。
 
-### 1. `accept_lens - 1` 不是“bonus 不进 KV”
+### 1. 输出增加多少 Token，和哪些 Token 已经有 KV，是两件事
 
-被调函数的第三个参数叫：
+`move_accept_tokens_to_target_kvcache()` 的第三个参数是 `num_correct_drafts`，因此调用方传入 `accept_lens - 1`；函数内部再按 `num_correct_drafts + 1` 创建目标区间。这个 `+1` 对应本轮作为输入的旧 root，而本轮新采样出的 terminal bonus 要等下一次 forward 才有自己的 KV。
 
-~~~python
-num_correct_drafts
-~~~
+例如，旧 root 是 R，接受的 Draft 是 A、C，最后采样得到 X：
 
-而不是 `accept_lens`。
+| 本轮 Verify 行 | 该行已计算的 KV 属于 | 该行选中的输出 |
+| --- | --- | --- |
+| root 行 | R | A |
+| A 行 | A | C |
+| C 行 | C | X（新 bonus） |
 
-调用处做的是：
+本轮输出追加 `[A, C, X]`，KV 则提交 `[R, A, C]`。两者长度都是 `accept_lens=3`，Token 身份相差一位。`accept_index` 选中的是 Verify 行；用它取 `predict` 得到输出，用它搬缓存得到这些行的输入 KV。
 
-~~~text
-accept_lens
-    │
-    │ - 1
-    ▼
-num_correct_drafts
-~~~
-
-函数内部创建 committed destination range 时又使用：
-
-~~~python
-batch.seq_lens + num_correct_drafts + 1
-~~~
-
-所以最终长度还是：
-
-~~~text
-num_correct_drafts + 1
-=
-accept_lens
-~~~
-
-例如：
-
-~~~text
-correct drafts = 3
-bonus          = 1
-
-accept_lens    = 4
-~~~
-
-调用处：
-
-~~~text
-accept_lens - 1 = 3
-~~~
-
-函数内部：
-
-~~~text
-3 + 1 = 4
-~~~
-
-四个 accepted output 对应的位置都会进入 committed continuation。
-
-因此：
-
-> **`accept_lens - 1` 只是把“accepted output 数”转换回“correct draft 数”，不是把 bonus 从 KV commit 中排除。**
+因此，`accept_lens - 1` 是参数计数的转换；它并不说明 X 的 KV 已经产生。X 还未经过 Target forward，不能在本轮提交一份尚不存在的 KV。
 
 ### 2. `move_kv_cache()` 的参数方向已经从实现确认
 
@@ -548,7 +503,7 @@ move_kv_cache(
 )
 ~~~
 
-严格 Review `memory_pool.py` 后，可以确认 API 顺序就是：
+`memory_pool.py` 的实现给出了明确的参数顺序：
 
 ~~~python
 move_kv_cache(tgt_loc, src_loc)
@@ -850,37 +805,16 @@ C128 compressor state
 
 而它们的地址与 ownership 不是一套规则。
 
-### 1. Ascend NPU 上 C4 state 与 C128 state 的 ownership 不同
+### 1. C4 state 的 ownership 还取决于 NPU 架构
 
-NPU DSV4 memory pool 的源码注释明确写着：
+固定版本的 `dsv4_memory_pool.py` 区分两条路径：
 
-~~~text
-C4A / C4Li state
-→ follows SWA physical pages
+| 路径 | C4 compressor state 的寻址与注册 |
+| --- | --- |
+| pre-A5 / EXPLICIT | 跟随 SWA physical page/state index，纳入 SWA state buffers |
+| A5 / CYCLE | 使用 `req_pool_idx` 对应的独立环形状态，通过 `get_c4_state_buf_infos()` 单独注册 |
 
-C128A state
-→ follows req_pool_idx + absolute position
-~~~
-
-因此：
-
-~~~text
-C4 state
-~~~
-
-更像 page-owned / SWA-addressed state；
-
-而：
-
-~~~text
-C128 state
-~~~
-
-是 request-scoped ring。
-
-这已经决定了：
-
-> **不能设计一个“按 req_pool_idx 把 C4/C128 全部清掉”的统一 rollback。**
+C128 state 使用请求与绝对位置管理的 ring。讨论 rollback 时，既要区分 compressed KV 与 compressor state，也要确认架构分支。不能把 pre-A5 的 C4 页绑定规则推广到全部 Ascend NPU。
 
 ### 2. `clear_unaccepted_c128_draft_states()` 清的是 state，不是 C128 KV pages
 
@@ -951,7 +885,7 @@ C4 overwrites its draft slots before reading them.
 
 > **在这个 specific rejected-draft stale-state hazard 上，C4 的 overwrite-before-read 语义已经避免了同类问题。**
 
-另外，Ascend NPU 的 C4 state 跟随 SWA physical pages，本来也不属于 C128 那种 request-scoped ring ownership。
+另外，pre-A5 的 C4 state 跟随 SWA physical pages；A5 的 CYCLE 路径采用独立请求状态。是否需要清理，要结合各自的寻址和覆盖顺序判断。
 
 ### 4. C128 KV page 真正怎样释放
 

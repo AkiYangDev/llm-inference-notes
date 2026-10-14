@@ -1,4 +1,4 @@
-# DeepSeek-V4 Prefill / Decode Disaggregation 源码解析：为什么生产系统需要拆分 Prefill 和 Decode
+# DeepSeek-V4 PD 分离：首 Token、KV 状态与 Decode 接管
 
 前面的文章已经沿着一次 DeepSeek-V4 请求走过 Scheduler、ModelRunner、Attention、MoE、TP/DP/EP，以及 DSpark 的 Draft → Verify → Accept/Reject。到了真正的在线 Serving，系统还会遇到另一个看似反直觉的问题：
 
@@ -113,7 +113,7 @@ DP3 → Decode
 PD Disaggregation 的第一层价值于是出现了：
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     R[Requests] --> P[Prefill Pool]
     P -->|state handoff| D[Decode Pool]
     D --> O[Generated Tokens]

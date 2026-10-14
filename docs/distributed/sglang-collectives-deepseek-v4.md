@@ -207,7 +207,7 @@ P0/P1 都只是 partial sum，完整结果是 P0+P1，因此天然需要 Reduce�
 
 ---
 
-## 三、严格核 DeepSeek-V4 Attention：attn_tp_all_reduce 的真实边界
+## 三、DeepSeek-V4 Attention：attn_tp_all_reduce 的真实边界
 
 把 DeepSeek-V4 简化成“Attention 后做 AllReduce”不够精确。当前源码真正的归约边界在 Attention 输出投影 wo_b 的 RowParallel partial output。
 
@@ -301,7 +301,7 @@ attn_tp_size = 1
 
 ---
 
-## 四、严格核 dp_gather_replicate：三种实现为什么语义等价
+## 四、dp_gather_replicate：三种实现为什么语义等价
 
 DeepSeek-V4 从 DPA Attention 进入没有 A2A backend 的 MoE 路径时，会调用 dp_gather_replicate。
 
@@ -405,7 +405,7 @@ ATP1: [C D]
 
 ---
 
-## 五、严格核 ReduceScatter：什么时候真正替代 post-expert AllReduce
+## 五、ReduceScatter：什么时候真正替代 post-expert AllReduce
 
 DPA → MoE 不等于“一定 Gather 后 ReduceScatter”。当前 no-A2A 路径至少有三种 combine 方式。
 
@@ -508,7 +508,7 @@ C. skip post-expert reduce → ReduceScatter
 
 ---
 
-## 六、严格核 Ascend 910C：DeepEP 和 FuseEP 都做 A2A，但数据面不是一条路径
+## 六、Ascend 910C：DeepEP 和 FuseEP 都做 A2A，但数据面不是一条路径
 
 MoE 的 All-to-All 本质是 owner migration：
 

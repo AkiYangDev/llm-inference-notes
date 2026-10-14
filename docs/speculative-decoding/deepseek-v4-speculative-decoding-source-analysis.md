@@ -456,6 +456,8 @@ new_seq_lens = prefix_lens + commit_lens
 
 源码：[`finalize_accept_lens()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L720-L780)。
 
+这里的计数同时用于输出推进和 KV-ready frontier，但两者对应的 Token 相差一位。例如旧 anchor 为 R，接受 A、B，采样出 bonus X：本轮输出是 `[A, B, X]`，本轮已有的输入 KV 是 `[R, A, B]`。X 的 KV 要在下一次 forward 计算；`commit_lens=3` 并不表示 X 已有 KV。
+
 为什么总是 `+1`？
 
 因为一次 successful verify 不只是提交：

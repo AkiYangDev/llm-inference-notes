@@ -24,28 +24,11 @@ Ascend 910C AI Core
 
 对 DeepSeek-V4 这种同时包含 Attention、MoE、DeepEP、DPA 和投机推理的模型，答案不可能只由 dtype 决定。
 
-更接近工程现实的性能模型是：
+评估收益时，应比较同一工作负载下的总耗时：量化 GEMM 节省了多少时间，是否足以覆盖动态量化、Scale 处理、格式转换和额外 Launch 的成本。小 M、Expert Batch 分散、Layout 与 Tiling 会改变这些项的大小。
 
-~~~text
-W8A8 的实际收益
-=
-Quantized GEMM 节省的时间
+Attention、通信和其他未被量化的工作仍留在总时间里，限制端到端加速比；它们不能再次作为额外开销从 GEMM 的节省量中扣除。若计算与通信有重叠，还要以实际关键路径上的时间差为准。
 
--
-Activation Quant 成本
--
-额外 Scale / Launch / Epilogue 成本
--
-小 M 下的低并行度
--
-不理想 Layout / Tiling
--
-MoE 小 Expert Batch
--
-Attention / Communication / Runtime 中未被量化加速的时间
-~~~
-
-本文对四个最容易被经验性描述带偏的问题做严格源码 Review：
+下面沿四个问题检查具体实现：
 
 1. <code>npu_dynamic_quant</code> 在 Decode 小 M 时到底能从源码证明什么；
 2. <code>aclnnQuantMatmulWeightNz</code> 对 M=1/2/4/8 是否真的存在固定 tiling bucket；
@@ -188,11 +171,11 @@ else:
 
 ---
 
-## 二、Decode 小 M：DynamicQuant 的低并行度可以从 CANN 源码直接证明，但微秒数不能
+## 二、Decode 小 M：arch35 源码对照与 910C 的核对范围
 
-这一点是本轮 Review 最重要的源码结论之一。
+这一节读取的是 CANN **arch35** 分支，用来说明一种按行分配计算核的实现。本文尚未建立该分支与 910C 实际算子路径之间的对应关系，因此下面的 `coreNum` 公式不能直接当作 910C 的已确认行为。
 
-CANN arch35 的：
+对照文件是：
 
 ~~~text
 quant/dynamic_quant/
@@ -313,7 +296,7 @@ M=2 → 8.8 μs
 
 所以本文能够严格确认的是：
 
-> **小 M 会直接限制 standalone DynamicQuant 的可用 row parallelism。**
+> **在这里展示的 arch35 二维 per-token 路径中，小 M 会限制 row-level 并行度。910C 是否采用相同分工，仍需检查其实际分支与 tiling。**
 
 具体 launch + device duration 仍必须由 Ascend 910C profiler 给出。
 
@@ -321,7 +304,7 @@ M=2 → 8.8 μs
 
 ## 三、aclnnQuantMatmulWeightNz 的 M=1/2/4/8：源码存在 Small-M 逻辑，但不存在一张固定 bucket 表
 
-第二个 Review 点需要纠正一种常见写法。
+接下来检查小 M 的 MatMul 分块方式。
 
 我们很容易写：
 
@@ -332,7 +315,7 @@ M=4 → Tiling C
 M=8 → Tiling D
 ~~~
 
-当前公开的 QuantBatchMatmulV3 arch35 源码并不支持这种简单结论。
+作为源码对照，公开的 QuantBatchMatmulV3 arch35 分支并不支持这种简单结论。它同样不能替代对 910C 实际分支的检查。
 
 ### M 的确是 Tiling 的一等输入
 
@@ -485,7 +468,7 @@ N % 32 == 0
 
 不满足就保持 ND，并提示可能降低性能。
 
-本轮 Review 的关键是把规则代入 DeepSeek-V4-Flash 的真实 shape。
+下面把布局规则代入 DeepSeek-V4-Flash 的具体 shape。
 
 ### 官方模型的关键维度
 
@@ -766,7 +749,7 @@ expert_tokens histogram
 
 ---
 
-## 六、严格 Review 之后，W8A8 性能应该怎么测
+## 六、怎样测量 W8A8 的实际成本
 
 经过这轮源码核验，第一版文章里的 M sweep 可以升级成一套真正可判因果的实验矩阵。
 
@@ -933,11 +916,11 @@ output throughput gate = 3100 token/s
 
 ---
 
-## 结论：这四个 Review 点之后，哪些可以下结论，哪些不能
+## 源码结论与待测问题
 
 | 问题 | 严格结论 |
 | --- | --- |
-| DynamicQuant 小 M | 普通二维 per-token 路径的 row 数就是 M，初始 <code>coreNum=min(vectorCoreNum,M)</code>；小 M 明确限制 row-level 并行度 |
+| DynamicQuant 小 M | arch35 对照分支使用 <code>coreNum=min(vectorCoreNum,M)</code>；本文未确认该公式适用于 910C 的实际路径 |
 | DynamicQuant μs | **源码不能给出**，必须 profiler |
 | Quantmatmul M=1/2/4/8 | M 会进入 baseM / block / SmallMN / StreamK 计算，但没有发现固定 1/2/4/8 查表分支 |
 | FRACTAL_NZ 对齐 | DSV4 主要 W8A8 Dense shape <code>wq_a/wkv/wq_b</code> 天然满足当前 INT8 NZ alignment |
@@ -1008,4 +991,4 @@ CANN：
 - [QuantBatchMatmulV3 StreamK tiling](https://github.com/hicann/ops-nn/blob/0026707d7ecb24d258e030d831c8121ac2d055bd/matmul/quant_batch_matmul_v3/op_host/op_tiling/arch35/qbmm_streamk_tiling.cpp)
 - [GroupedMatmul tiling](https://github.com/hicann/ops-transformer/blob/bbb4dafe296119266a0a64133f17bc42b6597ed3/gmm/grouped_matmul/op_host/op_tiling/grouped_matmul_tiling.cpp)
 
-下一步如果要把本文从“源码严格推导”升级成“Ascend 910C 实测结论”，最值得做的不是继续读更多代码，而是跑四组最小实验：DynamicQuant M sweep、WeightNz M sweep、NZ/ND A/B、Expert <code>M_e</code> sweep，然后把 tiling dump 与 profiler 时间线一一对上。
+下一步如果要把本文形成“Ascend 910C 实测结论”，最值得做的不是继续读更多代码，而是跑四组最小实验：DynamicQuant M sweep、WeightNz M sweep、NZ/ND A/B、Expert <code>M_e</code> sweep，然后把 tiling dump 与 profiler 时间线一一对上。

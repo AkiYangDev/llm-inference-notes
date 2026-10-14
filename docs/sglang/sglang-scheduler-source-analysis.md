@@ -41,7 +41,7 @@ process_batch_result(batch, result)
 对应源码在 [`Scheduler.event_loop_normal()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1932-L1963)。每一轮循环先接收新请求，然后通过 `get_next_batch_to_run()` 产出一个 `NextBatchPlan`；其中 `batch_to_run` 是本轮准备执行的 batch，`running_batch` 则保存需要跨轮继续推进的生成请求。
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[新请求到达] --> B[waiting_queue]
     B --> C[get_next_batch_to_run]
     R[running_batch<br/>已经进入生成阶段的请求] --> C
@@ -309,7 +309,7 @@ out = self.model_runner.forward(forward_batch)
 到这里，三个对象的边界就非常清楚了：
 
 ```mermaid
-flowchart LR
+flowchart TD
     R[Req<br/>长期请求状态]
     S[ScheduleBatch<br/>Scheduler 本轮计划]
     F[ForwardBatch<br/>一次 forward 输入快照]

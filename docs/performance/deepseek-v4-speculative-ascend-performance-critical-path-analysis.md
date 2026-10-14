@@ -40,13 +40,13 @@ T_round = CriticalPath(G_round)
 
 ---
 
-## 一、先把六个 Strict Review 结论钉死：性能优化首先是依赖关系问题
+## 一、六处关键执行边界：Graph、Stream 与通信依赖
 
 这篇文章最容易写错的地方，不是某个 Kernel 名字，而是把“异步”“Graph”“Multi-Stream”直接等同于“并行”。
 
 固定源码核对后的结论如下。
 
-| Review 点 | 固定源码结论 |
+| 核对问题 | 固定源码结论 |
 | --- | --- |
 | Draft Graph 一次 replay 到底包含几步 NextN | Graph Capture 包住完整 `draft_forward()`；循环有 `num_steps` 个 candidate stage，但最后一轮在 model forward 前就 `break`，所以真正执行 NextN model forward 的次数是 **`num_steps - 1`**。candidate1 来自上一阶段 Draft Extend。 |
 | Target Verify Graph 怎么 bucket | 普通 EAGLE **不是 Ragged Verify**。Target runner 的 `captured_req_width = speculative_num_draft_tokens`；先按 request batch size 选 / pad Graph bucket，再得到 `padded_tokens = bucket_bs × captured_req_width`。开启 DP Attention / MLP gather 时，bucket admission 使用各 DP rank 原始 request count 的最大值。 |
@@ -1022,7 +1022,7 @@ export SGLANG_NPU_USE_MULTI_STREAM=1
 
 > “这个 workload 实测发现 Draft Extend Graph 更慢，所以官方关闭。”
 
-但 Strict Review 后不能直接这样写。
+实际调用路径还需要进一步区分。
 
 ### Runtime 真正读取的是另一个变量名
 

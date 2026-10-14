@@ -29,7 +29,7 @@ Same Hardware Behavior
 假设用户输入 2048 个 Prompt Token，然后让模型生成 512 个 Output Token。
 
 ~~~mermaid
-flowchart LR
+flowchart TD
     A["Prompt<br/>2048 Tokens"]
     B["Prefill<br/>一次处理很多新 Token"]
     C["First Token"]
@@ -208,6 +208,8 @@ M_e
 =
 Expert e 当前实际收到多少 Token
 ~~~
+
+估算平均 `M_e` 时，分子中的 Token 总量应取同一 EP 通信域；不能把单 Rank 的本地行数直接当作整个 EP 域的总量。
 
 DeepSeek-V4-Flash 的公开配置是：
 
@@ -438,7 +440,7 @@ DeepSeek-V4 仍然会随着 Context 变长承受越来越重的历史状态成�
 
 ## 五、Decode 还有一个与 HBM 无关、但同样致命的问题：跨 Token 串行与固定成本反复支付
 
-即使暂时忽略 KV / compressed history，Decode 仍然有一个 Prefill 无法逃避的问题：未来 Token 尚不存在。
+即使暂时忽略 KV / compressed history，Decode 仍然有一个无法逃避的问题：未来 Token 尚不存在。
 
 第 t 个输出 Token 的链路是：
 
@@ -509,11 +511,12 @@ flowchart TD
     D4 --> D5["Indexer / compressed history 随 Context 增长"]
     D2 --> D6["固定 Launch 成本难摊薄"]
     D3 --> D6
-    D5 --> D6
-    D6 --> D7["跨 Token 串行"]
+    D --> D7["跨 Token 串行依赖"]
 
     P5 --> TTFT["TTFT / Input Throughput"]
-    D7 --> TPOT["TPOT / Output Throughput"]
+    D5 --> TPOT["TPOT / Output Throughput"]
+    D6 --> TPOT
+    D7 --> TPOT
 ~~~
 
 于是今天常见的推理优化就能从同一张图里推出。

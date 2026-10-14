@@ -257,6 +257,10 @@ kbd {font:12px ui-monospace,monospace;border:1px solid var(--line);background:va
 .numbered-code[style*="--selected-line"] {background-image:linear-gradient(#76b7ed29,#76b7ed29);background-repeat:no-repeat;background-size:100% var(--code-row);background-position:0 calc(var(--code-pad) + var(--selected-line)*var(--code-row))}
 .table-scroll {overflow-x:auto;overscroll-behavior-x:contain;border:1px solid var(--line);border-radius:10px;margin:27px 0}
 .prose table {border-collapse:collapse;width:100%;min-width:500px;font-size:14px;line-height:1.8}
+@media (max-width:640px) {
+  .prose table:not(:has(tr > :nth-child(4))) {min-width:0;table-layout:fixed}
+  .prose table:not(:has(tr > :nth-child(4))) :is(th,td) {overflow-wrap:anywhere}
+}
 .prose th,.prose td {text-align:left;padding:13px 16px;border-bottom:1px solid var(--line)}
 .prose th {background:var(--soft);font-weight:600}
 .prose tr:last-child td {border-bottom:0}

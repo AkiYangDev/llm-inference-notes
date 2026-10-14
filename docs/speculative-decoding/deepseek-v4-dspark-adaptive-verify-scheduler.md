@@ -44,7 +44,7 @@ cap-accept / compact
 
 > **单位时间预计能够 Commit 多少有效 Token。**
 
-严格 Review 后，四个容易被写得过于顺滑的地方必须收紧：
+理解这套调度，需要先区分四件事：
 
 1. Confidence Head 的训练 target 与 STS 的运行时 calibration label 并不严格同构；
 2. <code>tau = B + sum(survival)</code> 在理想条件下对应期望 committed progress，但一般 Runtime 中只是 surrogate；
@@ -164,7 +164,7 @@ s3 = c1*c2*c3
 s1 >= s2 >= s3 >= ...
 ~~~
 
-Global Top-K 天然保持 prefix 结构。最终得到：
+前缀概率随位置不增，但仅靠这一点还不足以处理相等概率。固定实现对并列值优先选较早的位置，再按请求编号排序，才保证所选位置构成前缀。最终得到：
 
 ~~~text
 verify_lens = [l1, l2, ..., lB]
@@ -176,7 +176,7 @@ verify_lens = [l1, l2, ..., lB]
 
 ## 二、Confidence Head 的训练 target 与 STS label 并不严格同构
 
-这是本轮 Review 最大的语义修正。
+这一区分决定了后面收益模型的含义。
 
 ### DeepSeek 官方 DeepSpec 训练的是什么
 
@@ -348,7 +348,7 @@ S_k = product(i<=k) c_i
 
 ## 三、tau 什么时候真的是 expected committed progress
 
-本轮 Review 可以把 Planner 的 tau 与真实 commit 精确对上。
+Planner 的 tau 可以和实际 commit 计数对应起来。
 
 DSpark Accept 最后进入 <code>FinalizeAcceptLens</code>：
 
@@ -473,7 +473,7 @@ current survival
 
 时 budget 会偏。
 
-第三，Request Pool slot 可能被复用，所以 Planner 用 <code>req_generation</code> 防止新 Request 继承旧 Confidence。generation 不匹配时会保守回退到全 1 survival。
+第三，Request Pool slot 可能被复用，所以 Planner 用 <code>req_generation</code> 防止新 Request 继承旧 Confidence。generation 不匹配时回退到全 1 survival，避免沿用旧请求的低置信度。这是偏乐观的收益估计，并不表示新请求实测接受率为 100%。
 
 第四，开启 graph-tier alignment 后，最终执行 budget 会向上填满已经支付的 graph tier；这时执行 budget 不再等于原始 argmax budget，而是刻意做 paid-padding reclamation。
 
@@ -941,7 +941,7 @@ C4/C128 state write
 
 ---
 
-## 七、严格 Review 后应该怎么验证
+## 七、如何验证调度收益
 
 ### A. Confidence 事件语义
 
@@ -1042,10 +1042,10 @@ commit_lens/new_seq_lens
 | CUDA DSV4 支持 ragged verify graph | capability 与 metadata 源码确认 |
 | NPU DSV4 支持 ragged verify graph | **当前未 opt-in** |
 | NPU DSV4 eager Verify 已消费 ragged verify_lens | **当前 metadata 仍固定 draft_token_num** |
-| 当前 Ascend 910C 官方 DSpark recipe | static CI 已验证 |
+| 当前 Ascend 910C 官方 DSpark recipe | 注册 CI 配置使用 static；配置存在本身不代表测试已通过 |
 | 910C compact 性能收益 | **需 backend 补齐后实测** |
 
-经过严格 Review，完整链路应理解成：
+把前面的数据流连起来：
 
 ~~~text
 DeepSpec Training

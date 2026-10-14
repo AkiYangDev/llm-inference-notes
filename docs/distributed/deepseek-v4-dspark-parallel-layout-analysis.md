@@ -148,7 +148,7 @@ dp_moe_sync = (
 
 > **MoE draft 不能简单像 Dense draft 那样把整个模型世界缩成一个 DP-local `attn_tp_group`，因为 Draft MoE path 还依赖跨 DP / MoE rank 的同步与 collective participation。**
 
-但这句话属于**由代码结构支持的设计推断**，不是某条源码注释直接宣布的 root cause。发布时必须保留这个边界。
+但这句话属于**由代码结构支持的设计推断**，不是某条源码注释直接宣布的 root cause。
 
 还有一个更细的点：`DraftBlockProposer._base_logits_context()` 在 `dp_moe_sync=True` 时，会短暂使用 `draft_tp_context(attn_tp_group)` 来计算 proposal-side base logits。也就是说，代码并不是“MoE draft 永远不用 attn_tp_group”，而是：
 
@@ -164,7 +164,7 @@ Draft model forward / MoE
 
 ## 三、`global_num_tokens` 到底是什么：名字像总数，实际是“每 Rank 的计数列表”
 
-这是初稿最需要收紧的地方之一。
+这里需要区分 draft 模型参数和实际通信布局。
 
 `ScheduleBatch.global_num_tokens` 在 decode-family DP 同步语义里并不是一个 scalar“全局 Token 总数”。它是：
 
@@ -344,7 +344,7 @@ Draft MoE distributed execution
 
 ## 五、Planner 里的 `attn_tp_size == 1` 不是全局 DSpark 限制，只约束一个 DP-tier gather 优化
 
-初稿里如果只看到：
+如果只看到：
 
 ~~~python
 and get_parallel().attn_tp_size == 1
@@ -405,7 +405,7 @@ TP32/DP16 的根因就在 Verify Planner
 
 ## 六、现在到底能确认什么，哪些仍只是 TP32/DP16 修复假设
 
-严格 Review 后，最重要的结论反而是：
+结合这些调用关系，可以得到：
 
 > **不能把当前问题简单归因为“Draft 缺少 target 的 token split / all-gather”。**
 
