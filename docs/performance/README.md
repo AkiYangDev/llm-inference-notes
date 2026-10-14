@@ -4,7 +4,7 @@
 
 ## 调优实践
 
-- [Ascend 950DT 单机 PD 调优：128K/1K、90% Cache，首字为什么还要等十几秒？](ascend-950dt-single-node-pd-optimization.md)：从 P 端缓存与执行方式、D 端 DSPARK 和图配置，到 N192/C48 完整实测；用四张图解释首字等待、投机接受边界与 batch padding。
+- [Ascend 950DT 单机 PD 调优：128K/1K、90% Cache 场景下的配置与实测](ascend-950dt-single-node-pd-optimization.md)：记录 P 端缓存与执行方式、D 端 DSPARK 和图配置的调整，结合四张图与 N192/C48 实测分析吞吐、时延和请求供给。
 - [从缓存校准到并发取舍：DeepSeek-V4-Pro 在 Ascend 910C 上的一次 32k/1k 调优记录](deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md)：记录共享前缀命中率校准、C24/C36/C72 的同 N 对照，结合 TTFT、TPOT、输出吞吐与客户端统计口径分析取舍；附实验 CSV 和测试脚本。
 
 ## 性能直觉入口
