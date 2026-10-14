@@ -349,7 +349,9 @@ mark {background:#cfe2ff;color:#194278;border-radius:3px;padding:0 2px}
 .diagram-controls {display:flex;gap:4px;align-items:center}
 .zoom-reset {font-size:12px;min-height:38px;padding:5px 10px}
 #diagram-view {overflow:auto;max-height:68dvh;min-height:150px;border-radius:10px;padding:20px;background:var(--soft);overscroll-behavior:contain}
-#diagram-view svg {max-width:none!important;height:auto!important;display:block;margin:auto}
+#diagram-view svg,#diagram-view img {max-width:none!important;height:auto!important;display:block;margin:auto}
+.prose .image-zoom {display:inline-block;max-width:100%;cursor:zoom-in}
+.prose .image-zoom:focus-visible {outline:2px solid var(--blue);outline-offset:4px;border-radius:10px}
 #menu-dialog {max-width:440px}
 #menu-dialog nav {display:grid;grid-template-columns:1fr 1fr;gap:10px}
 #menu-dialog nav a {padding:15px;background:var(--soft);border-radius:9px;font-size:15px;min-height:50px}

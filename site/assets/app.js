@@ -95,12 +95,59 @@ if ($('.prose')) {
         if (location.hash && !updateDiagrams.aligned) { updateDiagrams.aligned = true; requestAnimationFrame(() => requestAnimationFrame(() => { const target = document.getElementById(safeFragment(location.hash)); if (target) window.scrollTo({top:window.scrollY + target.getBoundingClientRect().top - $('.header').getBoundingClientRect().height - 24, behavior:'instant'}); })); }
       };
       await updateDiagrams();
-      for (const {node} of diagrams) { const button = document.createElement('button'); button.textContent = '放大查看'; button.className = 'expand-diagram'; button.addEventListener('click', () => { const svg = node.querySelector('svg'); if (!svg) return; $('#diagram-view').replaceChildren(svg.cloneNode(true)); $('#diagram-dialog').showModal(); zoom = 1; applyZoom(); }); node.parentElement.append(button); }
+      for (const {node} of diagrams) { const button = document.createElement('button'); button.textContent = '放大查看'; button.className = 'expand-diagram'; button.addEventListener('click', () => { const svg = node.querySelector('svg'); if (svg) openDiagram(svg, button); }); node.parentElement.append(button); }
     } catch { for (const {node} of diagrams) { const p = document.createElement('p'); p.className = 'diagram-error'; p.textContent = '图表暂时无法加载，以下保留 Mermaid 源码。'; node.before(p); } }
   })();
 }
 let zoom = 1;
-function applyZoom() { const view = $('#diagram-view'), svg = view.querySelector('svg'); if (svg) { const box = svg.viewBox.baseVal; const room = Math.max(150, innerHeight * .68 - 40); const ratio = box.width && box.height ? box.width / box.height : 1; const fitWidth = Math.min(Math.max(100, view.clientWidth - 40), room * ratio); svg.style.width = fitWidth * zoom + 'px'; } $('.zoom-out').disabled = zoom <= .5; $('.zoom-in').disabled = zoom >= 3; }
+let diagramOpener;
+function openDiagram(source, opener) {
+  const view = $('#diagram-view'), clone = source.cloneNode(true);
+  if (source.tagName === 'IMG') {
+    clone.width = source.naturalWidth;
+    clone.height = source.naturalHeight;
+    clone.loading = 'eager';
+    clone.addEventListener('load', applyZoom, {once:true});
+  }
+  view.replaceChildren(clone);
+  diagramOpener = opener;
+  $('#diagram-dialog').showModal();
+  zoom = 1;
+  applyZoom();
+  if (source.tagName === 'IMG') {
+    zoom = Math.min(2, Math.max(1, source.naturalWidth / parseFloat(clone.style.width)));
+    applyZoom();
+  }
+  view.scrollTo(0, 0);
+}
+function applyZoom() {
+  const view = $('#diagram-view'), figure = view.querySelector('svg, img');
+  if (figure) {
+    const box = figure.tagName === 'IMG' ? {width:figure.naturalWidth || figure.width, height:figure.naturalHeight || figure.height} : figure.viewBox.baseVal;
+    const room = Math.max(150, innerHeight * .68 - 40);
+    const ratio = box.width && box.height ? box.width / box.height : 1;
+    const fitWidth = Math.min(Math.max(100, view.clientWidth - 40), room * ratio);
+    figure.style.width = fitWidth * zoom + 'px';
+  }
+  $('.zoom-out').disabled = zoom <= .5;
+  $('.zoom-in').disabled = zoom >= 3;
+}
+// Linked article images use the same viewer as Mermaid; the original URL remains
+// available without JavaScript and through modified clicks or the context menu.
+for (const img of document.querySelectorAll('.prose a > img')) {
+  const link = img.parentElement;
+  if (!/\.(svg|png|jpe?g|webp|gif|avif)$/i.test(new URL(link.href).pathname)) continue;
+  link.classList.add('image-zoom');
+  link.title = '点击放大';
+  link.setAttribute('aria-label', '放大图片：' + (img.alt || '工程图'));
+  link.setAttribute('aria-haspopup', 'dialog');
+  link.addEventListener('click', event => {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !img.naturalWidth) return;
+    event.preventDefault();
+    openDiagram(img, link);
+  });
+}
+$('#diagram-dialog').addEventListener('close', () => diagramOpener?.focus({preventScroll:true}));
 $('.zoom-in').addEventListener('click', () => { zoom = Math.min(3, zoom + .25); applyZoom(); });
 $('.zoom-out').addEventListener('click', () => { zoom = Math.max(.5, zoom - .25); applyZoom(); });
 $('.zoom-reset').addEventListener('click', () => { zoom = 1; applyZoom(); });
