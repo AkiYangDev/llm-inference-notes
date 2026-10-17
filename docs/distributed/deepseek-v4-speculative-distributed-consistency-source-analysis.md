@@ -4,7 +4,7 @@
 
 本文从这个例子出发，区分两类通信：TP/EP 搬运模型计算所需的 Tensor，投机同步对齐候选、接受长度和后续执行计划。DSpark 的 `SpecTpSync` 与 EAGLE 的接受路径分别怎样完成这件事，需要放在各自的 Group 和执行分支中看。
 
-> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线讨论 PP1 下 DeepSeek-V4 + SGLang speculative decoding，重点覆盖 DSpark V2、EAGLE/NextN、DP Attention 与 Ascend NPU。PP speculative relay 有额外跨 stage 状态传递，不在本文展开。文中的 TP16/DP8 是用于说明 group boundary 的纯拓扑例子，不代表当前 DeepSeek-V4 Ascend 官方推荐配置。
+> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线讨论 PP1 下 DeepSeek-V4 + SGLang speculative decoding，重点覆盖 DSpark V2、EAGLE/NextN、DP Attention 与 Ascend NPU。PP speculative relay 有额外跨 stage 状态传递，不在本文展开。文中的 TP16/DP8 用于演示 Group 划分；实际部署配置见对应模型的支持条件。
 
 ## 一、先区分计算分片与执行决策
 
@@ -74,13 +74,7 @@ EAGLE 源码里有一段非常直接的注释说明这种风险。ROCm Greedy �
 
 [`eagle_sample()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L800-L1029)
 
-因此 speculative distributed consistency 的本质不是：
-
-> “每张卡都算出完全相同的 Tensor。”
-
-而是：
-
-> **共同执行同一个逻辑 Request 的 Rank，必须对每一个会改变未来执行路径的离散 decision 达成一致。**
+共同执行同一逻辑请求的 Rank，需要对改变后续执行的离散决定达成一致：接受多少候选、序列前进多少、下一轮使用哪枚 bonus。Tensor 则可以继续按 TP 或 EP 分片存放。
 
 ## 二、哪些 Rank 共同处理同一条请求
 
@@ -402,7 +396,7 @@ out_tokens
 
 ### `SpecTpSync` 也不是“纯 decision broadcast 类”
 
-严格看源码，它还有一个特殊的初始化协调职责：
+初始化时，它还负责协调：
 
 ~~~python
 available_memory_gb(...)
@@ -424,7 +418,7 @@ available_mem = self._tp_sync.available_memory_gb(
 
 [`DSparkWorkerV2.init_cuda_graphs()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-所以最严谨的总结是：
+这几处调用分别负责：
 
 > **`SpecTpSync` 的主体职责是 speculative control convergence；此外还承担 `DSPARK_MEM / DFLASH_MEM` 这类跨 Rank 初始化资源协调。它不是模型 Tensor/layout 同步器。**
 
@@ -522,29 +516,7 @@ per-rank draft tokens can differ
 
 因此 HIP 要显式 broadcast。
 
-NPU Greedy 分支没有对应注释。
-
-但这段调用本身不能证明：
-
-~~~text
-“NPU 一定数值确定”
-“NPU 所有 Rank 的 Draft 永远相同”
-“Ascend 不需要 speculative sync”
-~~~
-
-这些结论源码都没有给出。
-
-最严谨的表述是：
-
-> **当前 NPU Greedy path 在 `eagle_sample()` 中没有 accept-level rank0 override，因此实现契约要求参与该 logical request 的 Rank 在进入/执行 Greedy Verify 时已经能得到一致的 candidate、Target argmax 与 tree traversal 结果。这个事实不等于源码证明了所有 NPU 配置都具有数学上的确定性。**
-
-~~~text
-没有显式 broadcast
-≠
-证明 broadcast 永远多余
-~~~
-
-它只说明当前固定版本的实现没有在这里增加第二层 canonicalization。
+当前 NPU Greedy 路径在 `eagle_sample()` 内没有额外的 accept-level rank0 override。进入该路径的 Rank 因而要在候选、Target argmax 与树遍历结果上保持一致，由上游输入和执行约束共同保障。这一检查应落在实际配置的逐 Rank 结果上。
 
 ### Sampling path 则明确同步
 
@@ -672,9 +644,7 @@ Rank1 cache_loc[4]
 
 物理上相同。
 
-事实上，在不同 shard / allocator 设计下，它们甚至不应该物理相同。
-
-真正要求的是：
+不同 shard 与 allocator 可以使用各自的物理位置。需要对应的是逻辑关系：
 
 > **这些局部 layout 都对应同一个逻辑 Request、同一个 speculative step、同一个已确认序列位置。**
 
@@ -776,7 +746,7 @@ timeout
 collective hang
 ~~~
 
-所以真正应该找的是：
+定位时先找：
 
 > **第一处 control / logical-layout divergence。**
 
@@ -859,7 +829,7 @@ attn_tp_group.broadcast(...)
 
 但这只适用于：`当前 group backend = HCCL`
 
-不能无条件推广到所有 Ascend 配置。
+下面按启用条件分别说明。
 
 ### ZBAL：可以替换 NPU distributed backend，并同时参与内存 / DeepEP adaptor
 
@@ -967,14 +937,7 @@ DeepEP
 
 可以组合。
 
-因此不能画成：
-
-~~~text
-HCCL vs ZBAL vs DeepEP
-三选一
-~~~
-
-而应该理解成：
+这几层在执行中按如下关系衔接：
 
 ~~~mermaid
 flowchart TD

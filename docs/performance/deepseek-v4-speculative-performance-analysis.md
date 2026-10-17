@@ -1,6 +1,6 @@
 # 投机解码的性能收支：接受长度、Verify 成本与并发
 
-投机解码用额外的 Draft 和 Verify 工作，换取更少的 Target 执行轮次。它是否划算，取决于每轮真正推进了多少有效输出，以及这一轮总共花了多久。
+投机解码用额外的 Draft 和 Verify 工作，换取更少的 Target 执行轮次。它是否划算，取决于每轮推进了多少有效输出，以及这一轮总共花了多久。
 
 例如，同一批请求的平均接受长度增加了，但 Verify 行数、图填充或通信成本增长得更快，总吞吐仍可能下降。本文从固定 batch 的产出公式开始，依次解释接受指标、窗口大小、compact 执行和并发饱和，再把这些因素放回压测。
 
@@ -42,7 +42,7 @@ Speedup\approx\frac{A\cdot T_{decode}}{T_{spec}}
 
 这比“Acceptance Rate 高就会快”更接近第一性原理。
 
-因为真正进入分子的不是 Draft Model 有多聪明，而是：`这一轮最终推进多少有效输出 Token`
+分子取这一轮实际推进的有效输出 Token 数。
 
 而分母是：
 
@@ -107,7 +107,7 @@ num_draft_tokens
 
 所以 `accept_length / step_time` 不是低并发专属。它会在每个固定 batch size 下用于比较不同 speculative config。
 
-#### 它不能直接跨 Batch Size 当服务器总吞吐
+#### 单请求推进速度与整个 Batch 的吞吐
 
 脚本没有乘 `batch_size`。
 
@@ -132,9 +132,9 @@ R_{aggregate}\approx\frac{B\cdot A}{T_{step}}
 比较 1-1-2 / 3-1-4 / 5-1-6
 ```
 
-但不适合直接拿 `bs=1` 和 `bs=128` 的 speed 值比较“总吞吐”。
+跨 Batch 比较总吞吐时，使用上面的 `B × A / T_step`，并保持相同的统计窗口。
 
-#### 它不是严格的端到端 TPOT
+#### 参数搜索指标与端到端服务指标
 
 `step_time` 来自 server-side `step_time_dict`，而且脚本刻意使用 20th percentile，而不是 P50/Mean。
 
@@ -142,7 +142,7 @@ R_{aggregate}\approx\frac{B\cdot A}{T_{step}}
 
 > **搜索 speculative 参数空间。**
 
-真正决定线上服务仍要回到：
+决定线上服务仍要回到：
 
 ```text
 TPOT
@@ -436,9 +436,7 @@ graph tier
 
 共同决定。
 
-因此以后压测不能只记录：`gamma = 6`
-
-还需要同时记录：
+`gamma=6` 描述配置的候选上限。解释实际工作量时，同时记录：
 
 ```text
 Configured Gamma
@@ -451,7 +449,7 @@ Strict Accept Rate
 Block Accept Length
 ```
 
-否则你甚至不知道机器真正算了多少 speculative token。
+这些量分别描述配置宽度、逻辑预算、实际执行与有效产出。
 
 ## 四、自适应 Verify 怎样改变执行成本
 
@@ -525,7 +523,7 @@ Worker 用 `should_run_compact(layout)` 决定是否调用 compact forward；配
 
 固定实现：[`dspark_worker_v2.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)、[`dspark_verify.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_verify.py)。
 
-下面的 Graph tier 分析针对实际支持并启用 compact 的后端；不能据此认定 Ascend NPU 的 static 配置也减少了 Verify 行数。
+下面沿启用了 compact 的后端分析 Graph Tier。Ascend NPU 的 static 路径按前文固定宽度计算。
 
 ### 逻辑行数与 Graph Tier
 
@@ -600,13 +598,13 @@ compact:
 
 所以 static profiling table 用来预测 compact 时：`会略微高估 steps_per_sec`
 
-这说明性能模型甚至不能只写：
+这里需要在 Token 数之外加入请求与历史布局。仅以 Token 数表示的模型：
 
 \[
 T=f(M)
 \]
 
-而更接近：
+可扩展为：
 
 \[
 \boxed{
@@ -629,9 +627,7 @@ ParallelTopology
 
 ### Planner 的收益成本估计
 
-这是整篇最重要的源码结论。
-
-当前：
+Planner 将收益估计与执行成本放在一起比较。当前：
 
 [`compute_verify_token_budget()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_planner.py)
 
@@ -784,7 +780,7 @@ thinking / non-thinking
 
 | 指标 | 含义 |
 | --- | --- |
-| `spec_accept_length` | 每次 Verify 真正推进多少输出 |
+| `spec_accept_length` | 每次 Verify 推进多少输出 |
 | strict `spec_accept_rate` | Draft 本身预测质量 |
 | accept histogram | 均值背后的分布 |
 | avg / P99 `verify_len` | Ragged 实际探索深度 |
@@ -796,7 +792,7 @@ thinking / non-thinking
 | HBM usage | Speculative 容量代价 |
 | DeepEP dispatch pressure | MoE token volume |
 
-最重要的是：
+比较配置时保持以下条件一致：
 
 > **不要只看 Acceptance。**
 
@@ -856,7 +852,7 @@ M=\sum_r verify\_len_r
 M\le graph\_num\_tokens
 \]
 
-所以真正的优化目标是：
+所以优化目标是：
 
 \[
 \boxed{

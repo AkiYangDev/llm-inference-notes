@@ -25,7 +25,7 @@ commit: 176dbcb85d3b7737564e4911947035cc0af65f0a
 - [layers/moe/token_dispatcher/deepep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)
 - [hardware_backend/npu/moe/fuseep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/moe/fuseep.py)
 
-本文区分两层：Collective 的高层数据语义，以及 SGLang 当前版本选择的具体实现。高层语义相同，不代表底层一定调用同名的通用 API。
+本文区分两层：Collective 的高层数据语义，以及 SGLang 当前版本选择的具体实现。同一通信语义可以由通用 API、专用通信库或融合算子完成。
 
 </details>
 
@@ -110,7 +110,7 @@ R3: [D]
 
 因此 ReduceScatter 可以理解为 Reduce 加“结果继续保持 shard 状态”。
 
-### All-to-All：改变的是 owner，不是把完整 Tensor 复制给所有人
+### All-to-All：将数据发送到各自的目标 Rank
 
 如果每个 Rank 手里都有发往不同目标的数据：
 
@@ -167,7 +167,7 @@ R1: Y1 = XW1 → [M,4]
 
 完整结果是 concat(Y0,Y1)，所以如果下游要求每个 Rank 都拿到完整 [M,8]，就需要 AllGather。
 
-SGLang 当前 ColumnParallelLinear 在 gather_output=True 时会进入 tensor_model_parallel_all_gather。真实模型中常常故意让结果继续保持 shard，所以不能把“Column Parallel 后一定 AllGather”当成定律。
+SGLang 当前 ColumnParallelLinear 在 gather_output=True 时会进入 tensor_model_parallel_all_gather。下游继续消费 shard 时，结果就保持分片；下游需要完整输出时，再启用 gather。
 
 Row Parallel 则相反。把输入维切开：
 
@@ -191,7 +191,7 @@ P0/P1 都只是 partial sum，完整结果是 P0+P1，因此天然需要 Reduce�
 
 ## 三、Attention 输出在哪个 Group 内归约
 
-把 DeepSeek-V4 简化成“Attention 后做 AllReduce”不够精确。当前源码真正的归约边界在 Attention 输出投影 wo_b 的 RowParallel partial output。
+DeepSeek-V4 在 Attention 输出投影 `wo_b` 得到 RowParallel partial output 后进行归约。归约所用的 Group 随 Attention TP 宽度变化。
 
 DeepSeek-V4 构造 wo_b 时使用 attn_tp_rank / attn_tp_size 进行权重切分，而 reduce_results 默认只有在：
 
@@ -332,7 +332,7 @@ DP2/ATP1: [0 0 0 0 0 0]
 
 如果 ATTN_TP=1，可以直接 AllGather。
 
-真正有意思的是 ATTN_TP>1。同一 Attention-DP shard 内多个 Rank 都有同一份 replicated local hidden，如果直接 full TP AllGather，就会重复收集。
+有意思的是 ATTN_TP>1。同一 Attention-DP shard 内多个 Rank 都有同一份 replicated local hidden，如果直接 full TP AllGather，就会重复收集。
 
 当前代码对 dp_gather_replicate 先把非 attn_tp_rank=0 的 local tensor 置零，再把 local tensor 按 Token 维切成 ATTN_TP 份，然后在 attn_tp_group 内做 ReduceScatter。
 
@@ -361,11 +361,11 @@ ATP1: [C D]
 | AllReduce | 只有 ATP0 写真实值，其余副本为 0 |
 | AllGather | 先去掉 replicated duplicate，再用 ATTN_TP ReduceScatter 形成唯一 row shards |
 
-普通非 elastic 主线主要围绕 TP Group；Elastic EP 场景下部分 gather 可以切到 expanded WORLD Group，因此不能把 TP Group 写成所有配置下永远唯一的参与者。
+普通非 elastic 主线主要围绕 TP Group；Elastic EP 场景下，部分 gather 使用 expanded WORLD Group。
 
 ## 五、ReduceScatter 怎样合并归约与分发
 
-DPA → MoE 不等于“一定 Gather 后 ReduceScatter”。当前 no-A2A 路径至少有三种 combine 方式。
+当前 no-A2A 路径有三种 combine 方式：
 
 ### Baseline：post-expert AllReduce + dp_scatter
 
@@ -462,7 +462,7 @@ B. skip post-expert reduce → ReduceScatterV
 C. skip post-expert reduce → ReduceScatter
 ~~~
 
-只有 B/C 才是真正“用 ReduceScatter 替代 post-expert AllReduce”。
+只有 B/C 才是“用 ReduceScatter 替代 post-expert AllReduce”。
 
 ## 六、Ascend DeepEP 与 FuseEP 的执行路径
 
@@ -521,13 +521,13 @@ buffer.combine(...)
 恢复 source Token owner
 ~~~
 
-因此 DeepEP 是 All-to-All 语义，但当前 SGLang 并不是简单调用 torch.distributed.all_to_all。Routing layout、variable token count、async event、dispatch/combine 都交给 DeepEP 或 ZBAL Buffer 数据面。
+SGLang 将 Routing Layout、可变 Token 数、异步事件和 Dispatch/Combine 交给 DeepEP 或 ZBAL Buffer，由它们组织这套 All-to-All 数据交换。
 
 ### Ascend FuseEP：同一个 MOE_EP Group，但绕过普通 Dispatcher
 
-ascend_fuseep 不能理解成“另一种 DeepEPDispatcher”。
+`ascend_fuseep` 从模型层直接进入融合执行路径。
 
-create_moe_dispatcher 对它虽然返回 StandardDispatcher，但源码明确写明这个 dispatcher 不会真正执行；FusedMoE.forward 会直接：
+create_moe_dispatcher 对它虽然返回 StandardDispatcher，但源码明确写明这个 dispatcher 不会执行；FusedMoE.forward 会直接：
 
 ~~~python
 forward_fuseep(...)
@@ -580,7 +580,7 @@ final hidden
 
 也就是说，FuseEP 把 A2A Dispatch、Expert Compute、Combine 的更多边界收进了一个 fused backend call。
 
-至于 fused_deep_moe 内部最终拆成多少 Ascend Kernel、怎样组织 HCCL/RDMA/同步，仅凭 SGLang 这一层源码不能继续下结论，需要进入对应 DeepEP/ZBAL/Ascend runtime 或 profiler。
+`fused_deep_moe` 内部的 Kernel 划分、传输与同步由对应 Runtime 组织。继续定位这段耗时，可以沿 DeepEP/ZBAL/Ascend Runtime 展开，并与 Profiler 事件对齐。
 
 | 项目 | Ascend DeepEP | Ascend FuseEP |
 | --- | --- | --- |

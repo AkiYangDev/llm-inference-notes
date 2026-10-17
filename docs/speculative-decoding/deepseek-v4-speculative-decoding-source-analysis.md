@@ -4,7 +4,7 @@
 
 DSpark 把这个过程组织为 Draft、Verify Planning、Target Verify、Accept 和 Commit。本文跟随这个小例子走完一轮：候选怎样组成块，Target 怎样一次验证，接受结果又怎样更新缓存与下一轮 Draft 输入。并行布局和更复杂的树式候选放到对应专题。
 
-> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线使用 DSpark V2、DeepSeek-V4 target / draft、普通链式 speculative decoding。源码同时支持 greedy、sampling、static verify、compact/ragged verify、folded proposal / verify epilogue 等优化；正文先解释共同语义，再标注优化路径。本文不宣称 speculative decoding 在任意负载下必然提速：实际收益取决于 acceptance、Draft 成本、Target Verify 成本、batch、graph 与通信开销。
+> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线使用 DSpark V2、DeepSeek-V4 target / draft、普通链式 speculative decoding。源码同时支持 greedy、sampling、static verify、compact/ragged verify、folded proposal / verify epilogue 等优化；正文先解释共同语义，再标注优化路径。实际收益由接受长度、Draft / Verify 成本、Batch、Graph 与通信共同决定。
 
 ## 一、一轮多枚输出怎样减少 Target 轮数
 
@@ -43,7 +43,7 @@ Target Verify(A B C D)
 
 如果 Draft 猜得足够准，那么一次 Target Verify 可以让序列前进多于 1 个 Token，从而减少后续 Target decode 轮数。反过来，如果 acceptance 很低、Draft 本身很贵或 Verify 开销很大，收益也会下降。
 
-DSpark 当前总入口在 [`DSparkWorkerV2.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L555-L578)。Prefill / Extend 仍然先走 Target；真正的 speculative loop 从 `_forward_decode()` 开始。
+DSpark 当前总入口在 [`DSparkWorkerV2.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L555-L578)。Prefill / Extend 仍然先走 Target； speculative loop 从 `_forward_decode()` 开始。
 
 一轮 Decode 的高层调用顺序可以直接从源码展开：
 
@@ -123,7 +123,7 @@ cache locations
 ForwardMode.TARGET_VERIFY
 ~~~
 
-这说明这里不能用“普通 Decode batch”去理解它。它本质上是在一组预留 speculative positions 上做块状 forward。
+这次 Forward 在一组预留的投机位置上处理整个 Draft Block，输入宽度由候选配置决定。
 
 ### Draft Model Forward 先产生 hidden，再由 Markov Head / Sampler 形成 gamma 个候选
 
@@ -257,9 +257,9 @@ Target forward 结束后，再通过 `ScatterCompactToStrided` 把 logits 和 hi
 
 因此：
 
-> **Verify Planner 优化的是“这一轮 Target 需要真正验证多少 candidate rows”，不是重新改变 Draft Token 的语义。**
+> **Verify Planner 根据预算选择各请求的验证范围，执行器再按所选模式构造输入行。**
 
-Planner 里的某些 DP-tier / graph-tier 优化有额外 topology 条件；这些限制应按具体路径理解，不能泛化为 DSpark 整体限制。
+Planner 里的某些 DP-tier / graph-tier 优化有额外 topology 条件；它们分别控制对应的计数与 Graph Tier 分支。
 
 ## 四、Target 一次验证候选链
 
@@ -298,7 +298,7 @@ self.target_worker.forward_batch_generation(
 
 > **Target 不再为 draft1、draft2、draft3、draft4 分别进入四次普通 Decode loop，而是用一个 Target Verify forward 对这条 candidate chain 计算对应 logits / hidden states。**
 
-底层 Attention 仍然必须尊重链式因果关系；“一次 verify”不代表 candidate positions 彼此独立。
+一次 Verify 中，各候选位置仍按链式因果关系访问前缀与祖先。
 
 ### Verify 输出为什么还要求 hidden states
 
@@ -384,16 +384,7 @@ bonus
 cap_trim_lens
 ~~~
 
-因此 sampling 模式不能写成：
-
-~~~text
-Draft token == Target token
-→ accept
-~~~
-
-更准确的是：
-
-> **Sampling 路径使用 Draft 与 Target 两侧概率进行 speculative accept/reject，以保持目标采样分布；greedy 才可以直观理解成连续前缀匹配。**
+Sampling 路径使用 Draft 与 Target 概率完成 Accept/Reject；Greedy 路径则按 Target 预测寻找匹配前缀。两者分别沿对应规则确定接受长度与新 bonus。
 
 固定源码：[`AcceptSampling`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py)。
 
@@ -445,7 +436,7 @@ out_tokens.scatter_(
 )
 ~~~
 
-只有前 `commit_lens` 个位置属于本轮真正推进的输出。
+只有前 `commit_lens` 个位置属于本轮推进的输出。
 
 如果四个 Draft 全部接受：
 
@@ -526,16 +517,16 @@ self.kv_injector.inject_target_hidden(
 
 > **把 Target Verify 已确认前缀对应的 Target hidden states 注入 Draft 模型的持久 KV / state，让下一轮 Draft 从 Target 已确认的状态继续。**
 
-它不能简单描述成“把 Target 的所有 KV commit 进去”。Target Verify 本身已有自己的 staged verify cache；这里讨论的是 Target hidden → Draft persistent state 的注入。
+Target Verify 使用自己的 staged cache；这一步将选中的 Target hidden 注入 Draft Persistent State，为下一轮 Draft 准备已确认状态。
 
-`commit_lens` 起 gate 作用：未被接受的 candidate rows 不应该被注入 Draft 的下一轮有效状态。
+`commit_lens` 限定注入范围，只让接受路径对应的输入状态进入下一轮 Draft。
 
 某些 backend / graph 路径支持 folded commit：Accept 和 hidden injection 可以直接在 Verify epilogue 内完成；Python 控制流会缩短，但语义仍然是同一个 accepted-prefix commit。
 
 <details markdown="1">
 <summary>补充：通用 Worker 中的 recurrent state 提交</summary>
 
-通用 `_forward_decode()` 还包含 `_commit_target_mamba_states_after_verify(...)`，按 `commit_lens` 选择对应验证步的状态。这面向具有 recurrent / state-space 状态的模型，不能据此把这些状态当作 DeepSeek-V4 本身的缓存组成。
+通用 `_forward_decode()` 还包含 `_commit_target_mamba_states_after_verify(...)`，按 `commit_lens` 选择对应验证步的状态。这条通用分支服务于具有 recurrent / state-space 状态的模型。
 
 </details>
 

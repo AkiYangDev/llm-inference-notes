@@ -18,45 +18,11 @@ attn_tp_size=16,
 attention weights will be sharded across 16 ranks.
 ```
 
-真正的问题是最后两处 `16`。在这个配置下，Attention 实际 TP width 应该是 8。
+问题是最后两处 `16`。在这个配置下，Attention 实际 TP width 应该是 8。
 
-如果只是普通业务日志写错一个数字，可能影响不大；但分布式推理的日志经常承担另一种职责：**它是工程师理解当前拓扑的入口。**
+这条 warning 出现在 DSA、`dp_size < tp_size`、未进入 Prefill CP，且平台进入 CUDA / ROCm model-specific adjustment 的路径。日志直接使用 `cfg.tp_size`，于是把实际 8-way Attention TP 打印成 16-way。
 
-可以把这次 Bug 的 Impact Surface 写得很具体：
-
-| 维度 | #39871 的情况 |
-| --- | --- |
-| Trigger | DSA、`dp_size < tp_size`、未走 prefill CP 分支，并进入 CUDA / ROCm model-specific adjustment |
-| Symptom | warning 把 `attn_tp_size` 打成 `cfg.tp_size` |
-| Runtime behavior | 不受影响，真实并行宽度没有被这个日志修改 |
-| User-visible impact | Debug / Profiling 时看到错误的 Attention sharding width |
-| Blast radius | 主要影响观察与排障认知，不是模型数值正确性 |
-| Persistence | 每次进入该启动路径都可能打印同样的错误拓扑信息 |
-
-为什么这会误导排障？
-
-假设你看到：`AttnTP = 16`
-
-很自然会开始问：
-
-```text
-是不是 16-way TP communication 太重？
-是不是 16 Rank collective 带宽不够？
-是不是 Attention weight 真被切成了 16 份？
-```
-
-但真实 topology 如果是：`AttnTP = 8`
-
-那么整个问题模型从第一步就错了。
-
-所以这个 PR 的影响可以浓缩成：
-
-```text
-Runtime Truth       = 8
-Operational Truth   = 16
-```
-
-这里的 Correctness 不是模型数学 correctness，而是 **Observability Correctness**：人看到的系统必须和机器实际运行的系统一致。
+排查通信或权重分片时，工程师会据此寻找错误的 Group 宽度。补丁将日志改为读取派生后的值，使观察到的拓扑与实际运行一致。
 
 ## 二、从 TP16 / DP2 推导 Attention TP8
 
@@ -134,11 +100,11 @@ flowchart TB
 attn_tp_size == 1
 ```
 
-不能翻译成“整个模型单卡运行”。它只表示 **Attention 这套并行坐标中的 TP width 为 1**。
+这个值描述 **Attention 坐标中的 TP width 为 1**；其他模型部分仍按各自的 TP / EP 布局执行。
 
-本文不继续把 DP/CP/Rank/Group 全部展开，因为那会和已有分布式专题重复。对这个 PR 来说，最重要的只有一句：
+回到本 PR，日志需要读取的是派生后的 Attention 宽度：
 
-> **原始配置里的 `tp_size`，不是所有子模块最终运行时都必须直接采用的 TP width。**
+> **原始 `tp_size` 经过派生，得到各子模块实际使用的并行宽度。**
 
 ## 三、派生规则与错误日志的来源
 
@@ -148,7 +114,7 @@ attn_tp_size == 1
 
 在 #39871 之前约两周，SGLang 合入了 [PR #38113](https://github.com/sgl-project/sglang/pull/38113)。那次配置系统整理明确强调：`attn_tp_size` 等 parallel quotients 是由 configured leaves 派生的值，相关 arithmetic 应该有统一来源，而不是让各个消费者各写一份。
 
-PR #38113 不是本文能够证明的“Bug introducing PR”。我没有找到可靠证据说明错误 warning 就是由它引入；因此更准确的 History Chain 是：
+PR #38113 提供了统一派生值的设计背景，后来的 #39871 将这套规则接到 warning。两项改动的关系如下：
 
 ```text
 #38113
@@ -223,13 +189,13 @@ flowchart LR
     end
 ```
 
-因此这个 PR 的 Root Cause 不是“有人不会算 `16 / 2`”，而是：
+错误 warning 读取原始配置，绕过了已有派生结果：
 
 > **Logging 直接消费了 configured leaf，而没有消费已经存在的 runtime-derived semantic value。**
 
 进一步可以写出核心 invariant：
 
-> **Invariant：所有描述 Attention TP width 的消费者，都必须与 Rank / Group 构建共享同一套 width derivation；不能让原始配置值和模块派生值各自形成一套事实。**
+> **日志与 Rank / Group 构建共用同一套 Attention Width 派生规则，便能保持拓扑含义一致。**
 
 这个 invariant 比 `16 → 8` 这个具体数字稳定得多。
 
@@ -292,75 +258,17 @@ D.py → 直接打印 tp
 
 而 `derive_attention_widths()` 本身存在的理由，就是让 Rank 计算和其他消费者**不要持有第二份 arithmetic**。
 
-所以这个修复真正重要的不是：`16 / 2 = 8`
-
-而是：
-
-```text
-One semantic rule
-      ↓
-One derivation home
-      ↓
-Many consumers reuse it
-```
-
-这就是 Single Source of Truth 在 Runtime 代码里的具体样子。
+`derive_attention_widths()` 集中保存派生规则，Rank 计算、Runtime 与日志共同使用其结果。以后规则调整时，也只需维护这一个入口。
 
 ## 五、检查日志变化与行为范围
 
-这次改动属于 log-only；下面分别核对日志变化、测试覆盖和行为范围。
+补丁修改 1 个文件，差异为 `+8/-2`，将 warning 中的原始 TP 值改为派生后的 Attention TP 值。对应 Head 的 Lint 通过，较广的 PR Test 中仍有失败记录；这次没有新增专门的拓扑 Runtime 测试，也未运行性能或精度 Benchmark。
 
-先做 Evidence Ladder：
-
-| 证据类型 | 能支持的结论 |
-| --- | --- |
-| **Source-confirmed** | merge commit 中 Logging 调用 `derive_attention_widths()`；helper 的公式和共享 arithmetic 目的可直接从源码确认 |
-| **PR-confirmed** | PR 作者明确说明错误发生在 partial DP Attention warning，且是 log-only、no behavioral impact |
-| **Measured** | 没有 accuracy benchmark，也没有 performance benchmark；PR 明确认为二者不适用于这次 log-only 改动 |
-| **Inference / Transfer** | 其他日志项也应检查配置值与有效运行值是否混用 |
-
-再看 Validation Surface：
-
-| Surface | 状态 | 说明 |
-| --- | --- | --- |
-| Source diff | covered | 1 个文件、`+8/-2`，修改边界非常清楚 |
-| Lint | reported-pass | 对应 PR head 的 Lint workflow 成功 |
-| Dedicated topology runtime test | not shown | PR 没有新增针对该 warning 的专门 runtime test |
-| Accuracy | not-run | PR 明确标为不需要 |
-| Performance / Profiling | not-run | PR 明确标为不需要 |
-| Broad PR workflows | mixed / red | 多个 PR Test workflow 在该 head 上记录为 failure，因此不能把“整套 CI green”当成本 PR 的验证证据 |
-| Ascend runtime | out of scope | 这段代码被 `not is_npu and not is_xpu` 条件排除 |
-
-这里有一个很重要的 Maintainer 习惯：
-
-> **CI 存在，不等于我们可以笼统写“CI 已验证”。要看目标测试是否真的执行、它验证的又是哪一层 contract。**
-
-对于 #39871，真正能强证实的是：
-
-```text
-旧日志读取了错误的 source
-新日志复用了正确 derivation
-Runtime 行为没有被 diff 修改
-```
-
-而不是：
-
-```text
-所有 DSA / 所有平台 / 所有 topology
-都经过了专门 runtime regression test
-```
+结合 diff，修复后的行为是日志与 Runtime 使用一致的宽度规则。模型计算与 Group 创建沿用原路径。
 
 ### 补丁的行为范围
 
-它没有改变：
-
-- Attention Kernel；
-- Process Group 创建；
-- Weight Sharding；
-- Collective Communication；
-- 模型精度；
-- Runtime 性能；
-- Ascend NPU / XPU 的这条 DSA 分支。
+这条 DSA model-specific adjustment 分支适用于 CUDA / ROCm，平台条件如下：
 
 固定源码里的外层条件明确是：
 
@@ -369,9 +277,7 @@ if not get_platform().is_npu and not get_platform().is_xpu:
     # CUDA or ROCm GPU
 ```
 
-因此最准确的表述是：
-
-> **#39871 修复了 CUDA / ROCm DSA model-specific adjustment 中 partial DP Attention 的日志语义；它没有修复或改变 Ascend 910C 的 Runtime Parallelism。**
+因此，#39871 的效果落在 CUDA / ROCm 的 partial DP Attention warning 上；Ascend NPU 和 XPU 跳过这条调整分支。
 
 ## 六、配置派生值的使用原则
 

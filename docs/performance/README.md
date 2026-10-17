@@ -13,7 +13,7 @@
 
 ## W8A8 与算子性能
 
-- [DeepSeek-V4 W8A8 性能分析：小 M、NZ 布局与测量方法](deepseek-v4-w8a8-ascend-910c-performance.md)：严格核对 DynamicQuant 的小 M 并行度、QuantBatchMatmulV3 的 SmallMN / StreamK tiling、DeepSeek-V4 实际 FRACTAL_NZ shape，以及 GroupedMatmul 的 expert-token 调优边界。
+- [DeepSeek-V4 W8A8 性能分析：小 M、NZ 布局与测量方法](deepseek-v4-w8a8-ascend-910c-performance.md)：分析 DynamicQuant 的小 M 并行度、QuantBatchMatmulV3 的 SmallMN / StreamK tiling、DeepSeek-V4 实际 FRACTAL_NZ shape，以及 GroupedMatmul 的 expert-token 调优边界。
 
 ## 投机解码性能
 

@@ -25,7 +25,7 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G
 ~~~
 
-Prefill 可以把大量 Prompt Token 一起送进模型。Decode 却不能提前把未来 512 个 Token 一次算出来，因为 Token(t+1) 依赖 Token(t) 的 Sampling 结果。对单个 Request 来说，Decode 更接近：
+Prefill 可以把大量 Prompt Token 一起送进模型。普通自回归 Decode 按顺序推进：Token(t+1) 依赖 Token(t) 的 Sampling 结果。对单个 Request 来说，Decode 更接近：
 
 ~~~text
 Step 1: 1 个新 Token
@@ -71,7 +71,7 @@ actual_seq_lengths_q_pa
 
 这相当于告诉后端：每个 Decode Request 当前只有一个 Query row。
 
-所以 Prefill / Decode 的性能差异不是后来做 Profiling 时才出现的现象，而是从 Scheduler、ForwardBatch 到 Attention Geometry 一开始就已经不同。
+从 Scheduler 组批、ForwardBatch 输入到 Attention Geometry，两阶段已经形成了不同的工作形状。
 
 ## 二、Dense GEMM：M 与权重复用
 
@@ -85,7 +85,7 @@ W: [K,N]
 Y: [M,N]
 ~~~
 
-这里最重要的变量之一就是 M，因为它近似表示这一轮有多少 Token row 同时复用这份 Weight。
+M 近似表示这一轮有多少 Token 行同时复用这份 Weight。
 
 直接看 DeepSeek-V4-Flash 的真实 Attention projection。
 
@@ -143,9 +143,9 @@ AI
 
 其中 <code>b_w</code> 是每个 Weight 元素的字节数。BF16 Weight 下大约有 AI≈M；INT8 Weight 下大约有 AI≈2M。
 
-这也解释了为什么 Quantization 对 Decode 很有吸引力：小 M 下 Weight bandwidth 压力大，减小 Weight bytes 很可能有价值。但真实 W8A8 还要支付 Dynamic Quant、Scale、Tiling、Launch 和 Epilogue 等额外成本，因此 INT8 理论更有利，并不等于 Decode TPOT 必然同比提升。
+这也解释了为什么 Quantization 对 Decode 很有吸引力：小 M 下 Weight bandwidth 压力大，减小 Weight bytes 很可能有价值。但真实 W8A8 还要支付 Dynamic Quant、Scale、Tiling、Launch 和 Epilogue 等额外成本，这些开销共同决定最终 TPOT，实际收益取决于省下的权重读取成本能否覆盖量化开销。
 
-Continuous Batching 的 Dense crossover 同样不能凭规格表猜。如果设备的有效计算/带宽 Ridge Point 是：
+Continuous Batching 改变 M，因而也改变 Dense GEMM 的算术强度。如果设备的有效计算/带宽 Ridge Point 是：
 
 ~~~text
 R_eff
@@ -163,11 +163,11 @@ M_crossover
 R_eff × b_w / 2
 ~~~
 
-但真实 crossover 还取决于 CANN Tiling、Weight Layout、Cache、Quantization、Kernel Occupancy、TP / DP 与通信。因此不能仅凭芯片规格宣布 Ascend 910C Decode 在 Batch=32 或 Batch=64 一定进入 Compute Bound，这个数字只能通过目标配置上的 batch sweep 得到。
+但真实 crossover 还取决于 CANN Tiling、Weight Layout、Cache、Quantization、Kernel Occupancy、TP / DP 与通信。在目标配置上做 batch sweep，可以观察这些因素共同作用下的转折点。
 
 ## 三、MoE：总 Token 怎样分散到 Expert
 
-Dense Linear 的 M 还是这一轮的总 Token 数。MoE 真正决定 Expert GEMM Shape 的却是：
+Dense Linear 的 M 还是这一轮的总 Token 数。MoE 决定 Expert GEMM Shape 的却是：
 
 ~~~text
 M_e
@@ -175,7 +175,7 @@ M_e
 Expert e 当前实际收到多少 Token
 ~~~
 
-估算平均 `M_e` 时，分子中的 Token 总量应取同一 EP 通信域；不能把单 Rank 的本地行数直接当作整个 EP 域的总量。
+估算平均 `M_e` 时，分子取同一 EP 通信域的 Token 总量，分母也按该域的专家数量计算。
 
 DeepSeek-V4-Flash 的公开配置是：
 
@@ -258,7 +258,7 @@ Expert 4: 13
 
 这会继续引入 empty experts、tiny Expert GEMM、GroupedMatmul 利用率下降、DeepEP dispatch / combine 开销和 load imbalance。
 
-所以分析 DeepSeek-V4 Decode 时，只看 global batch size 远远不够。真正值得记录的是 Expert Token Histogram，以及 mean / median / p90 / max M_e 和 empty expert ratio。这也是 EPLB 与 MoE runtime 优化为什么会直接影响 Decode 性能。
+分析 DeepSeek-V4 Decode 时，将 global batch size 与各专家的负载分布一起记录，包括 Expert Token Histogram，以及 mean / median / p90 / max M_e 和 empty expert ratio。这也是 EPLB 与 MoE runtime 优化为什么会直接影响 Decode 性能。
 
 ## 四、长上下文下的滑窗与压缩历史
 
@@ -339,11 +339,11 @@ C4 Lightning Indexer 面对的 key history 规模大约是 ceil(L/4)。公开配
 | 128K | 32768 | ≈ 4.1 MiB |
 | 1M | 262144 | ≈ 32.5 MiB |
 
-这里绝不能理解成“1M Context 一定从 HBM 搬 32.5 MiB，然后除带宽就是 Kernel latency”。正确含义是：
+表中计算的是 logical key payload，实际 HBM 流量与耗时还取决于缓存及算子访问方式。这组数字说明：
 
 > **C4 把最终 Sparse Attention 的历史消费限制在 Top-K，但为了找出这些 Top-K，Indexer 本身仍面对一个随 Context 增长的压缩历史。**
 
-因此长 Context Decode 做 Profiling 时，不能只盯最终 Sparse Attention Kernel，还要把 Lightning Indexer 单独拿出来。
+因此，长 Context Decode 的 Profile 应分别记录 Lightning Indexer 和最终 Sparse Attention 的耗时。
 
 C128 又是另一种 Shape。compress_ratio=128，当前 Ascend backend 对 C128 设置 <code>cmp_sparse_indices=None</code>，也就是读取完整的 C128 compressed history。长度 L 对应 ceil(L/128) 个 compressed rows。
 
@@ -368,7 +368,7 @@ DSV4 Compressor 还有第三类数据：单独的 FP32 state cache。源码中�
 
 C4 的 overlap=True，因此一行大约是 2048 FP32，也就是约 8 KiB；C128 的 overlap=False，一行约 1024 FP32，也就是约 4 KiB。
 
-但这里不能进一步声称“每一个 Decode Step 固定读取多少个 state rows”。真实访问量依赖 Compressor Plan、Ring State、当前位置和 fused operator，必须结合目标 trace / metadata 才能确认。
+每步实际访问的 state rows 随 Compressor Plan、Ring State、当前位置和融合算子而变，可以用当步 metadata 与 trace 对齐。
 
 所以比“Decode 每轮读取完整 KV”更准确的 DSV4 长 Context 模型应该写成：
 
@@ -408,7 +408,7 @@ Sampling
 Token_t
 ~~~
 
-只有 Token_t 真正确认以后，下一轮才能开始：
+只有 Token_t 确认以后，下一轮才能开始：
 
 ~~~text
 Token_t
@@ -436,7 +436,7 @@ small useful work / launch
 
 这正是为什么 Graph Replay、Kernel Fusion、Host Overlap 和 Multi-Stream 对 Decode 尤其重要：它们很多时候不是在让一个大 GEMM 本身更快，而是在减少每个 Token 都要反复支付的固定开销。
 
-同样的逻辑也解释了 Chunked Prefill。一个巨大的 Prefill 往往硬件利用率很好，但如果它一次占设备太久，正在流式输出的 Decode Request 就只能等待。Chunked Prefill 的本质不是“Prefill 算不动”，而是不要让高吞吐的大 Prefill 长时间阻塞对尾延迟敏感的 Decode。
+同样的逻辑也解释了 Chunked Prefill。一个巨大的 Prefill 往往硬件利用率很好，但如果它一次占设备太久，正在流式输出的 Decode Request 就只能等待。Chunked Prefill 将长输入分成较短的计算批次，给对尾延迟敏感的 Decode 留出调度机会。
 
 ## 六、常见优化分别作用在哪里
 
@@ -487,7 +487,7 @@ Speculative Decoding 更直接地攻击 Decode 的串行依赖：让一次昂贵
 
 PD Disaggregation 则走到更彻底的一步：既然 Prefill 和 Decode 本来就是两类 Workload，就让不同资源池分别优化大 Token Batch 与稳定 TPOT / Continuous Batch，而不是强迫同一套并行与调度参数同时兼顾两边。
 
-所以现代 AI Infra 不是一堆独立名词，而是在围绕同一个核心目标工作：
+这些优化共同改变执行形状：
 
 > **尽可能把 Prefill 与 Decode 各自的 Shape，重新组织到硬件更擅长的位置。**
 
@@ -497,7 +497,7 @@ PD Disaggregation 则走到更彻底的一步：既然 Prefill 和 Decode 本来
 
 但 Ascend 官方 Profiling 已经提供了验证这件事需要的指标。
 
-AI Core profiling 中最值得看的包括：`mac_ratio`
+AI Core Profiling 可先查看：`mac_ratio`
 
 Cube / Matrix instruction cycles 占比。
 
@@ -555,9 +555,9 @@ B:
 
 同时记录 Dense M、Expert M_e histogram、Dense GEMM latency、GroupedMatmul latency、Attention latency、Indexer latency、DeepEP / HCCL、Host Gap、TPOT 和 output tok/s。
 
-“Decode crossover”至少有三种。第一种是 Dense GEMM crossover；第二种是 MoE crossover，此时真正的横轴是 Expert M_e distribution；第三种才是 End-to-End Decode crossover。
+“Decode crossover”至少有三种。第一种是 Dense GEMM crossover；第二种是 MoE crossover，此时横轴是 Expert M_e distribution；第三种才是 End-to-End Decode crossover。
 
-即使 Dense GEMM 已经进入更偏 Compute-heavy 的区域，如果 Attention、C4 Indexer、DeepEP 或 Host Gap 仍然占据 Critical Path，整个 Decode Step 依然不能简单称为 Compute Bound。
+即使 Dense GEMM 已经进入更偏 Compute-heavy 的区域，如果 Attention、C4 Indexer、DeepEP 或 Host Gap 仍然占据 Critical Path，这些阶段仍可能限制整轮 Decode 的速度。
 
 随着 Batch 增大，Dense 和 Expert GEMM 可以提高权重复用，单个算子也可能跨过有效 Roofline 的转折点。整轮 Decode 是否因此更快，还取决于 Attention 历史读取、Indexer、通信与 Host Gap。用 Batch × Context 的组合实验观察这些组成部分，才能找到目标配置的性能转折点。
 

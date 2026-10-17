@@ -49,9 +49,9 @@ DSpark Step
 
 最直觉的公式是：`T_step = T_draft + T_verify + T_accept + T_commit`
 
-但它只能作为逻辑分类，不能直接拿四类 Kernel Duration 机械相加。原因是 Device 异步执行、多 Stream 可能并发、Communication 可能在独立 Stream 飞行，而且 Event elapsed time 测的是阶段边界之间的设备 elapsed，而不是所有 Stream duration sum。
+这四类描述逻辑阶段。设备异步执行时，多条 Stream 上的计算与通信可以重叠；Event elapsed time 测量起止点之间的设备时间，各 Stream 的 Kernel Duration 则分别累计工作时长。
 
-真正要区分：
+要区分：
 
 ~~~text
 Kernel Duration Sum
@@ -141,7 +141,7 @@ Draft End Event ◄────────────────────�
 
 如果 side stream 工作在 Draft End Event 前通过 event / stream dependency 被重新 join，它会影响阶段 elapsed。
 
-如果某个 side stream 工作在 Draft End 之后仍独立飞行，那么不能把那条 stream 的完整 Kernel Duration 都算作 draft_gpu_ms。
+side stream 的工作若跨过 Draft End，完整 Kernel Duration 就跨越了 `draft_gpu_ms` 的计时范围。对齐时按 Event 起止点截取对应区间。
 
 所以 draft_gpu_ms / target_verify_gpu_ms 不是：
 
@@ -157,7 +157,7 @@ Draft End Event ◄────────────────────�
 
 另一个必须核清的问题是 end.synchronize() 会不会强制 Draft 与 Verify 串行。
 
-当前实现中，segment 结束只 record End Event。真正的 end.synchronize() 在后续读取 record 的 _drain_pending() 过程中发生。
+当前实现中，segment 结束只 record End Event。 end.synchronize() 在后续读取 record 的 _drain_pending() 过程中发生。
 
 因此：
 
@@ -193,7 +193,7 @@ target_verify_gpu_ms
 
 ### 先看 DSpark Observability
 
-真正做实验时，不建议第一步就录几十秒 msprof。
+先用阶段记录找到稳定的慢窗口，再针对该窗口采集 msprof，定位会更集中。
 
 先利用 SGLang 自带的 DSpark 分阶段记录把问题缩小。
 
@@ -258,7 +258,7 @@ Draft GPU
 Target Verify GPU
 ~~~
 
-它不是严格的可加物理分解，而是一个异常检测 proxy。
+它用于发现阶段外时间的变化，具体归因再交给时间线。
 
 在当前 Ascend 路径中尤其有价值，因为我们已经确认 Accept / Commit 位于 Target Verify segment 之外。
 
@@ -312,7 +312,7 @@ Ascend 环境仍使用 CPU / GPU 这个 Profiler Activity 表达，是因为 tor
 
 #### 为什么 detailed_annotations 很重要
 
-Target Verify 的 workload 不能只用 BS 表示。
+Target Verify 的 workload 同时取决于 BS、Verify 宽度、历史长度与 Graph Padding。
 
 Speculative Verify 还取决于：
 
@@ -371,7 +371,7 @@ DSV4 当前绕开 generic graph.update 分支。
 
 #### DeepEP 看“等了多久”，不只看“通信跑了多久”
 
-真正应该标：
+应该标：
 
 ~~~text
 communication issue
@@ -397,9 +397,7 @@ hook / wait
 
 [dspark_verify.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_verify.py)
 
-但文章讨论的是 Ascend 910C，因此不能停在“代码里存在这个类”。
-
-真正要问：
+在 Ascend 910C 路径上，继续检查实例创建条件：
 
 > **NPU 上它会不会被创建？**
 
@@ -474,7 +472,7 @@ draft_gpu_ms
 target_verify_gpu_ms
 ~~~
 
-这个差值包含 Draft、Verify 计时区间之外的工作：可能是前置规划、阶段间空隙，也可能是 Accept / Commit。多流重叠还会影响可加性，所以它只能提示未归属时间变化，不能单凭差值把问题定位到 Verify 之后。
+这个差值包含 Draft、Verify 计时区间之外的工作：可能是前置规划、阶段间空隙，也可能是 Accept / Commit。多流重叠还会影响可加性，所以这个差值用于标记未归属时间，再由时间线确定工作发生在哪个阶段。
 
 差值增大后，应在时间线上核对前置规划、阶段间空隙，以及以下后处理：
 
@@ -569,7 +567,7 @@ else:
 
 > **DeepSeek-V4 + DSpark + Ascend 910C**
 
-不能把 Replay 前的 Host gap 归因于 graph.update(actual_seq_kvlen)，因为当前路径根本没有执行它。
+当前路径跳过 `graph.update(actual_seq_kvlen)`；Replay 前的 Host gap 应继续检查下文的 metadata、buffer refresh 与 Scheduler。
 
 #### DSV4 的动态 KV / Query metadata走自己的 backend
 
@@ -688,7 +686,7 @@ else:
 
 #### Normal Mode：async_finish主要把等待变成 Stream dependency
 
-Normal path 中，dispatch_a 首先捕获 previous_event；dispatch_b 才真正执行 get_dispatch_layout / buffer.dispatch，并在 async_finish 下调用：`event.current_stream_wait()`
+Normal path 中，dispatch_a 首先捕获 previous_event；dispatch_b 才执行 get_dispatch_layout / buffer.dispatch，并在 async_finish 下调用：`event.current_stream_wait()`
 
 Combine 也类似。
 
@@ -704,7 +702,7 @@ current stream only waits when result is needed
 
 同一批 Token 的 Expert GEMM 必须消费 Dispatch 后的 recv data，这个数据依赖无法凭 async flag 消失。
 
-#### Low-Latency Mode：recv_hook真正创造“发起 → 消费”的窗口
+#### Low-Latency Mode：recv_hook创造“发起 → 消费”的窗口
 
 low-latency path 中当前 SGLang 传入 return_recv_hook=True。
 
@@ -739,7 +737,7 @@ Combine 同理。
 
 所以 recv_hook 的核心不是“通信更快”，而是：
 
-> **把同步点向真正消费数据的位置推迟。**
+> **把同步点向消费数据的位置推迟。**
 
 #### 但当前 DeepSeek-V4 Decode / TARGET_VERIFY 没有 TBO
 
@@ -763,17 +761,7 @@ Batch A dispatch_b
 
 注释还指出 Decode TBO 当前未实现，已有数据表明会 regression，需要进一步解决 graph capture。
 
-因此对当前 DSpark：`DECODE / TARGET_VERIFY`
-
-不能写成：
-
-> recv_hook 已经借助 V4 TBO 把通信隐藏在另一个 micro-batch 后面。
-
-这条实现不存在。
-
-#### 当前 910C 仍可能出现哪些真实 overlap
-
-仍然有几类，但必须由 Timeline 证明。
+当前 DeepSeek-V4 的 TBO 支持 EXTEND。DSpark 的 `DECODE / TARGET_VERIFY` 要从其他独立工作中寻找通信重叠：
 
 ##### 独立 Side Stream Work
 
@@ -791,7 +779,7 @@ Combine 路径支持额外 overlap stream 协调；只有上层实际配置并�
 
 和：`T_comm_exposed`
 
-真正影响 Step Wall Time 的是 exposed communication，而不是通信 Task 自己的累计 duration。
+影响 Step Wall Time 的是 exposed communication，而不是通信 Task 自己的累计 duration。
 
 ### 把各阶段放回同一轮
 
@@ -858,7 +846,7 @@ CriticalPath(
 )
 ~~~
 
-最终真正关注：
+最终关注：
 
 ~~~text
 Effective Progress Rate
@@ -898,7 +886,7 @@ Commit Cost ↑
 
 | 实验 | 控制变量 | 主要观察 |
 | --- | --- | --- |
-| Spec OFF vs DSpark ON | workload 完全相同 | DSpark 是否真正降低 TPOT / 提高 output throughput |
+| Spec OFF vs DSpark ON | workload 完全相同 | DSpark 是否降低 TPOT / 提高 output throughput |
 | NPU Graph ON vs OFF | 仅改 Graph | Device bubble、Host launch gap、Step Wall Time |
 | DSpark Block Size 3 / 6 / 9 | 仅改 block | Draft GPU、Verify GPU、Avg Commit、Effective TPOT |
 | DeepEP low_latency 对照 | 通信配置 | Total Comm、Exposed Comm、hook / wait 位置 |
@@ -919,19 +907,19 @@ DeepEP mode
 Profiler config
 ~~~
 
-否则 Trace 之间无法严格比较。
+保持这些条件一致后，再比较 Trace 中的阶段差异。
 
 ### 按现象选择检查点
 
-| Timeline 现象 | 第一检查点 | 不要过早下的结论 |
+| Timeline 现象 | 先检查什么 | 一起对齐的量 |
 | --- | --- | --- |
-| draft_gpu_ms 变长 | Draft workload / model / side stream | 不要直接等同“Draft Kernel Sum 变长” |
-| target_verify_gpu_ms 变长 | verify tokens / prefix / graph bucket | 不要只看 BS |
-| Verify 后尾巴变长 | eager Accept / TP Sync / Commit | 当前 NPU 不要说 folded epilogue |
-| Replay 前 Host gap | metadata / buffer / scheduler | DSV4 不要直接怪 graph.update |
-| DeepEP Communication 很长 | hook / wait 时还有多少未完成 | Total Comm 不等于 Exposed Comm |
-| 多 Stream 有交叠 | Critical Path 是否真的缩短 | 有视觉 overlap 不代表有 speedup |
-| Kernel Duration Sum 很大 | 是否存在并发 | 不要把 duration sum 当 Step Wall Time |
+| `draft_gpu_ms` 变长 | Draft workload、模型与 side stream | Event 范围内的设备工作与等待 |
+| Verify 时间变长 | Verify Token 数、Prefix 与 Graph Bucket | 实际 Forward 行数与历史长度 |
+| Verify 后尾部变长 | Eager Accept、TP Sync、Commit | 各段开始和结束位置 |
+| Replay 前 Host gap | metadata、buffer、Scheduler | DSV4 实际调用路径 |
+| DeepEP 通信长 | recv hook 与 Wait | 总通信时长、等待时剩余工作 |
+| 多流出现重叠 | 汇合点在等待谁 | 关键路径与整轮耗时 |
+| Kernel 累计时长增加 | 并发工作是否增加 | 累计工作量与墙钟时间 |
 
 最后把整套方法收束成：
 
@@ -959,15 +947,7 @@ flowchart TD
     N --> O[Effective TPOT]
 ~~~
 
-真正成熟的 Profiling，不是找到“最慢 Kernel 是谁”，而是回答：
-
-> **这个 Kernel、通信或 Host gap 是否真的位于本轮输出 Token 的 Critical Path 上？**
-
-对于当前 DeepSeek-V4 + DSpark + Ascend 910C，还要进一步问：
-
-> **Draft 和 Verify 之外的 Eager Accept / Commit 尾巴有多长？DeepEP low-latency 的通信有多少真实暴露在 hook / wait 点？NPU Graph Replay 前的 Host 时间究竟来自 metadata、buffer refresh，还是 scheduler？**
-
-能稳定回答这几个问题后，Profiling 才真正从“看图”变成“性能工程”。
+归因完成后，用同一轮记录检查结论：哪段工作延迟了下一次有效输出，调整后关键路径缩短多少，有效提交长度是否变化。Draft / Verify 以外的 Eager 尾部、通信等待和 Replay 前 Host 准备，都应落实到这组时间与产出上。
 
 ### 固定源码入口
 
@@ -997,19 +977,4 @@ flowchart TD
 3. [Ascend 910C 投机解码：Graph、多流与通信的执行依赖](deepseek-v4-speculative-ascend-performance-critical-path-analysis.md)
 4. **本文：把源码机制映射到真实 Profiling 时间线。**
 
-下一步真正有价值的工作，是拿一组稳定的 910C Trace，把：
-
-~~~text
-forward_ct
-Draft ms
-Verify ms
-Unattributed Step Time
-DeepEP exposed communication
-NPU Graph pre-replay gap
-Commit Length
-TPOT
-~~~
-
-放进同一张表。
-
-那时就可以从源码推导正式进入实测优化闭环。
+采集稳定窗口后，把 `forward_ct`、Draft / Verify 时间、阶段外时间、暴露的通信等待、Replay 前间隙、Commit Length 与 TPOT 放在同一张表中，即可比较改动前后每轮的成本与产出。

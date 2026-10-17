@@ -4,22 +4,22 @@
 
 本文沿 DeepSeek-V4 的 EAGLE/NextN 路径标出这些依赖：图里捕获了哪些 forward，Plan Stream 能与谁重叠，DeepEP 的等待点在哪里。源码可以确定执行关系；哪一段成为实际关键路径，还要把设备时间线与这些关系对齐。
 
-> **源码基线**：本文固定基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-21。主线讨论 DeepSeek-V4 + EAGLE / NextN + Ascend 910C + `dsv4` backend。正文中的 timeline 是根据源码中的 Stream / Event / Wait / Graph dependency 推导出的执行关系，不是 910C Profiler 实测值，因此不会虚构任何毫秒数或加速百分比。
+> **源码基线**：本文固定基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-21。主线讨论 DeepSeek-V4 + EAGLE / NextN + Ascend 910C + `dsv4` backend。图中展示由 Stream、Event、Wait 和 Graph 调用推导的依赖关系；耗时与重叠比例由设备时间线测量。
 
 ## 一、Graph、Stream 与通信各自负责什么
 
-这篇文章最容易写错的地方，不是某个 Kernel 名字，而是把“异步”“Graph”“Multi-Stream”直接等同于“并行”。
+Graph、Stream 与通信分别处理不同的执行成本。先看它们在一轮 EAGLE 中的位置：
 
-固定源码核对后的结论如下。
-
-| 核对问题 | 固定源码结论 |
+| 机制 | 本文对应的执行方式 |
 | --- | --- |
-| Draft Graph 一次 replay 到底包含几步 NextN | Graph Capture 包住完整 `draft_forward()`；循环有 `num_steps` 个 candidate stage，但最后一轮在 model forward 前就 `break`，所以真正执行 NextN model forward 的次数是 **`num_steps - 1`**。candidate1 来自上一阶段 Draft Extend。 |
-| Target Verify Graph 怎么 bucket | 普通 EAGLE **不是 Ragged Verify**。Target runner 的 `captured_req_width = speculative_num_draft_tokens`；先按 request batch size 选 / pad Graph bucket，再得到 `padded_tokens = bucket_bs × captured_req_width`。开启 DP Attention / MLP gather 时，bucket admission 使用各 DP rank 原始 request count 的最大值。 |
-| Plan Stream 是否真的跨阶段 overlap | **不对称。** Verify Planning 显式 `plan_stream.wait_stream(fwd_stream)`，不能与 Draft device compute 重叠；Draft-Extend Planning 没有先 wait main stream，可与已经 enqueue 的 Target Verify / Accept tail 形成设备并发，随后 main stream 在 Draft Extend forward 前 join plan stream。 |
-| NPU Multi-Stream 在哪些 ForwardMode 可达 | Target DeepSeek-V4 model 在环境变量开启时创建 alt streams，`DECODE` 和 `TARGET_VERIFY` 可以进入 NPU multi-stream；但 NextN model 构造唯一 decoder 时显式 `alt_streams=None`，所以 Draft `DECODE` 和 `DRAFT_EXTEND_V2` 实际都到不了这条 Attention multi-stream。 |
-| DeepEP `async_finish / recv_hook` 隐藏什么 | 它们把 communication launch 与 completion wait 拆开，但 **routed Expert 仍必须等 Dispatch recv 完成**。Normal 模式 `dispatch_b()` 会 wait event；Low-Latency 模式可在 `dispatch_a` launch 和 `dispatch_b` recv-hook 之间插入独立工作，例如 SBO shared expert。真正隐藏的是被独立工作覆盖的 communication tail，不是整个 A2A。 |
-| 为什么有 workload “关闭” Draft-Extend Graph | Runtime 正式 kill-switch 是 `SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH`，注释明确说某些 capture memory pool / DeepEP full-dispatch workspace 可能“比 Graph 节省的更贵”。但固定版本 Ascend best-practice 页面写的是 `SGLANG_DISABLE_DRAFT_EXTEND_GRAPH=1`；仓库中没有找到这个旧名字的 alias / consumer，因此这是**文档与 runtime 名字漂移**，不能据此断言该配置在这个 commit 实际生效。 |
+| Draft Graph | 捕获完整 `draft_forward()`，执行 `num_steps - 1` 次 NextN Forward |
+| Verify Graph | 按请求数选择档位，每请求保留固定 Verify 宽度 |
+| Plan Stream | Verify Prep 等待 Draft；Draft-Extend Prep 可与已提交的主流尾部重叠 |
+| Target 多流 | 重叠 Q、KV 与 Indexer 等独立工作；NextN 未接入这组 alt streams |
+| DeepEP 异步通信 | 分开发起与等待，在中间安排独立计算 |
+| Draft-Extend Graph | 用重复启动成本的节省，交换捕获与 workspace 内存开销 |
+
+后文依次展开捕获宽度、等待位置和配置入口。
 
 把六个结论放在一起，可以先得到一轮稳态 EAGLE 的骨架：
 
@@ -48,7 +48,7 @@ Draft Extend Forward / Graph
 下一轮 candidate1
 ```
 
-真正的优化问题因此变成：
+优化问题因此变成：
 
 > **每一个 Fork 最后在哪里 Join？哪条 branch 最长？哪些 communication / planning 已经被其他工作覆盖，哪些仍然暴露在 Critical Path 上？**
 
@@ -60,9 +60,9 @@ DeepSeek-V4 的 EAGLE Draft 在 NPU 上有专门 Runner：`EAGLEDraftNpuGraphRun
 
 [`eagle_draft_npu_graph_runner.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/graph_runner/eagle_draft_npu_graph_runner.py)
 
-它继承通用 `EAGLEDraftCudaGraphRunner`，但在 NPU 路径上底层真正使用的是 `torch.npu.NPUGraph`。历史类名里的 CUDA 不代表这里运行 CUDA。
+它继承通用 `EAGLEDraftCudaGraphRunner`，但在 NPU 路径上底层使用的是 `torch.npu.NPUGraph`。这里沿用历史 CUDA 类名，底层运行的是 NPU Graph。
 
-真正值得看的，是 Graph Capture body。
+从 Capture Body 可以数清捕获的 Forward 次数。
 
 `EAGLEDraftCudaGraphRunner.capture_one_shape()` 最终捕获：
 
@@ -103,7 +103,7 @@ for i in range(self.speculative_num_steps):
 
 [`EagleDraftWorker.draft_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py#L778-L951)
 
-因此严格关系是：
+对应计数为：
 
 ```text
 NextN model forward count inside Draft Graph
@@ -151,7 +151,7 @@ NextN forward #2
 candidate3
 ```
 
-所以 Graph Capture 的确覆盖“整个 multi-step Draft rollout”，但必须严格区分：
+Graph Capture 覆盖完整 rollout，其中候选阶段数与模型 Forward 次数分别为：
 
 ```text
 candidate stage 数 = num_steps
@@ -277,7 +277,7 @@ Req2 verify 1 token
 
 而是每个 request 固定 Verify `num_draft_tokens` rows。
 
-Accept Length 是 Verify **之后**才知道的，因此不能用本轮 acceptance 较短去减少当前这一次 EAGLE Target Verify 的 Graph Work。
+Accept Length 在 Verify 之后产生，因此本轮 EAGLE Verify 仍按捕获的固定宽度执行，接受较短只影响后续提交。
 
 ### 普通 EAGLE Graph 首先按 Request Batch Size 选 Bucket
 
@@ -356,7 +356,7 @@ max(
 
 > **让协作 Rank 在同一 captured collective geometry 上 replay。**
 
-分析 Target Verify Graph 时，不能只看当前 Rank 有几个 Request，还要看：
+分析 Target Verify Graph 时，将本地请求数与下面几项一起核对：
 
 ```text
 DP group 最大 Request Count
@@ -376,7 +376,7 @@ Capture Bucket
 
 若 `num_draft_tokens=3`，Target Verify 对应的 token rows 才是：`bucket_bs × 3`
 
-而 DSpark Ragged Verify 的 `graph_num_tokens tier` 是另一套机制，不能混进当前 EAGLE 性能模型。
+DSpark Ragged Verify 则按 `graph_num_tokens tier` 组织工作，相关成本模型在 DSpark 专题中展开。
 
 ## 四、Plan Stream 与计算的依赖关系
 
@@ -398,7 +398,7 @@ torch.get_device_module(device).Stream()
 
 关键要看 `wait_stream` 在哪里。
 
-### Verify Planning：不能与 Draft Device Compute 重叠
+### Verify Planning 等待 Draft 结果
 
 `run_eagle_verify()` 一开始拿到当前 compute stream：
 
@@ -497,7 +497,7 @@ batch_result.next_token_ids.to(torch.int64)
 
 放在进入 Plan Stream **之前**，并写明这是为了避免在 Plan Stream 内发生额外 cross-stream synchronization / data race。
 
-随后真正进入 Draft Extend Forward 前：
+随后进入 Draft Extend Forward 前：
 
 ```python
 current_stream().wait_stream(
@@ -528,9 +528,7 @@ Main Stream
              ███████████
 ```
 
-所以不能笼统写：`Plan Stream = Verify Planning 与 Draft 并行`
-
-更准确的是：
+两种 Planning 的依赖分别是：
 
 ```text
 Verify Prep:
@@ -611,7 +609,7 @@ TARGET_VERIFY
 
 更反直觉的是，`DRAFT_EXTEND_V2` 在默认参数下也不被这个 helper 排除。
 
-如果只看 ForwardMode，会误以为 NextN Draft Extend 也能进入 NPU Multi-Stream。
+ForwardMode 之外，还要检查模型是否创建并传入 alt streams。
 
 但 DeepSeek-V4 NextN Model 构造唯一 decoder layer 时显式：
 
@@ -641,7 +639,7 @@ self.decoder = DeepseekV4DecoderLayer(
 
 ### Target 多流中的独立计算分支
 
-真正进入 `_forward_prepare_multi_stream_npu()` 后：
+进入 `_forward_prepare_multi_stream_npu()` 后：
 
 ```text
 stream_kv
@@ -683,7 +681,7 @@ max(
 
 而不是三者相加。
 
-但源码只能证明这些工作**被允许并发**。是否能在 910C 上完全重叠，还受 Cube / Vector 资源竞争、HBM 带宽、Kernel occupancy、CANN scheduling 和实际 token rows 影响，需要 Profiler Trace 验证。
+这些分支可并发提交，实际重叠程度随 Cube / Vector 资源竞争、HBM 带宽、Kernel Occupancy、CANN 调度与 Token 行数变化。用 Profiler 对齐开始、结束与汇合点，就能量出其中暴露的等待。
 
 另外固定源码中非 Blackwell 的 Multi-Stream row limit 是 64。这里判断的是当前 Layer 的 `x.shape[0]`，不是服务器的 `max_running_requests`。
 
@@ -757,7 +755,7 @@ recv complete barrier
 Routed Expert GEMM
 ```
 
-`async_finish=True` 本身不能把 Routed Expert 提前到 recv 完成之前。
+`async_finish=True` 将 Launch 与 Wait 分开；Routed Expert 仍在接收完成后开始计算。
 
 Combine 也是同样结构：
 
@@ -771,7 +769,7 @@ combined hidden consumer
 
 所以 Normal mode 的 async API 主要提供：
 
-> **把 communication 放到 communication stream 执行的能力；真正能隐藏多少，取决于 Wait 之前有没有别的 independent work。**
+> **把 communication 放到 communication stream 执行的能力；能隐藏多少，取决于 Wait 之前有没有别的 independent work。**
 
 ### Shared Expert 正好是一个独立 branch
 
@@ -819,7 +817,7 @@ Shared Expert
 
 这里 Shared Expert 可以覆盖 Routed Path 的一部分时间，其中也可能包含 Communication。
 
-真正值得看的不是 DeepEP 总通信时间，而是：
+对齐耗时时，同时记录 DeepEP 总时长与以下等待：
 
 ```text
 通信结束以后
@@ -862,7 +860,7 @@ dispatch_b()
 hook()
 ```
 
-才真正等待 / 完成接收。
+才等待 / 完成接收。
 
 固定源码：
 
@@ -882,15 +880,15 @@ Expert consumes received tokens
 
 SBO 路径正是利用这个 slot，把 Shared Expert 等独立计算放进 Communication 等待窗口。
 
-因此 `recv_hook` 的真正价值不是“不再等待”，而是：
+`recv_hook` 将等待留到接收数据被消费的位置：
 
-> **把 Wait Point 从 Communication Launch 处推迟到真正消费 recv buffer 的边界，让中间可以插入与 recv 数据无关的 Compute。**
+> **把 Wait Point 从 Communication Launch 处推迟到消费 recv buffer 的边界，让中间可以插入与 recv 数据无关的 Compute。**
 
 Combine 侧也是同样思想；有 `overlap_args` 时 Low-Latency combine 可以切到 overlap stream，最终仍在 Consumer Boundary Join。
 
 ### 应该看 Exposed Communication，不是 Total Communication
 
-如果某段 Communication 时间是 `T_comm`，同时独立计算能覆盖 `T_independent`，理想情况下真正暴露在 Critical Path 上的是：
+如果某段 Communication 时间是 `T_comm`，同时独立计算能覆盖 `T_independent`，理想情况下暴露在 Critical Path 上的是：
 
 ```text
 T_exposed_comm
@@ -942,7 +940,7 @@ export SGLANG_NPU_USE_MULTI_STREAM=1
 
 [`environ.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/environ.py#L1371-L1375)
 
-EAGLE Worker 创建 Draft-Extend Graph 时真正检查的也是：
+EAGLE Worker 创建 Draft-Extend Graph 时检查的也是：
 
 ```python
 not envs
@@ -962,7 +960,7 @@ not envs
 
 因此这条文档配置存在明显的：`doc / runtime env-name drift`
 
-除非外部启动包装层另做转换——固定仓库中没有证据——否则不能仅根据这行文档断言 Draft-Extend Graph 在该 workload 中真的被关闭。
+该版本应使用 Runtime 读取的 `SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH` 控制开关。部署脚本若沿用旧名，需要在启动日志中检查实际 Graph 状态。
 
 ### 但“为什么需要这个 Kill Switch”有明确源码依据
 
@@ -1040,9 +1038,9 @@ resolve_num_tokens_per_req(
 
 [`EAGLEDraftExtendCudaGraphRunner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py)
 
-这意味着即使最终 `accept_lens` 较短，Draft Extend Graph 的 Buffer / Capture Geometry 仍按照完整 speculative width 设计；真正 LM Head 只在 selected last-accepted rows 上做后续处理。
+这意味着即使最终 `accept_lens` 较短，Draft Extend Graph 的 Buffer / Capture Geometry 仍按照完整 speculative width 设计； LM Head 只在 selected last-accepted rows 上做后续处理。
 
-这也是为什么 Draft-Extend Graph 的 Memory Footprint 和 Launch Savings 需要单独评估，而不能因为“NextN 很轻”就默认 Graph 一定更赚。
+评估 Draft-Extend Graph 时，将捕获和 workspace 的内存开销与实际节省的启动时间一起比较。
 
 ## 八、将执行依赖与实测时间线对齐
 
@@ -1065,19 +1063,19 @@ flowchart TD
 | Routed MoE | Dispatch、Expert GEMM、Combine | GEMM 等待收到 Token；后续消费等待 Combine |
 | Shared Expert | 可独立执行的专家计算 | 与 routed 输出合并前完成 |
 
-Plan Stream 是否形成跨阶段重叠，取决于调用与等待位置。Target 的多流实现也不能直接套用到没有接入这些 alt streams 的 NextN Draft。
+Plan Stream 是否形成跨阶段重叠，取决于调用与等待位置。NextN Draft 没有接入这组 alt streams，使用自身的执行路径。
 
 拿 Ascend Profiler 分析一轮 speculative decode 时，可以按这个顺序看：
 
 | 观察点 | 对应源码问题 |
 | --- | --- |
-| Draft | Graph replay 还是 eager？`num_steps` 对应几次真正 NextN forward？ |
+| Draft | Graph replay 还是 eager？`num_steps` 对应几次 NextN forward？ |
 | Draft Graph | raw request count pad 到哪个 bucket？ |
 | Verify seam | Draft 结束到 Verify start 中间，Verify Plan gap 多长？这段不能与 Draft overlap。 |
 | Target Verify | 固定 Verify width 是多少？`bucket_bs × num_draft_tokens` 有多少 padding rows？ |
 | Plan overlap | Draft-Extend Plan 是否真的与 Verify / Accept tail 同时出现在 NPU timeline？ |
 | Attention | Q / KV / Indexer 三条 branch 哪条最长？Multi-Stream Join 最终等谁？ |
-| MoE | DeepEP 总 duration 中，有多少被 Shared Expert / SBO 覆盖？真正 exposed tail 是多少？ |
+| MoE | DeepEP 总 duration 中，有多少被 Shared Expert / SBO 覆盖？ exposed tail 是多少？ |
 | Rank control | 是否因为某 Rank Graph fallback 导致整个 TP group 一起 eager？ |
 | Draft Extend | Graph 还是 eager？Capture memory / workspace 是否值得？ |
 

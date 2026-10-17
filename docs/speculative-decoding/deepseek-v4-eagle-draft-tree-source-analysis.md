@@ -82,7 +82,7 @@ topk_cs_p, topk_cs_index = fast_topk(
 )
 ~~~
 
-于是下一轮真正继续展开的 frontier 是：
+于是下一轮继续展开的 frontier 是：
 
 ~~~text
 A → C : 0.42
@@ -133,7 +133,7 @@ top_scores = torch.topk(
 
 为什么是 `num_draft_token - 1`？
 
-因为 Target Verify Window 的第一个位置留给上一轮已经由 Target 确认的 `bonus token`，真正留给 Draft nodes 的容量只有：`num_draft_tokens - 1`
+因为 Target Verify Window 的第一个位置留给上一轮已经由 Target 确认的 `bonus token`，留给 Draft nodes 的容量只有：`num_draft_tokens - 1`
 
 因此 EAGLE 有两层 budget：
 
@@ -361,9 +361,9 @@ node 3 是 node 1 的 child
 
 [`test_build_tree_topk2_hand_case()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/test/registered/cpu/test_spec_kernels.py#L524-L562)
 
-所以阅读这套源码时最好记住：
+三类索引的职责分别是：
 
-> **`selected_index` 保存“最终节点来自原搜索池哪里”，`parent_list` 保存“搜索池中的 parent 关系怎样追溯”；`retrieve_*` 才是 Tree Build 完成以后真正面向 Verify traversal 的最终树结构。**
+> **`selected_index` 保存“最终节点来自原搜索池哪里”，`parent_list` 保存“搜索池中的 parent 关系怎样追溯”；`retrieve_*` 才是 Tree Build 完成以后面向 Verify traversal 的最终树结构。**
 
 ## 三、把树关系转成 Verify Mask
 
@@ -539,7 +539,7 @@ mask_mode = verify_mask.mode
 - [`build_eagle_verify_input()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_common.py#L317-L404)
 - [`verify_mask.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/attention/verify_mask.py)
 
-因此两种模式真正的边界应该写成：
+因此两种模式边界应该写成：
 
 > **它们表达相同的 Tree ancestor 语义；区别主要在于 Mask buffer 是否显式携带 committed-prefix columns，以及具体 attention backend 怎样消费或重建 Prefix 部分。**
 
@@ -559,7 +559,7 @@ draft_tokens = torch.cat(
 )
 ~~~
 
-所以 Target Verify 真正看到：`[root/previous bonus, draft nodes...]`
+所以 Target Verify 看到：`[root/previous bonus, draft nodes...]`
 
 随后：`ForwardMode = TARGET_VERIFY`
 
@@ -702,7 +702,7 @@ EAGLE 里“bonus”这个词很容易因为时序不同而混乱。
 
 这一轮 Target Verify 开始前，输入 Tree 的 root 是：`上一轮 Target 已确认的 bonus token`
 
-它已经是当前序列下一次模型执行的输入，但它的 Target KV 要在本轮 Verify forward 中真正计算。
+它已经是当前序列下一次模型执行的输入，但它的 Target KV 要在本轮 Verify forward 中计算。
 
 假设 Verify Tree：
 
@@ -786,7 +786,7 @@ new trailing bonus
 尚未作为模型输入运行，因此还没有 KV
 ~~~
 
-`eagle_sample()` 内部的 `num_correct_drafts` 始终只数真正接受了多少 Draft nodes。
+`eagle_sample()` 内部的 `num_correct_drafts` 始终只数接受了多少 Draft nodes。
 
 返回前才：
 
@@ -860,7 +860,7 @@ move_accept_tokens_to_target_kvcache(
 
 为什么传的是：`accept_lens - 1`
 
-这里不能只解释成“减掉 bonus，所以只搬 Draft KV”。
+这里先将接受长度转换为正确 Draft 数，再由函数补上旧 Root 对应的输入行。
 
 `move_accept_tokens_to_target_kvcache()` 的第三个参数名字就是：`num_correct_drafts`
 
@@ -871,7 +871,7 @@ num_correct_drafts:
 正确 Draft 数量，不含 trailing bonus
 ~~~
 
-但函数内部真正为每个请求准备的 committed KV 长度是：
+但函数内部为每个请求准备的 committed KV 长度是：
 
 ~~~python
 num_correct_drafts + 1
@@ -911,7 +911,7 @@ accepted Draft-node KV
 
 [`move_accept_tokens_to_target_kvcache()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L728-L790)
 
-真正**不会被搬 KV**的是：`new trailing bonus`
+**不会被搬 KV**的是：`new trailing bonus`
 
 因为它只是这轮 Target logits 的预测结果，还没作为输入执行，自然不存在本轮可搬的 KV row。
 
@@ -947,7 +947,7 @@ C
 
 个 KV rows。
 
-而 X 要等下一轮成为模型输入时才真正写 KV。
+而 X 要等下一轮成为模型输入时才写 KV。
 
 ### Compaction 不只整理 KV
 
@@ -1140,49 +1140,13 @@ triton
 
 `dsv4` 没在 allowlist 里，因此固定版本不允许该组合。
 
-### 改成 `page_size=1` 也不会绕过模型级限制
+### 将模型约束与页布局一起检查
 
-`page_size=1` 不触发这一条 paged-tree guard，但 DeepSeek-V4 模型 hook 的 `topk=1` 断言仍然成立。这里不是“尚缺生产验证”的程度，而是固定版本的配置入口就不接受多分支 EAGLE。要扩展该能力，必须同时处理模型约束、KV 布局和后端支持，不能只改 page size。
+设置 `page_size=1` 后，paged-tree guard 的触发条件消失，DeepSeek-V4 模型 Hook 的 `topk=1` 约束仍然生效。因此，该固定版本的 V4 EAGLE 配置使用 Chain。
 
-因此当前最严谨的结论是：
+扩展多分支能力时，需要同时处理模型约束、分支 KV 归属、Prefix Tail 复制、Attention Metadata 与后续 Compact。通用 NPU Tree Build / Greedy Verify Kernel 已提供部分组件，完整模型路径再将这些组件衔接起来。
 
-~~~text
-SGLang EAGLE Runtime
-支持多分支 Tree 算法
-        ↓
-
-NPU
-具备 Tree build / greedy verify kernel
-        ↓
-
-但当前 DeepSeek-V4 Ascend
-dsv4 + paged KV(page>1)
-缺少 EAGLE multi-branch 所需的
-paged-tree draft-decode layout
-        ↓
-
-官方配置继续使用 topk=1 Chain
-~~~
-
-这也解释了为什么“Tree Kernel 已经存在”和“DeepSeek-V4 Ascend 当前还是 topk=1”并不矛盾。
-
-它们属于不同层：
-
-~~~text
-Candidate topology
-        ↓
-Tree build / verify
-
-和
-
-Draft physical KV layout
-        ↓
-Paged multi-branch cache ownership
-~~~
-
-当前配置同时受到模型级 `topk=1` 约束和后端 paged-tree 支持范围的限制。后者是需要补齐的一项能力，不能单独视为全部阻塞原因。
-
-候选分数决定哪些路径进入 Verify，树索引与 Mask 保持父子关系和可见性，接受结果再把这些候选收敛为一条输出序列。若要扩展到新的模型或后端，需要同时验证上述语义和物理 KV 布局，而不只是补一个 Tree Sampling Kernel。
+候选分数决定哪些路径进入 Verify，树索引与 Mask 保持父子关系和可见性，接受结果最后收敛为一条输出序列。这些关系与物理缓存布局一起，构成多分支执行的完整数据流。
 
 ### 源码阅读入口
 

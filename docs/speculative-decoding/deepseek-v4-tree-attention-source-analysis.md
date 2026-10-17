@@ -1,6 +1,6 @@
 # EAGLE Tree Attention：候选布局、位置与可见性
 
-把一棵候选树按 `[root, A, B, C, D]` 排进 Tensor，不代表它们就构成一条时间序列。假设 C 是 A 的子节点、D 是 B 的子节点，C 应该读取 root 和 A，却不该读取另一条分支上的 B。
+一棵候选树可以按 `[root, A, B, C, D]` 排进 Tensor，每行仍保留原来的父子关系。假设 C 是 A 的子节点、D 是 B 的子节点，C 应该读取 root 和 A，却不该读取另一条分支上的 B。
 
 Tree Attention 要在一次 forward 中保持这种祖先关系。本文用同一棵小树串起 Verify 行布局、位置编号和可见性，再比较不同后端怎样消费这些信息。当前 DeepSeek-V4 的 EAGLE 配置仍限定 `topk=1`，多分支实现作为通用 EAGLE 机制讨论。
 
@@ -38,7 +38,7 @@ Target(prefix + root + B + D)
 
 这样一定正确，但 speculative decoding 想减少的 Target Forward 次数又回来了。
 
-我们真正想要的是：
+我们想要的是：
 
 ~~~text
 一次 Target Forward
@@ -334,7 +334,7 @@ C    → P + 2
 D    → P + 2
 ~~~
 
-而不能按 physical row 编成：
+若直接使用物理行号，会得到下面这组与树深度不符的位置：
 
 ~~~text
 root → P
@@ -587,7 +587,7 @@ accept_lens = 4
 
 用户侧本轮 accepted outputs 是：`D1 D2 D3 B`
 
-但是本轮真正算出、可以进入 KV-ready prefix 的 Verify input rows 是：`R D1 D2 D3`
+但是本轮算出、可以进入 KV-ready prefix 的 Verify input rows 是：`R D1 D2 D3`
 
 同样正好 4 个。
 
@@ -610,7 +610,7 @@ P + 4
 
 B 再次停在新的 KV-ready boundary 上：`position(B) = P + 4`
 
-等待下一轮作为 root 被真正 Forward。
+等待下一轮作为 root 被 Forward。
 
 因此每轮都存在这样一个 frontier：
 
@@ -670,7 +670,7 @@ R  D1 D2 D3
 
 但 token identity 向前错了一格。
 
-这个 one-token shift 是整个 EAGLE pipeline 最值得记住的 invariant 之一。
+这个一位偏移连接了本轮输入 KV 与本轮预测输出，后续 Compact 继续沿用同一对应关系。
 
 ## 三、FULL_MASK 与 QLEN_ONLY 怎样表达可见性
 
@@ -788,13 +788,7 @@ maybe_create_verify_mask(
 
 因为 `is_read=False`，`maybe_create_verify_mask()` 会选择更小的：`QLEN_ONLY`
 
-但这里不能反过来说：`“DSV4 正在用 QLEN_ONLY mask 做 multi-branch Tree Attention”`
-
-当前 DSV4 本来就禁止 `topk>1`，而且这块 mask 根本不被 Verify metadata 提取。
-
-因此最严谨的结论是：
-
-> **对于支持 EAGLE tree verify 的 backend，逻辑 contract 是一致的：完整 KV-ready prefix 可见、candidate 部分只见 ancestor path；但 FULL_MASK / QLEN_ONLY / page-table rewrite / retrieve topology 都只是不同实现 representation。不是所有 backend 都支持 Tree，也不是所有支持路径都直接读取同一种 mask。**
+当前 DSV4 配置使用 `topk=1`，其 Verify Metadata 不读取这块 Mask。其他支持 EAGLE Tree 的 Backend，可以用 FULL_MASK、QLEN_ONLY、页表改写或 Retrieve Topology 表达祖先可见性。非 SWA 场景下，完整可见 Prefix 与当前节点的祖先后缀共同构成它的 Attention 历史。
 
 ### Triton 是最直观的 Direct-Mask 实现
 
@@ -950,7 +944,7 @@ Per-query Ancestor KV List
 普通 FlashAttention
 ~~~
 
-### Prefix 与 Suffix 不能直接相加
+### 用 LSE 合并 Prefix 与 Suffix 的 Attention 结果
 
 第一段 Attention 得到：`(O_prefix, LSE_prefix)`
 
@@ -966,9 +960,7 @@ merge_state_v2_wrapper(...)
 
 因为两个 KV subset 的 softmax normalization 必须在同一个 partition function 下恢复。
 
-所以不能写成：`O = O_prefix + O_tree`
-
-而必须结合 LSE。
+LSE 提供两个子集的归一化权重，用它重新加权 `O_prefix` 与 `O_tree`，得到合并结果。
 
 最终效果等价于：
 
@@ -981,15 +973,7 @@ Attention(
 )
 ~~~
 
-因此：
-
-> **把这条路径称为 Tree Attention 是准确的，只要明确它指的是语义；更精确的工程描述是“FlashAttention 用 prefix/suffix cascade + softmax-state merge 实现 Tree Attention”。**
-
-不要写成：
-
-> “FlashAttention 调用了一个 Tree Attention kernel。”
-
-那就不准确了。
+FlashAttention 在这条路径上通过 Prefix/Suffix Cascade 与 Softmax State Merge，实现候选树的祖先可见性。
 
 ### SWA 是一个重要例外
 
@@ -1014,7 +998,7 @@ FlashAttention SWA topk>1
 → 另一套 expanded metadata / page-table 路径
 ~~~
 
-而不能把整个 FlashAttention backend 全部概括成 cascade。
+同一 FlashAttention Backend 因此按层类型选择 Cascade 或展开后的 Metadata 路径。
 
 ## 五、DeepSeek-V4 的模型与后端限制
 
@@ -1039,7 +1023,7 @@ if cfg.speculative_algorithm == "EAGLE":
 
 ### 模型配置层的 topk=1 约束
 
-这个 guard 在 runtime 真正进入 EAGLE Tree Verify 前就拒绝。
+这个 guard 在 runtime 进入 EAGLE Tree Verify 前就拒绝。
 
 它表达的是：
 
@@ -1087,7 +1071,7 @@ paged KV ownership
 speculative KV commit
 ~~~
 
-如果未来真正允许：`topk > 1`
+如果未来允许：`topk > 1`
 
 每个 candidate node 都必须保证：
 
@@ -1256,7 +1240,7 @@ flowchart TD
     T --> U[Terminal Bonus = Next Round Root]
 ~~~
 
-这张图里最值得记住的是：
+图中五类状态分别在对应阶段保持一致：
 
 ~~~text
 Candidate Tree

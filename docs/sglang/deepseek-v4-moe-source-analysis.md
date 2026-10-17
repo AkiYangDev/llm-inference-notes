@@ -4,7 +4,7 @@ Attention 输出一行 hidden states 后，MoE 要先决定这行数据交给哪
 
 本文用四个 Rank、八个 Expert 的教学例子走过 Router、Dispatch、专家计算和 Combine，再对照 DeepSeek-V4 的实现。DeepEP 暴露这些阶段的独立接口，Ascend FuseEP 则会把其中多项工作融合到同一执行路径。
 
-> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线分析 DeepSeek-V4 target model 的普通 MoE forward。具体 checkpoint 可以覆盖配置类默认值；文中的 4 Rank / 8 Expert 例子只用于解释通信，不代表 DeepSeek-V4 的真实规模。
+> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线分析 DeepSeek-V4 target model 的普通 MoE forward。具体 checkpoint 可以覆盖配置类默认值；文中用 4 Rank / 8 Expert 的教学例子演示路由与通信。
 
 ## 一、DeepSeek-V4 复用的 MoE 实现
 
@@ -93,7 +93,7 @@ Router 权重形状是 `[n_routed_experts, hidden_size]`。源码：[MoEGate](ht
 
 标准 TopK 输出是 `topk_weights / topk_ids / router_logits`。[StandardTopKOutput](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/topk.py#L313-L335)
 
-DeepSeek-V4 还覆盖普通 TopK 的 grouped-routing 默认：构造时设置 `use_grouped_topk=False`，因此不能把 DeepSeek-V3 的 grouped top-k 规则直接照搬过来。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v2.py#L685-L727)
+DeepSeek-V4 还覆盖普通 TopK 的 grouped-routing 默认：构造时设置 `use_grouped_topk=False`，后续选择按这项 V4 配置执行。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v2.py#L685-L727)
 
 ### 固定默认下，target model 前 3 层走 HashTopK
 
@@ -119,7 +119,7 @@ router_logits → 对这些 expert 计算 routing weights
 
 前 3 层的 HashTopK 与后续 learned TopK 一旦生成 `topk_ids / topk_weights`，后面的 Expert Parallel runtime 就重新汇合。
 
-另外，默认 `num_experts_per_tok = 6` 描述的是 routed experts 数量；如果 shared-expert fusion 开启，内部 MoE layout 还可能额外包含 shared slot。看到内部宽度 7，不代表 routed Top-K 从 6 变成了 7。
+另外，默认 `num_experts_per_tok = 6` 描述的是 routed experts 数量；如果 shared-expert fusion 开启，内部 MoE layout 还可能额外包含 shared slot。因此内部宽度 7 可以由 6 个 Routed Slots 加 1 个 Shared Slot 组成。
 
 ## 三、从专家编号找到持有权重的 Rank
 
@@ -156,7 +156,7 @@ E5 weight=0.3
 
 一个 Token 选 K 个 routed experts，可以理解成 K 个 token-expert assignments。真实 backend 会做 packing / sorting / quantization / batched communication，不会逐 Token 发 Python 消息。
 
-当 EP group 中每个 Rank 都可能向其他 Rank 的 Expert 发送 Token 时，形成典型的多源到多目的数据交换，所以通常称为 All-to-All。但这里的 All-to-All 是**通信语义**，不是对具体 backend kernel 名的承诺。
+当 EP group 中每个 Rank 都可能向其他 Rank 的 Expert 发送 Token 时，形成典型的多源到多目的数据交换，所以通常称为 All-to-All。后端可以通过独立交换操作或融合算子完成这套通信语义。
 
 ## 四、Dispatch、专家计算与 Combine
 
@@ -180,7 +180,7 @@ final_hidden_states = self.dispatcher.combine(
 
 Dispatch 负责按目的 Rank / Expert 重排 Token；MoE Core 在 expert-local layout 上做 Expert compute；Combine 把结果送回 Token owner 并恢复顺序与 routing weight。
 
-继续前面的 Token A 示例：它以 0.7、0.3 的路由权重选择 E1、E5，两个专家分属 Rank0、Rank2。忽略 shared expert，教学表达式为 `y_A = 0.7 × E1(x_A) + 0.3 × E5(x_A)`。Combine 需要把这两份贡献合到 A 的输出行，而不是把两份结果当成两个新 Token 追加出去。具体 backend 可以提前或融合应用权重，这个式子描述最终语义。
+继续前面的 Token A 示例：它以 0.7、0.3 的路由权重选择 E1、E5，两个专家分属 Rank0、Rank2。忽略 shared expert，教学表达式为 `y_A = 0.7 × E1(x_A) + 0.3 × E5(x_A)`。Combine 需要把这两份贡献合到 A 的输出行，两份专家贡献仍对应同一个 Token。具体 backend 可以提前或融合应用权重，这个式子描述最终语义。
 
 Expert 的模型语义仍是：
 
@@ -285,7 +285,7 @@ if view.moe_a2a_backend in _A2A_EP_SPANNING_BACKENDS:
 
 > **这是固定版本里一组 A2A backend 的 runtime / topology 约束，不是 Expert Parallel 概念本身要求 EP 必须等于 TP。**
 
-不能写成 `SGLang 永远要求 EP = TP`。`none` backend 等路径使用不同的数据交换机制；官方 EP 文档也把 `none` 描述为 All-Reduce / All-Gather based dispatch。[官方 EP 文档](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/docs/docs/advanced_features/expert_parallelism.mdx)
+`none` backend 使用另一套数据交换机制与宽度规则；官方 EP 文档也把 `none` 描述为 All-Reduce / All-Gather based dispatch。[官方 EP 文档](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/docs/docs/advanced_features/expert_parallelism.mdx)
 
 这条限制背后其实是 Token ownership 与 Expert ownership 的映射问题：Attention 侧有 TP / attention TP / DP，MoE 侧有 EP。如果这些 group 不重合，进入 MoE 前后的 gather / scatter、Expert owner、combine destination 和 TP partial-output reduction 都会更复杂。
 

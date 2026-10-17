@@ -66,7 +66,7 @@ T_quant_matmul
 T_other_epilogue
 ~~~
 
-真正的 Linear 加速条件是：
+ Linear 加速条件是：
 
 ~~~text
 T_BF16_GEMM - T_INT8_GEMM
@@ -101,21 +101,11 @@ T_residual
 
 即使某个 QuantMatmul 快很多，也只能优化它自己占据的时间。
 
-这就是为什么“INT8 峰值 TOPS 更高”不能直接推出“TPOT 按同样比例下降”。
+端到端 TPOT 的变化，取决于这些成本在整轮执行中的占比。
 
-### W8A8 还不是每个 Linear 都必然单独启动 DynamicQuant
+### 复用上游已经量化的激活
 
-第一版文章里最容易过度概括的一句话是：
-
-~~~text
-每个 W8A8 Dynamic Linear
-=
-npu_dynamic_quant
-+
-npu_quant_matmul
-~~~
-
-当前 SGLang 实际还有一个重要 fast path：
+SGLang 允许 Linear 直接消费上游产生的 INT8 数据与 Scale：
 
 ~~~python
 if isinstance(x, tuple):
@@ -129,7 +119,7 @@ else:
 
 这个 Linear 不会再单独执行一次 <code>npu_dynamic_quant</code>。
 
-因此分析真实 Timeline 时必须先回答：
+对齐 Timeline 时，先确认输入形式：
 
 > 当前这个 Linear 的输入是 BF16 Tensor，还是已经量化好的 tuple？
 
@@ -137,7 +127,7 @@ else:
 
 ## 二、DynamicQuant 小 M：arch35 源码对照
 
-这一节读取的是 CANN **arch35** 分支，用来说明一种按行分配计算核的实现。本文尚未建立该分支与 910C 实际算子路径之间的对应关系，因此下面的 `coreNum` 公式不能直接当作 910C 的已确认行为。
+本节以 CANN **arch35** 分支演示按行分配计算核的实现；910C 对应的实际分支与 Tiling 尚待目标环境记录。下文公式均描述这个 arch35 对照分支。
 
 对照文件是：
 
@@ -195,7 +185,7 @@ min(Vector Core 数, M)
 | 4 | 4 |
 | 8 | 8 |
 
-这不是性能猜测，而是当前 arch35 Host Tiling 的直接逻辑。
+这是该 arch35 Host Tiling 的行分配规则。
 
 所以低并发 Decode 的问题可以更加准确地表述为：
 
@@ -213,57 +203,26 @@ min(Vector Core 数, M)
 
 把单行尾轴再拆给更多核。
 
-因此更严格的说法不是：
+普通 per-token DynamicQuant 按行并行；行足够长时，另有沿尾轴分给多核的路径。
 
-> M=1 永远只能用一个 Core。
-
-而是：
-
-> **普通可整行处理的 per-token DynamicQuant，row 并行度由 M 决定；只有 row 本身足够大时，CANN 才有额外的尾轴多核拆分路径。**
-
-DeepSeek-V4 的主要 W8A8 Dense K 值是 4096 或 1024，究竟在目标 CANN build 上走 full-load 还是特殊大-shape 路径，应读取实际 tiling log，而不是从模型 config 单独推断。
+DeepSeek-V4 的主要 W8A8 Dense K 值是 4096 或 1024，究竟在目标 CANN build 上走 full-load 还是特殊大-shape 路径，可以从目标 CANN build 的 Tiling Log 读取。
 
 ### 从分块规则到实际耗时还缺什么
 
-源码能证明：
+这条算子路径的工作包括：
 
 - 它是独立算子路径；
 - 它要处理每一行并生成 per-token scale；
 - Host Tiling 会根据 row 数分配 Vector Core；
 - 最终 <code>SetBlockDim(coreNum)</code> 发布实际 block 数。
 
-源码不能单独给出：
-
-~~~text
-M=1 → 8.3 μs
-M=2 → 8.8 μs
-...
-~~~
-
-真实设备时间还取决于 CANN build、Stream 状态、Kernel launch/enqueue、K、UB template、Graph replay 和前后算子融合。
-
-所以本文能够严格确认的是：
-
-> **在这里展示的 arch35 二维 per-token 路径中，小 M 会限制 row-level 并行度。910C 是否采用相同分工，仍需检查其实际分支与 tiling。**
-
-具体 launch + device duration 仍必须由 Ascend 910C profiler 给出。
+Tiling 描述怎样分配工作。实际耗时还受 CANN build、Stream、启动方式、K、UB template 与前后融合影响，因此下一步将这些分块信息与 Profiler 中的 Launch、Device Duration 对齐。
 
 ## 三、QuantMatmul 的小 M 分块与待测问题
 
-接下来检查小 M 的 MatMul 分块方式。
+接下来仍用 arch35 分支，观察 M 怎样进入 base block、SmallMN 与 StreamK 的分块计算。
 
-我们很容易写：
-
-~~~text
-M=1 → Tiling A
-M=2 → Tiling B
-M=4 → Tiling C
-M=8 → Tiling D
-~~~
-
-作为源码对照，公开的 QuantBatchMatmulV3 arch35 分支并不支持这种简单结论。它同样不能替代对 910C 实际分支的检查。
-
-### M 的确是 Tiling 的一等输入
+### M 怎样参与 Tiling 计算
 
 在 <code>base_block_calculator.cpp</code> 中，默认 base block 直接使用：
 
@@ -328,7 +287,7 @@ SmallMn
 
 ### 为什么现实中仍然可能看到 latency cliff
 
-没有硬编码 1/2/4/8 bucket，不代表性能曲线一定平滑。
+按 Shape 计算的 Tiling 也会在整数阈值附近发生切换。
 
 下面任何一个整数边界都可能造成离散变化：
 
@@ -349,7 +308,7 @@ M=7 → latency A
 M=8 → latency B
 ~~~
 
-但正确证据顺序应该是：
+将耗时变化对应到执行选择：
 
 > 先观测 cliff，再用 tiling dump 解释。
 
@@ -357,7 +316,7 @@ M=8 → latency B
 
 > 因为源码一定有 8 的 bucket，所以提前宣称这里必然 cliff。
 
-### 最值得做的实际实验
+### 对齐小 M 耗时与 Tiling 变化
 
 固定一组真实 DeepSeek-V4 Linear，例如：
 
@@ -379,7 +338,7 @@ used cores
 StreamK status
 ~~~
 
-这样才能真正得到：
+这样才能得到：
 
 > **Ascend 910C + 当前 CANN build + 当前 DeepSeek-V4 shape 的小 M QuantMatmul 曲线。**
 
@@ -431,9 +390,7 @@ moe_intermediate_size  = 2048
 ...
 ~~~
 
-因此分析 Dense W8A8 FRACTAL_NZ 时，不应该拿被排除的 <code>wo_a/wo_b</code> 当主要样本。
-
-真正典型的量化 Dense Linear 包括：
+Dense W8A8 的 NZ 实验可以选取实际参与量化的投影层，例如：
 
 | Layer | 逻辑 K | 逻辑 N |
 | --- | ---: | ---: |
@@ -471,9 +428,9 @@ aclnnQuantMatmulV5
 
 所以 FRACTAL_NZ 不只是存储格式不同，而是直接改变下游 QuantMatmul dispatch。
 
-### 但源码仍然不能告诉我们“快 X%”
+### 测量 NZ 与 ND 的耗时差异
 
-到这里能够证明的是：
+这些 shape 对应的格式选择过程是：
 
 ~~~text
 这些 DSV4 shape 能通过 NZ alignment
@@ -483,11 +440,7 @@ SGLang 会尝试 format cast
 成功后进入 WeightNz ACLNN 路径
 ~~~
 
-不能证明：`WeightNz 比 ND 快固定 X%`
-
-收益仍然受 M、K/N、CANN tiling、cache、HBM、Prefill/Decode 等影响。
-
-因此最干净的验证方式，是对同一个 checkpoint 做 A/B：
+NZ 与 ND 的耗时差异随 M、K/N、CANN Tiling 和缓存访问变化。使用同一 checkpoint 分别加载两种格式，可以直接比较：
 
 ~~~text
 A:
@@ -512,7 +465,7 @@ TTFT / TPOT
 throughput
 ~~~
 
-需要注意：这个环境变量影响 Weight load，因此 A/B 需要分别重启服务，不能在一个已加载模型进程里动态切换。
+这个环境变量在 Weight Load 阶段生效。A/B 分别重启服务，确保两轮加载了对应格式。
 
 ## 五、Expert Token 数与 Grouped MatMul
 
@@ -580,15 +533,9 @@ op-plugin / CANN 未收到显式 tuning hint 时，对应：`tuningConfig_ = 0`
 
 而不是 128、192 或其它预期每 Expert Token 数。
 
-所以不能写：
+CANN 的 128 阈值属于 expected-token hint 驱动的优化机制。当前 SGLang 普通 GroupedMatmul wrapper 没有显式传入该 hint，分析执行分支时要从实际 `tuningConfig_` 与 group list 出发。
 
-> SGLang DeepSeek-V4 在每 Expert 128 Token 时一定切换 tiling，因此延迟一定有 cliff。
-
-当前证据只支持：
-
-> **CANN 有一套使用 expected-token hint 的调优机制，其中 128 是重要阈值；当前 SGLang 普通 GroupedMatmul wrapper 没有显式传这个 hint。**
-
-### DeepSeek-V4 也不匹配源码里的 Fixed-Axis 特殊 shape
+### Fixed-Axis 分支与 DeepSeek-V4 的矩阵形状
 
 CANN 当前 Fixed-Axis A8W8 条件要求形如：
 
@@ -612,17 +559,11 @@ K = 2048
 N = 4096
 ~~~
 
-因此这套特定 Fixed-Axis 优化不能直接套到 DeepSeek-V4 W8A8 Expert 上。
-
-这是一个很具体的反例：
-
-> **即使都是 DeepSeek 系 MoE，也不能把针对另一代 K/N shape 调出来的 GMM 优化直接当成 DeepSeek-V4 的现状。**
+这组 K/N 与上面的 Fixed-Axis 条件不同，DeepSeek-V4 Expert 将按其实际形状进入相应分支。
 
 ### 用 Expert-local M_e 描述负载
 
-没有显式 tuning hint，不代表 Expert Token 分布不重要。
-
-实际 group list 已经决定了每个 Expert 真正计算多少 row，所以：
+实际 group list 直接给出各 Expert 的行数，进而决定：
 
 ~~~text
 总计算量
@@ -636,7 +577,7 @@ N = 4096
 
 但是“延迟曲线在哪些整数点发生 cliff”仍然是实验问题。
 
-严谨的 sweep 应该覆盖：
+Sweep 覆盖以下负载：
 
 ~~~text
 M_e =
@@ -659,7 +600,7 @@ expert_tokens histogram
 
 ## 六、用四组实验测量实际成本
 
-经过这轮源码核验，第一版文章里的 M sweep 可以升级成一套真正可判因果的实验矩阵。
+按前面的执行分支，可以将 M Sweep 分成四组实验，各自测量一项成本。
 
 ### 实验 A：Standalone DynamicQuant 的小 M 成本
 
@@ -718,7 +659,7 @@ used cores
 kernel duration
 ~~~
 
-目标不是寻找预设 1/2/4/8 bucket，而是从真实 dump 中发现哪些 M 真正改变了 tiling 结构。
+把耗时曲线与实际 dump 对齐，找出改变 Tiling 结构的 M。
 
 ### 实验 C：FRACTAL_NZ A/B
 
@@ -812,20 +753,20 @@ output throughput gate = 3100 token/s
 
 > 这一整套 W8A8 系统要达到一个绝对性能门槛。
 
-它不是严格的 BF16 vs W8A8 控制变量实验，因此不能从这个 CI 门槛推导“W8A8 快 X%”。
+这项 CI 给出 W8A8 路径的验收门槛；BF16 与 W8A8 的收益比较则使用同条件 A/B。
 
 ## 源码结论与待测问题
 
 | 问题 | 源码支持的结论 |
 | --- | --- |
 | DynamicQuant 小 M | arch35 对照分支使用 <code>coreNum=min(vectorCoreNum,M)</code>；本文未确认该公式适用于 910C 的实际路径 |
-| DynamicQuant μs | **源码不能给出**，必须 profiler |
+| DynamicQuant μs | 用目标环境的 Profiler 测量 Launch 与 Device Duration |
 | Quantmatmul M=1/2/4/8 | M 会进入 baseM / block / SmallMN / StreamK 计算，但没有发现固定 1/2/4/8 查表分支 |
 | FRACTAL_NZ 对齐 | DSV4 主要 W8A8 Dense shape <code>wq_a/wkv/wq_b</code> 天然满足当前 INT8 NZ alignment |
-| FRACTAL_NZ 收益百分比 | **源码不能给出**，必须 NZ vs ND A/B |
+| FRACTAL_NZ 收益百分比 | 同 checkpoint、同形状下比较 NZ 与 ND |
 | Expert <code>M_e</code> | actual group_list 决定真实 Expert workload；CANN 还提供 expected-token tuning 机制 |
 | 128 token threshold | CANN 源码中真实存在，但属于 tuning-config 驱动的优化条件 |
-| 当前 SGLang 是否必在 128 cliff | **不能这样说**：当前 wrapper 没有显式传 tuning_config |
+| SGLang 中的 128 阈值 | 当前 wrapper 未显式传 `tuning_config`，实际切换由对应分支决定 |
 | DSV4 是否命中 Fixed-Axis 特殊优化 | 当前 W13/W2 K/N 不匹配该源码分支的特定 shape |
 
 因此，“DeepSeek-V4 W8A8 为什么不一定更快”最准确的答案不是一句：`因为 INT8 有量化开销`

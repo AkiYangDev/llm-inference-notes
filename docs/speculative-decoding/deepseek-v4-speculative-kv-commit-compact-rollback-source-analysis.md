@@ -119,7 +119,7 @@ Target Model
 
 如果最终 accepted path 是：`root → B → E`
 
-不能简单地“保留 candidate buffer 前 3 行”，因为 tree row 未必连续。
+Tree 的接受行可能不连续，因此按 `accept_index` 收集选中的行。
 
 `accept_index` 解决的是：
 
@@ -131,7 +131,7 @@ accepted path
 
 而不是：`physical KV address`
 
-真正的链路是：
+链路是：
 
 ~~~text
 accept_index
@@ -158,7 +158,7 @@ req_to_token
 destination physical KV slot
 ~~~
 
-所以整篇最重要的第一条规则是：
+索引在下面几层之间转换：
 
 > **不要把 `accept_index`、logical token position、`out_cache_loc` 和 physical KV slot 当成同一个索引空间。**
 
@@ -319,23 +319,19 @@ predict[bonus_node_indices] = target_predict[...]
 
 所以 simulated path 没有另外定义一套语义。
 
-### NPU 分支的证据边界
+### NPU Sampling 的输入与结果消费
 
 非 Greedy NPU path 会从：`sgl_kernel_npu.sample`
 
 导入 `tree_speculative_sampling_target_only` / `chain_speculative_sampling_triton`。
 
-固定 SGLang 仓库中可以直接审计它的调用 contract 与 downstream invariants，但 `sgl_kernel_npu` 的具体 kernel 实现在这一仓库之外。
-
-因此本文不做超出证据范围的表述，例如：`“NPU 内核内部一定逐行执行了与 CUDA 完全相同的语句”`
-
-能确认的是：
+这条 NPU 分支的结果按以下方式交给后续模块：
 
 - SGLang 给 NPU kernel 传入同样的 `predict / accept_index / accept_token_num` contract；
 - 随后的 TP broadcast 同步这三项；
 - downstream `fill_bonus_tokens` 与 KV compaction 仍按“有效 `accept_index` 前缀长度 = `accept_lens`”消费它们。
 
-这足以确定 SGLang 层面对 NPU sampling output 的契约。
+设备核位于 `sgl_kernel_npu`，SGLang 按上述输入输出关系衔接接受、广播与缓存整理。
 
 固定源码：
 
@@ -379,7 +375,7 @@ move_accept_tokens_to_target_kvcache(
 
 本轮输出追加 `[A, C, X]`，KV 则提交 `[R, A, C]`。两者长度都是 `accept_lens=3`，Token 身份相差一位。`accept_index` 选中的是 Verify 行；用它取 `predict` 得到输出，用它搬缓存得到这些行的输入 KV。
 
-因此，`accept_lens - 1` 是参数计数的转换；它并不说明 X 的 KV 已经产生。X 还未经过 Target forward，不能在本轮提交一份尚不存在的 KV。
+因此，`accept_lens - 1` 先转换为正确 Draft 数，函数再补上旧 Root 对应的输入 KV。新输出 X 留到下一轮 Forward 才生成 KV。
 
 ### `move_kv_cache()` 的参数方向已经从实现确认
 
@@ -500,7 +496,7 @@ logits_output.hidden_states =
    tree-node predict/hidden layout → contiguous chain layout
 ~~~
 
-这三件事不能统称成一个“KV compact”。
+下面分别沿这三种数据整理操作追踪。
 
 ### 当前 DeepSeek-V4 + DSpark 为什么不走这套 Tree Compact
 
@@ -511,7 +507,7 @@ speculative_num_steps = 1
 speculative_eagle_topk = 1
 ~~~
 
-而真正 candidate window 由 `gamma` 控制：`verify_window = gamma + 1`
+而 candidate window 由 `gamma` 控制：`verify_window = gamma + 1`
 
 `dspark_worker_v2.py` 也明确写着：
 
@@ -525,9 +521,9 @@ would need the accept-index mapping
 
 因此：
 
-> **通用 EAGLE Spec V2 需要 `accept_index` 解决 tree → chain；当前 DeepSeek-V4 DSpark 本质上是 linear chain，accepted prefix 天然连续。**
+> **通用 EAGLE Spec V2 需要 `accept_index` 解决 tree → chain；当前 DeepSeek-V4 DSpark 是 linear chain，accepted prefix 天然连续。**
 
-不能把 EAGLE tree compaction 机械套到 DSpark 当前实现上。
+DSpark 按连续前缀提交，EAGLE Tree 则额外按接受索引收集非连续行。
 
 ## 四、被拒绝候选与预留空间的生命周期
 
@@ -618,7 +614,7 @@ physical slots 仍可能保持 allocated
 
 ### Overshoot 的实际释放时机
 
-严格看当前 lifecycle，至少有下面几类明确 free 点。
+当前生命周期在以下位置回收预留空间：
 
 | 生命周期点 | 实际动作 |
 | --- | --- |
@@ -637,15 +633,15 @@ physical slots 仍可能保持 allocated
 
 更准确的说法是：
 
-> **普通 iteration 内 reject 不触发逐候选 free；真正 reclaim 由 request/session 生命周期的 ownership 转换触发。**
+> **普通 iteration 内 reject 不触发逐候选 free； reclaim 由 request/session 生命周期的 ownership 转换触发。**
 
-### `page_size > 1` 时为什么还不能从任意 token 边界 free
+### 页分配下的回收边界
 
 Paged allocator 释放的是整页。
 
 因此：`committed boundary`
 
-如果落在一个 page 中间，不能直接把包含 live committed token 的整页释放。
+提交边界落在页中间时，包含活跃 Token 的整页继续保留，回收范围从可释放的整页开始。
 
 `_release_overallocated_kv_indices()` 和 StreamingSession 的 `_free_kv_aligned()` 都会把 free start 向上对齐：`ceil_align(boundary, page_size)`
 
@@ -691,7 +687,7 @@ C128 compressor state
 | pre-A5 / EXPLICIT | 跟随 SWA physical page/state index，纳入 SWA state buffers |
 | A5 / CYCLE | 使用 `req_pool_idx` 对应的独立环形状态，通过 `get_c4_state_buf_infos()` 单独注册 |
 
-C128 state 使用请求与绝对位置管理的 ring。讨论 rollback 时，既要区分 compressed KV 与 compressor state，也要确认架构分支。不能把 pre-A5 的 C4 页绑定规则推广到全部 Ascend NPU。
+C128 state 使用请求与绝对位置管理的 ring。讨论 rollback 时，既要区分 compressed KV 与 compressor state，也要确认架构分支。pre-A5 的 C4 按页绑定，A5/CYCLE 则按其请求 Ring 管理。
 
 ### `clear_unaccepted_c128_draft_states()` 清的是 state，不是 C128 KV pages
 
@@ -797,7 +793,7 @@ page refcount
 
 而不是：`accept_lens 直接决定 free 哪几页`
 
-### `free(free_index)` 为什么不能顺便把 C128 全部 free
+### SWA 释放与 C128 引用计数的关系
 
 DSV4 allocator 自己把 free API 分成两种：
 
@@ -848,34 +844,13 @@ if ONLINE_C128:
     return
 ~~~
 
-这种 cleanup bypass 不能被解释成“Ascend 也可能这样”。
+这条 cleanup bypass 属于 CUDA 的 ONLINE_C128 路径；本文固定版本的 Ascend NPU 使用另一条路径。
 
-在本文固定版本里，Ascend NPU 不走 ONLINE_C128。
+### EAGLE Cleanup 与 DSpark 提交路径
 
-### 最后一个必须保留的证据边界：EAGLE 有显式 C128 rejected-state cleanup，DSpark 不能直接照搬这个结论
+`clear_unaccepted_c128_draft_states(...)` 的显式调用位于 EAGLE 共享 Verify 流程 `run_eagle_verify()`，清理未接受的 C128 Compressor State。
 
-当前仓库中：
-
-~~~python
-clear_unaccepted_c128_draft_states(...)
-~~~
-
-的显式 verify 调用点位于共享 EAGLE verify 流程：`run_eagle_verify()`
-
-该固定版本的 DSpark Worker / Verify 路径中未找到同名 cleanup 的直接调用。
-
-因此不能写：
-
-~~~text
-“所有 DeepSeek-V4 speculative path
-都会在 Accept 后调用 clear_unaccepted_c128_draft_states”
-~~~
-
-更安全、也更准确的是：
-
-> **EAGLE shared verify path 明确对 rejected C128 compressor state 做 cleanup；DSpark 当前是另一套 chain verify / commit pipeline，必须按自己的 state-write/commit 逻辑审计，不能仅凭共享 pool 存在这个 helper 就推断它一定被调用。**
-
-DSpark 的 `commit_lens` gate、Target hidden → Draft state injection 解决的是另一类“只提交 accepted state”的问题，也不能和 C128 compressor-state sanitation 混为一谈。
+同版本 DSpark Worker / Verify 路径未找到同名直接调用。DSpark 通过 `commit_lens` 和 Target Hidden 注入控制提交范围；分析它的 Compressor State 时，沿自身写入与提交路径继续追踪。
 
 固定源码：
 
@@ -943,7 +918,7 @@ flowchart TD
 
 一次 speculative iteration 结束后，所有子系统必须重新收敛到同一个 committed sequence boundary。
 
-### Debug 时最值得检查的几个 invariant
+### Debug 时核对索引、长度与页归属
 
 以后排查 Spec V2 KV bug，可以先检查下面这组关系。
 
@@ -1001,7 +976,7 @@ immediate physical free
 cleanup 是为了防 stale read，还是为了把 physical page 还给 allocator？
 ~~~
 
-只要这三问没有先回答清楚，就不应该笼统地说“清 KV”。
+明确这三项后，就能定位要处理的是缓存行、预留页还是压缩器状态。
 
 ## 七、源码入口与计数对照
 

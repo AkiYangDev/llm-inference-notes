@@ -1,6 +1,6 @@
 # 投机解码 Accept：从 Verify 行到最终输出路径
 
-Target Verify 为候选位置算出 logits 后，系统还要决定哪些候选可以成为正式输出。Greedy 路径沿 Target 的预测寻找匹配前缀；Sampling 路径则需要遵守各自的接受规则，不能只比较 Token 是否相等。
+Target Verify 为候选位置算出 logits 后，系统还要决定哪些候选可以成为正式输出。Greedy 路径沿 Target 的预测寻找匹配前缀；Sampling 路径则按各自的概率与接受规则推进。
 
 本文用输入 R、A、C 对应输出 A、C、X 的小例子追踪接受结果：`accept_index` 保存的是 Verify 行索引，输出中的新 bonus X 与这些行已经计算出的 KV 相差一位。先讲清这个映射，再展开树遍历、不同 Sampling 算法和 DSpark 的链式接受。
 
@@ -30,7 +30,7 @@ Target(C) = X
 
 其中 `A、C` 是 Draft 提出且被 Target 接受的候选，`X` 是 Target 在最后一个 accepted input node `C` 上直接产生的新 token，也就是这一轮的 terminal bonus。
 
-这里首先要和 Draft 阶段的 path score 分开。EAGLE 在 rollout 时会用累计 Draft probability 给候选未来排序，从有限 token budget 中决定“哪些 node 值得进入 Target Verify”；但进入 Verify 以后，最终路径不是再做一次 `argmax(path_score)`。真正决定历史的是 **Target 的 prediction / probability、Tree topology，以及当前 sampling policy**。
+这里首先要和 Draft 阶段的 path score 分开。EAGLE 在 rollout 时会用累计 Draft probability 给候选未来排序，从有限 token budget 中决定“哪些 node 值得进入 Target Verify”；进入 Verify 后，**Target 的 prediction / probability、Tree topology 与当前 sampling policy** 共同决定接受路径。
 
 因此可以把两层职责写得很清楚：
 
@@ -39,11 +39,11 @@ Target(C) = X
 | Draft search | 哪些未来值得花 Verify budget | Draft score / candidate pruning |
 | Accept decision | 哪些未来真的成为历史 | Target result + topology + sampling rule |
 
-这一区分很重要。否则很容易把“Draft 认为最可能”误写成“Target 最后就会选它”。
+候选排序分配验证预算，最终接受则按 Target 结果与当前采样规则决定。
 
 ## 二、接受前先把父节点关系变成可遍历结构
 
-标题里有 Parent Tree Recovery，但源码里最值得纠正的一点是：**Accept kernel 并不会在 Verify 结束后拿着 `parent_list` 从叶子一路回溯到 root。**
+父节点关系在 Tree Build 阶段就转换为可遍历结构，Accept Kernel 随后按这个结构从 Root 寻找匹配 Child。
 
 Draft rollout 结束后，`parent_list + selected_index` 先交给 Tree Builder。Builder 把不方便设备端逐层搜索的 parent metadata 转换成三组直接可遍历的数据：
 
@@ -102,7 +102,7 @@ child
 
 > **先把 Draft search 的 parent metadata 恢复成面向 Verify / Accept 的 forward-traversal topology，然后 Target 从 root 开始一层层选择真实路径。**
 
-这也解释了为什么前文中的 `parent_list`、`selected_index` 与本篇中的 `accept_index` 不能混为一个索引空间。前两者属于“树怎样被重建”，后者属于“树重建后，哪些 Verify row 最终属于 accepted chain”。
+`parent_list` 与 `selected_index` 用于重建树，`accept_index` 再从 Verify 行中选出接受路径。这三组索引按各自的输入、输出空间衔接。
 
 ## 三、Greedy Accept 的行索引与输出
 
@@ -167,7 +167,7 @@ predict[accept_index] == [A, C, X]
 
 也就是“最终线性输出由哪些 Verify input row 的 prediction 产生”。
 
-这一点会直接解释 `accept_lens` 的 `+1`。`VerifyTreeGreedy` 内部的 `accept_token_num` 只统计真正匹配成功的 Draft nodes；`eagle_sample()` 返回前再执行语义上的：`accept_lens = num_correct_drafts + 1`
+这一点会直接解释 `accept_lens` 的 `+1`。`VerifyTreeGreedy` 内部的 `accept_token_num` 只统计匹配成功的 Draft nodes；`eagle_sample()` 返回前再执行语义上的：`accept_lens = num_correct_drafts + 1`
 
 例子里：
 
@@ -180,7 +180,7 @@ accept_lens        = 3    # A, C, X
 
 ### 最容易写错的一格：输出 `[A, C, X]`，本轮新物化 KV 的却是 `[R, A, C]`
 
-这也是理解 Accept 与 KV Commit 时最值得画出来的一张图：
+将本轮输入与输出并排，可以看到：
 
 ~~~text
 Verify input row      prediction / output      本轮是否已有 KV
@@ -194,7 +194,7 @@ C                     X                        C 的 KV 已物化
 下一轮 root：          X
 ~~~
 
-也就是说，terminal bonus `X` 是本轮 Target logits 的输出，但还没有作为模型输入跑过，因此 **本轮并不存在 `X` 的 KV**。它会在下一轮成为 root，再被真正送入模型并物化 KV。
+也就是说，terminal bonus `X` 是本轮 Target logits 的输出，但还没有作为模型输入跑过，因此 **本轮并不存在 `X` 的 KV**。它会在下一轮成为 root，再被送入模型并物化 KV。
 
 这也是为什么同一个 `accept_index=[row(R), row(A), row(C)]` 可以同时服务两个看似“错一位”的世界：
 
@@ -284,7 +284,7 @@ C: 0.2
 
 归一化后再采，所以刚刚被判定“Draft 给得过多”的 `A` 不会从 residual branch 又被原样抽回来。
 
-这也是为什么开启 classic rejection sampling 后，SGLang 会检查 `draft_probs` 是否存在、词表维度是否与 Target 一致：没有真正的 proposal `q`，就无法执行 `p/q` 语义。
+这也是为什么开启 classic rejection sampling 后，SGLang 会检查 `draft_probs` 是否存在、词表维度是否与 Target 一致：没有 proposal `q`，就无法执行 `p/q` 语义。
 
 ### Target-only Tree Sampling：沿 sibling 累加 Target mass，但不是 classic `p/q` rejection
 
@@ -317,16 +317,16 @@ draft_probs = torch.zeros_like(target_probs)
 
 所以阅读当前实现时最好直接把四类路径分开：
 
-| Accept path | Topology | 核心判定 | 是否真正使用 Draft `q` |
+| Accept path | Topology | 核心判定 | 是否使用 Draft `q` |
 | --- | --- | --- | --- |
 | EAGLE Greedy | Tree | candidate == Target argmax | 否 |
 | Target-only Tree Sampling | Tree | Target mass + threshold | 否，当前不是 classic `p/q` |
 | Classic Rejection Sampling | Chain | `u × q(x) < p(x)` | 是 |
 | DSpark Greedy | Chain | 最长 Target-match prefix | 否 |
 
-这里的工程意义不是给算法贴标签，而是避免把正确性结论串错：**classic rejection sampling 的 distribution-correction 推导不能直接拿来证明 Target-only Tree sampler 的行为。**
+这几条路径使用不同的判定规则。Classic Rejection Sampling 的分布校正来自 `p/q`；Target-only Tree Sampling 则要沿其 Target Mass 与 Threshold 规则分析。
 
-对于 Ascend，还要再保留一层证据边界：SGLang NPU 分支会从 `sgl_kernel_npu.sample` 导入同名 tree / chain sampling op；本文确认的是 SGLang 的分流、输入输出契约和上层状态语义，不声称已经逐行审计外部 NPU kernel 内部实现。
+Ascend NPU 分支从 `sgl_kernel_npu.sample` 导入 Tree / Chain Sampling Op。本文沿 SGLang 的分流说明它们接收什么、返回什么以及上层怎样使用结果；设备核的算法细节位于该外部实现中。
 
 ## 五、DSpark 链式接受的 correct_len
 
@@ -387,9 +387,9 @@ accepted Draft tokens
 one terminal Target token
 ~~~
 
-但变量所属层次不同，不能机械互换名字。
+这些变量分别描述不同阶段，映射时按其计数单位转换。
 
-DSpark 还会用 `BuildOutTokens` 构造固定宽度输出 buffer：先放 Draft tokens，再把 `bonus` scatter 到 `correct_len` 位置。真正消费时由 `commit_lens` 告诉下游哪些位置有效：
+DSpark 还会用 `BuildOutTokens` 构造固定宽度输出 buffer：先放 Draft tokens，再把 `bonus` scatter 到 `correct_len` 位置。消费时由 `commit_lens` 告诉下游哪些位置有效：
 
 [`dspark_verify_window.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/ops/speculative/dspark/dspark_verify_window.py)
 
@@ -446,7 +446,7 @@ flowchart TD
     G --> H
 ~~~
 
-因此 Debug 时，比记住某个函数名更有用的是检查下面这些 invariant。
+Debug 时，可用以下关系检查接受结果：
 
 对于 EAGLE Tree：
 

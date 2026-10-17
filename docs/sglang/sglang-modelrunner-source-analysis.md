@@ -39,7 +39,7 @@ out = self.model_runner.forward(
 | 字段 | 执行层拿它解决什么问题 |
 | --- | --- |
 | `forward_mode` | 这一轮是 EXTEND / Prefill、DECODE、MIXED 还是其他模式 |
-| `input_ids` | 本轮真正参与模型计算的 token |
+| `input_ids` | 本轮参与模型计算的 token |
 | `positions` | 每个新增 token 在自己序列中的逻辑位置 |
 | `seq_lens` | batch 中每条序列当前推进到多长 |
 | `req_pool_indices` | 每条请求在 request-token 映射池中的位置 |
@@ -103,11 +103,9 @@ positions =
 positions.shape = [9]
 ```
 
-普通非投机 Extend 中，本轮新增 token 还会对应一组 `out_cache_loc`。对于 DeepSeek-V4 的 NPU 路径，`ForwardBatch` 还可以额外携带 `out_cache_loc_dsv4`，用于专用缓存池的位置集合；它不能简单理解成“只有一张普通 KV 页表”。[源码：DSV4 ForwardBatch 字段](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L487-L505)
+普通非投机 Extend 中，本轮新增 token 还会对应一组 `out_cache_loc`。对于 DeepSeek-V4 的 NPU 路径，`ForwardBatch` 还可以额外携带 `out_cache_loc_dsv4`，用于专用缓存池的位置集合；该集合分别传递 DSV4 专用缓存的位置。[源码：DSV4 ForwardBatch 字段](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L487-L505)
 
-这里最重要的结论是：
-
-> **token 被打包到同一个一维 Tensor，不代表请求上下文被混在一起。**
+Token 可以打包到同一个一维 Tensor，请求映射、位置和 Attention Metadata 继续保留各行所属的上下文。
 
 R1 和 R2 的序列边界仍由长度、请求索引和 Attention metadata 保留。后续 Attention 不会因为它们在 `input_ids` 中相邻，就让 R1 读取 R2 的历史。
 
@@ -139,9 +137,9 @@ flowchart TD
 
 > “ModelRunner runs the forward passes of the models.”
 
-但它并不是一个薄薄的 `model.forward()` 包装器。模型、Attention Backend、KV Cache 池、Graph Runner、Eager Runner、Sampler、并行状态和部分 MoE 运行时能力都在这一层附近汇合。
+模型、Attention Backend、KV Cache 池、Graph Runner、Eager Runner、Sampler、并行状态和部分 MoE 运行时能力都在这一层附近汇合。
 
-真正入口是 [`ModelRunner.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1703-L1799)。它完成 tracing、expert recorder 等外围处理后，会进入：
+入口是 [`ModelRunner.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1703-L1799)。它完成 tracing、expert recorder 等外围处理后，会进入：
 
 ```python
 output = self._forward_raw(
@@ -170,7 +168,7 @@ flowchart TD
     PG -->|否| E[EagerRunner.execute]
 ```
 
-Decode Graph 的判断并不是“只要是 Decode 就一定走图”。当前 batch 还必须满足 runner 的图执行条件。只有 `can_run_graph` 为真时，才调用：
+Decode Batch 满足 Runner 的形状与模式条件后才能走图。只有 `can_run_graph` 为真时，才调用：
 
 ```python
 self.decode_cuda_graph_runner.execute(...)
@@ -180,7 +178,7 @@ self.decode_cuda_graph_runner.execute(...)
 
 Prefill Graph 同样是条件路径。只有 Extend family、Prefill graph runner 已存在、当前 batch 满足 graph 条件，并通过 Context Parallel 等额外检查时，才会调用 graph runner；否则仍然进入 EagerRunner。
 
-这里需要单独说明源码里的命名。当前类和字段中大量保留 `cuda_graph` 名称，这是 SGLang 的框架实现接口名。本文用“Graph replay / graph path”描述这类路径，只表示框架选择了已捕获的执行结构；不能由字段名推导“Ascend NPU 实际执行的是 CUDA”。
+这里需要单独说明源码里的命名。当前类和字段中大量保留 `cuda_graph` 名称，这是 SGLang 的框架实现接口名。Ascend 通过这套接口选择 NPU 上已捕获的执行结构，文中统一称为 Graph Replay。
 
 如果进入 Eager，ModelRunner 调用：
 
@@ -191,13 +189,13 @@ ret = self.eager_runner.execute(
 )
 ```
 
-“Eager”也不代表什么准备都不做。默认情况下，`EagerRunner.load_batch()` 会把 live batch 填入 eager 的静态 buffer registry，再按实际 batch size / token 数切出当前视图；设置 `SGLANG_EAGER_INPUT_NO_COPY` 时才绕过这类复制。[源码：`EagerRunner.load_batch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L183-L211)
+Eager 路径同样需要准备输入。默认情况下，`EagerRunner.load_batch()` 会把 live batch 填入 eager 的静态 buffer registry，再按实际 batch size / token 数切出当前视图；设置 `SGLANG_EAGER_INPUT_NO_COPY` 时才绕过这类复制。[源码：`EagerRunner.load_batch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L183-L211)
 
 所以更准确的理解是：
 
 > **Graph path 复用已经捕获好的执行结构；Eager path 则在这一轮现场运行模型 forward。**
 
-这篇文章选择 Eager 作为主线，不是因为线上一定只跑 Eager，而是因为它最适合观察 `ForwardBatch` 如何一步步进入真实模型代码。
+下面沿 Eager 路径观察 `ForwardBatch` 怎样进入模型代码，再与 Graph Replay 的准备过程对照。
 
 ## 三、Prefill 与 Decode 怎样进入同一个模型
 
@@ -213,7 +211,7 @@ if mode.is_extend(include_draft_extend_v2=True):
 
 固定版本见 [`EagerRunner.execute()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L229)。
 
-这里还有一个很容易在概念图里画错的分支：`MIXED` batch 在非 NPU、且没有 CP 的条件下可以被按 EXTEND 形态执行；NPU 会保留 MIXED，因为后端存在专用处理。因此不能把“Mixed 永远等价于 Extend”写成通用规则。
+`MIXED` 的处理还随平台变化：`MIXED` batch 在非 NPU、且没有 CP 的条件下可以被按 EXTEND 形态执行；NPU 会保留 MIXED，因为后端存在专用处理。这两种分派分别对应上述平台条件。
 
 先看本文普通 Decode 主线。EagerRunner 会加载当前 batch，在需要时让模型和 Attention Backend 准备本轮 metadata，随后调用：
 
@@ -278,7 +276,7 @@ DeepseekV4ForCausalLM.forward(
 )
 ```
 
-真正改变的是本轮执行状态：
+改变的是本轮执行状态：
 
 | | Prefill / Extend | Decode |
 | --- | --- | --- |
@@ -289,7 +287,7 @@ DeepseekV4ForCausalLM.forward(
 | Attention metadata | Prefill 形态 | Decode 形态 |
 | 模型入口 | 同一个 `forward()` | 同一个 `forward()` |
 
-因此 Prefill / Decode 的差异并不主要由“换一个模型函数”表达，而是由 `ForwardBatch`、Attention metadata 和缓存状态共同表达。
+同一个模型入口根据 `ForwardBatch`、Attention Metadata 与缓存状态处理 Prefill / Decode。
 
 这也是 `ForwardBatch` 为什么会继续一路传入模型层：只有 hidden states 本身，无法告诉 Attention“这些 token 属于哪条请求、当前序列多长、历史 KV 在哪里、本轮新缓存应该写到哪里”。
 
@@ -301,7 +299,7 @@ DeepseekV4ForCausalLM.forward(
 
 [`DeepseekV4ForCausalLM.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L5081-L5147)
 
-它很快调用真正的模型主体：
+它很快调用模型主体：
 
 ```python
 hidden_states = self.model.forward(
@@ -321,7 +319,7 @@ hidden_states = self.model.forward(
 hidden_states = self.embed_tokens(input_ids)
 ```
 
-SGLang 这里使用的是 packed token layout，不是为了教学方便而恢复成 `[B,T,H]`。如果本轮一共处理 `T` 个 token，那么概念 shape 是：
+SGLang 使用 Packed Token Layout，将本轮输入行连续打包。如果本轮一共处理 `T` 个 token，那么概念 shape 是：
 
 ```text
 input_ids      [T]
@@ -474,7 +472,7 @@ output = self.logits_processor(
 
 源码见 [DeepSeek-V4 logits 入口](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L5135-L5147)。
 
-`LogitsProcessor.forward()` 会先从 `ForwardBatch` 构造 `LogitsMetadata`，然后通过 `_get_pruned_states()` 选择真正需要进入 LM Head 的 hidden rows。[源码：`LogitsProcessor.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L495-L597)
+`LogitsProcessor.forward()` 会先从 `ForwardBatch` 构造 `LogitsMetadata`，然后通过 `_get_pruned_states()` 选择需要进入 LM Head 的 hidden rows。[源码：`LogitsProcessor.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L495-L597)
 
 对于**普通 Prefill 且没有请求输入 logprob**的主线，代码计算：
 
@@ -551,7 +549,7 @@ flowchart TD
     S --> O[R1 -> T1 · R2 -> T2]
 ```
 
-如果请求了 prompt input logprob，LogitsProcessor 会保留更多位置并进入另一条 pruning / logprob 路径，因此不能把“Prefill 永远只做两行 LM Head”当成无条件规则。本文的 9 → 2 只对应普通生成、无输入 logprob 的代表场景。
+本文无输入 Logprob 的普通生成场景将 9 行裁成 2 行。请求 Prompt Input Logprob 时，LogitsProcessor 保留需要评分的其他位置，进入对应的 pruning / logprob 路径。
 
 接下来还有最后一个边界：logits 仍然不是 token。
 

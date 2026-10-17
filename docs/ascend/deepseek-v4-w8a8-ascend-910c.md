@@ -22,9 +22,9 @@
 
 ## 一、从量化描述确认哪些层使用 W8A8
 
-SGLang 的 ModelSlim 并不是看到模型名里有 `w8a8`，就把所有 Linear 一刀切成同一种量化实现。
+SGLang 的 ModelSlim 根据逐层量化描述选择 Linear 与 MoE 实现。
 
-真正决定某一层如何运行的是模型目录中的：`quant_model_description.json`
+决定某一层如何运行的是模型目录中的：`quant_model_description.json`
 
 SGLang 启动时会在 `ModelConfig._find_quant_modelslim_config()` 中寻找这个文件，并将量化方法解析为 `modelslim`。随后 `ModelSlimConfig` 再根据每个模块的权重描述选择具体 Scheme。
 
@@ -48,13 +48,7 @@ NPUW8A8Int8DynamicLinearMethod
 UnquantizedLinearMethod
 ```
 
-所以判断某个 Linear 是否真的走 INT8，最可靠的问题不是：
-
-> 模型名字是不是 W8A8？
-
-而是：
-
-> `quant_model_description.json` 里这个模块的 `.weight` 被标成了什么 Scheme？
+判断某个 Linear 的执行路径时，读取该层的 Scheme，再对应到 SGLang 选择的 Quantization Method。
 
 ### W8A8 配方覆盖的模型层
 
@@ -112,9 +106,7 @@ include:
 
 并排除：`*gate`
 
-因此对官方 DeepSeek-V4-Flash W8A8 配方，最准确的心智模型不是：`所有 Linear → W8A8`
-
-而是：
+官方 DeepSeek-V4-Flash W8A8 配方按层选择量化与保留精度：
 
 ```text
 Attention / FFN 中命中的 Linear
@@ -131,11 +123,7 @@ FFN gate
 
 公开的 DeepSeek-V4-Flash-0731 W8A8 部署资料也明确标注其 `quant_model_description.json` 为 `W8A8_DYNAMIC`。
 
-但这里仍然要保留一个工程边界：
-
-> **具体拿到某一个 checkpoint 时，最终事实仍以它自己的 `quant_model_description.json` 为准。**
-
-同名模型可以被不同量化流程重新导出，不能只靠目录名推断每一层的 Scheme。
+具体 checkpoint 的逐层 Scheme 记录在它自己的 `quant_model_description.json` 中。同名模型经过不同流程重新导出后，这份描述也会变化，加载时应读取随权重提供的文件。
 
 ### Expert 又落到哪里？
 
@@ -577,7 +565,7 @@ BF16 fallback：
 Expert 前补做一次动态量化
 ```
 
-这也是为什么 Profile 时不能只看到“模型是 W8A8”就假设通信线上一定是 INT8；要同时确认 DeepEP dispatcher dtype。
+因此，Profile 时要将模型的量化格式与 DeepEP dispatcher dtype 对照：前者描述 GEMM，后者决定当前通信路径搬运的数据类型。
 
 ## 四、从 PyTorch 接口进入 ACLNN 与 CANN
 
@@ -656,7 +644,7 @@ ACL_FORMAT_FRACTAL_NZ_C0_16
 
 如果 Weight 是普通 ND，则检查：`aclnnQuantMatmulV5`
 
-### 因此 DeepSeek-V4 W8A8 的典型路径不是 V5，而是 WeightNz
+### NZ 权重进入 WeightNz 路径
 
 对 SGLang 正常成功完成 FRACTAL_NZ format cast 的 INT8 Weight：`x2 format = FRACTAL_NZ`
 
@@ -687,11 +675,7 @@ op-plugin
 aclnnQuantMatmulV5
 ```
 
-所以不能把：`npu_quant_matmul == aclnnQuantMatmulWeightNz`
-
-写成无条件恒等式。
-
-更准确的是：
+`npu_quant_matmul` 根据 Weight 格式进入不同的 ACLNN 分支：
 
 ```text
 FRACTAL_NZ Weight
@@ -804,13 +788,9 @@ CANN 当前算子列表也将 `quant_batch_matmul_v3` 标记为：`AI Core`
 
 ### Tiling Key 与 Kernel Variant 的选择条件
 
-到这里很容易继续写：
+算子入口确定以后，具体 Tiling Key 与 Kernel Variant 由本次输入和运行环境共同选择。
 
-> “DeepSeek-V4 Decode 一定进入 XXX TilingKey，然后执行 XXX Kernel。”
-
-当前公开源码还不足以支持这个结论。
-
-因为真正的 Tiling 选择会受到至少这些变量影响：
+参与选择的变量包括：
 
 ```text
 M:
@@ -855,47 +835,7 @@ M 往往很小
 
 内部也可能进入完全不同的 tiling strategy / kernel specialization。
 
-本文能从公开源码严格证明的是：
-
-```text
-SGLang API
-→ op-plugin branch
-→ ACLNN entry
-→ CANN operator family
-→ host tiling exists
-→ AI Core kernel
-```
-
-但不能在没有实际运行证据时把最后一步进一步写成某个固定：
-
-```text
-tiling_key = ...
-kernel_variant = ...
-```
-
-真正要把这一段钉死，需要在目标 Ascend 910C 环境上做：
-
-```text
-msprof / torch_npu profiler
-+
-operator dump
-+
-tiling log / kernel metadata
-```
-
-然后用真实的：
-
-```text
-M/N/K
-operator name
-kernel name
-stream
-duration
-```
-
-反查 CANN 的 tiling branch。
-
-这也是下一篇“从 Operator 到 Kernel”文章真正应该开始的地方。
+这条源码链已经串起 SGLang API、op-plugin、ACLNN、CANN 算子族与 AI Core 执行。定位某次请求的具体分支时，可以在目标 910C 环境采集 Profiler、operator dump 和 tiling metadata，再用 `M/N/K`、算子名、kernel 名与耗时反查 host tiling。这样得到的是本次执行的选择，也能解释 Prefill 与 Decode 在同一算子族内的差异。
 
 ## 五、串起 Dense 与 MoE 的执行路径
 
@@ -948,64 +888,13 @@ HCCL / DeepEP
 KV Cache
 ```
 
-W8A8 不是把系统里所有 Tensor 都压成 INT8。
+ModelSlim 指定的量化层使用 INT8 Weight 和 Activation 完成 GEMM；GEMM 前后的 Norm、Attention、缓存与状态交换仍按各自的数据类型运行。
 
-它真正做的是：
+### 将源码路径对应到实际部署
 
-> **在 ModelSlim 指定的量化 Layer 上，把 GEMM 的 Weight 和 Activation 数据通路切换到 INT8；在 GEMM 边界之外，系统仍大量以 BF16 作为计算和状态交换格式。**
+复核部署时，按数据进入执行链的顺序记录四项信息：checkpoint 的逐层 Scheme、加载后的 Weight 格式、DeepEP dispatcher dtype，以及 CANN 选择的算子和 Tiling。它们分别回答“量化了哪些层”“权重怎样存”“通信搬什么”和“设备怎样算”。
 
----
-
-### 证据边界：哪些已经证实，哪些仍要靠真实 910C 环境确认
-
-为了避免“越往底层越靠猜”，最后把证据边界明确列出来。
-
-### 已经由源码直接确认
-
-- DeepSeek-V4-Flash 官方 W8A8 配方主线是 `W8A8_DYNAMIC`；
-- Activation 是 per-token INT8，Weight 是 per-channel INT8；
-- 多个 `wo_a / wo_b / compressor / indexer` 投影以及 FFN gate 被官方配方排除；
-- SGLang Dense 动态 W8A8 使用 `npu_dynamic_quant → npu_quant_matmul`；
-- Weight 在加载阶段被尝试转为 FRACTAL_NZ；
-- W8A8 MoE 使用 `NPUW8A8Int8MoEMethod → npu_grouped_matmul`；
-- DeepEP INT8 dispatch 能把 `hidden_states_scale` 一路传到 W13，从而避免第二次 activation quant；
-- op-plugin 对 FRACTAL_NZ Weight 选择 `aclnnQuantMatmulWeightNz`；
-- `aclnnQuantMatmulWeightNz` 属于当前公开 CANN `QuantBatchMatmulV3` 家族；
-- 该算子由 AI Core 执行，并存在独立 host tiling 与 device kernel 层。
-
-### 必须结合具体 checkpoint / runtime 再确认
-
-- 某个下载下来的 `DeepSeek-V4-Flash-0731-w8a8` 是否完全按当前官方 recipe 导出；
-- 每一个具体模块在它的 `quant_model_description.json` 中最终是什么 Scheme；
-- DeepEP legacy runtime 是否真正启用了 INT8 wire path；
-- FRACTAL_NZ cast 是否因为某个特殊 shape 失败并退回 ND；
-- 实际容器中的 CANN 版本最终命中哪个 tiling strategy。
-
-### 没有 profiler / tiling log 就不应该宣称
-
-- 某个固定 tiling key；
-- 某个固定内部 kernel specialization；
-- Prefill / Decode 必然使用同一个 QuantBatchMatmul kernel variant；
-- “INT8 MatMul Kernel 就一定是当前端到端瓶颈”。
-
-到这里，我们才真正把：`DeepSeek-V4 W8A8`
-
-从一个模型目录上的标签，拆成了：
-
-```text
-量化配置
-→ Layer Scheme
-→ Weight Layout
-→ Activation Quant
-→ INT8 GEMM
-→ DeepEP / MoE Grouped GEMM
-→ op-plugin
-→ ACLNN
-→ CANN Tiling
-→ Ascend 910C AI Core
-```
-
-一条可以逐层用源码和 profiler 验证的工程执行链。
+例如，特殊 shape 可能使 NZ cast 退回 ND，通信配置决定是否采用 INT8 wire path，输入形状与 CANN 版本再决定 Kernel Variant。性能分析沿这些实际选择展开，并把各段耗时放回整轮请求。
 
 ## 六、源码入口与版本
 
@@ -1161,7 +1050,7 @@ round(
 )
 ```
 
-不能把 `quant_bias` 简化成：`bias / deq_scale`
+`quant_bias` 同时包含浮点 Bias 的缩放和激活 offset 对权重求和的校正项：
 
 因为当 activation quantization 有非零 offset 时，需要把 offset 对 MatMul 累加结果造成的系统性偏移预先折进 quantized bias。
 
@@ -1218,7 +1107,7 @@ quant_bias
 
 作为 Dense Linear 主执行参数。
 
-动态路径真正传进 Quant MatMul 的是：
+动态路径传进 Quant MatMul 的是：
 
 ```text
 weight_scale

@@ -10,7 +10,7 @@ TP 拆分 Tensor 计算，普通 DP 让模型副本处理不同请求，EP 把�
 
 SGLang 当前 DeepSeek-V4 cookbook 给出的 `DeepSeek-V4-Flash-0731` 规模约为 **304B Total Parameters / 13B Active Parameters**。
 
-这两个数字必须先分清。`304B` 是整套模型的总参数量；`13B` 是 MoE 路由之后，一个 Token 在一次前向中大约真正激活的参数规模。Active Parameters 小，意味着每个 Token 不需要把 304B 参数全部参与计算，但不意味着剩下的 Expert 权重可以从服务进程的可访问内存里消失。下一批 Token 可能路由到完全不同的 Expert，只要这些 Expert 可能被选中，系统就必须能访问它们的权重。
+这两个数字必须先分清。`304B` 是整套模型的总参数量；`13B` 是 MoE 路由之后，一个 Token 在一次前向中大约激活的参数规模。每个 Token 只使用部分 Expert，后续 Token 却可能选择其他 Expert，因此服务仍要能访问整套可路由专家的权重。
 
 所以对于 MoE，**“每个 Token 算多少参数”与“服务时总共要放多少权重”是两笔不同的账。**
 
@@ -22,9 +22,9 @@ SGLang 当前 DeepSeek-V4 cookbook 给出的 `DeepSeek-V4-Flash-0731` 规模约�
 | W8 / INT8 | 1 Byte | 约 304 GB |
 | 4 bit | 0.5 Byte | 约 152 GB |
 
-这只是数学下界，不是 checkpoint 的实际文件大小，更不是服务进程的最终 HBM 占用。W8A8 还会有量化 scale、非量化权重、布局与对齐等额外数据；SGLang 的 Ascend 文档也明确把 ModelSlim W8/W4 描述为相对 BF16 降低权重 footprint，而不是把整个 Runtime 压成对应的理论位宽。
+这是按参数位宽估算的数学下界，Checkpoint 文件和服务 HBM 还包含额外数据。W8A8 还会有量化 scale、非量化权重、布局与对齐等额外数据；SGLang 的 Ascend 文档也明确把 ModelSlim W8/W4 描述为相对 BF16 降低权重 footprint，而不是把整个 Runtime 压成对应的理论位宽。
 
-这里还要统一一个 Ascend 计数口径。SGLang Ascend 文档当前仍使用 `A3 Series` 的产品命名，并按**每张卡 2 个 die、每个 die 64 GB device memory**描述资源；本文沿用本系列统一的对外称呼 **Ascend 910C**，在引用官方资源口径时保留 `A3 Series` 便于对照。因此 `tp_size` 更接近参与计算的逻辑 device / die 数量，不应直接当成物理卡数。
+这里还要统一一个 Ascend 计数口径。SGLang Ascend 文档当前仍使用 `A3 Series` 的产品命名，并按**每张卡 2 个 die、每个 die 64 GB device memory**描述资源；本文沿用本系列统一的对外称呼 **Ascend 910C**，在引用官方资源口径时保留 `A3 Series` 便于对照。本文按参与计算的逻辑 device / die 数量解释 `tp_size`，物理卡数另按双 die 口径换算。
 
 即便把一张双 die 卡上的两颗 64 GB device memory 合计为 128 GB 容量，这 128 GB 也不是一块统一地址空间，而是两个设备各自的本地 HBM；无论如何，它仍远小于 304B W8 权重约 304 GB 的理论下界。
 
@@ -41,13 +41,13 @@ HBM
 └── 分配器空闲保留块与碎片
 ```
 
-这里不能再把 allocator 的总 `reserved` 与权重、KV 等活跃分配相加：`reserved` 已包含分配器管理的活跃块，额外占用应看其中尚未使用的保留空间及碎片。
+allocator 的 `reserved` 已包含它管理的活跃块。核算额外占用时，取尚未使用的保留空间及碎片，避免与权重、KV 等活跃分配重复计数。
 
-DeepSeek-V4 又有自己的压缩缓存与 Attention 实现，因此这里不能直接拿传统 MHA 的 KV Cache 公式硬套。我们只需要得到一个更基础的结论：
+DeepSeek-V4 的缓存容量还要按 SWA 与压缩历史分别计算。将这些运行开销加到权重之上，可以得到部署容量的基本要求：
 
 > **即使已经做 W8 量化，仅 304B 权重的理想下界也约为 304 GB；一张 Ascend 910C 仍无法把这一整份模型连同运行时空间一起容纳。**
 
-于是“多卡”首先不是性能优化，而是一个**可运行性条件**。
+在这种常驻本地 HBM 的部署条件下，多卡先满足模型的容量要求，再讨论性能取舍。
 
 但多张 NPU 也不会自动拼成一块更大的统一 HBM。每个 Rank 仍然有自己的本地权重、Tensor 和缓存，跨设备数据必须显式通过 collective 或点对点通信移动。
 
@@ -63,7 +63,7 @@ flowchart TD
     R2 <-->|collective / P2P| R3
 ```
 
-所以多卡推理真正要解决的是：**哪一份数据属于哪个 Rank，以及什么时候必须跨 Rank 搬数据。** 从这里开始，TP、DP、EP 才真正有意义。
+多卡部署接下来要确定数据由谁保存、谁计算，以及何时交换。TP、DP、EP 分别从张量、请求和专家三个角度安排这些工作。
 
 ## 二、TP、DP 与 EP 分别切什么
 
@@ -81,7 +81,7 @@ flowchart TD
 - **DP**：一堆请求太多，怎么分？
 - **EP**：一堆 Expert 太多，怎么放？
 
-这里还有一个很重要的纠偏：**“模型装不下”并不等于“只能靠 TP”。** 对 DeepSeek-V4 这样的 MoE，Dense / 共享部分可以由 TP 分片，数量巨大的 Expert 权重还可以由 EP 分散。TP 和 EP 都可能降低单 Rank 需要持有的权重，只是它们切的是不同维度。
+对 DeepSeek-V4 这样的 MoE，Dense / 共享部分可以由 TP 分片，数量巨大的 Expert 权重还可以由 EP 分散。TP 和 EP 都可能降低单 Rank 需要持有的权重，只是它们切的是不同维度。
 
 这也是后面理解 SGLang 的关键。TP、DP、EP 不是三个互斥开关。同一个 DeepSeek-V4 Decoder Layer 完全可能在 Attention 阶段采用一套布局，在 MoE 阶段重新解释同一批 Rank。
 
@@ -123,15 +123,13 @@ flowchart LR
 
 这带来两个直接收益。第一，参与 TP 分片的权重不再要求每个 Rank 保存完整副本；如果一个矩阵能够均匀做 8-way TP，那么每个 Rank 对这块矩阵只承担大约 `1/8` 的 shard。第二，同一个 Forward 的计算也分散到了多个设备上。
 
-但这里必须加一个限定：
-
-> **不能把“TP=8”直接翻译成“每张卡的总模型显存一定变成 1/8”。**
+单个矩阵的均匀分片比例与整模型的显存比例分开计算。
 
 真实模型里有些权重会 TP-shard，有些权重可能复制；到了 MoE，又可能由 EP 决定 Expert ownership。最终每个 Rank 的模型内存取决于模型结构、TP/EP 布局、量化方式和具体实现。
 
-TP 还有一个代价：切开以后经常要重新交换或归并数据。比如 Row Parallel Linear 中，不同 Rank 可能分别产生 partial output，随后需要 reduction 才能得到后续层需要的结果。根据具体布局，常见 collective 包括 AllReduce、AllGather 和 ReduceScatter；但不是每个 TP Linear 都固定执行同一种 collective，也不是每次矩阵乘法之后都必须马上 AllGather。真正要看的是：**下一步计算需要 replicated Tensor，还是仍然能消费 sharded Tensor。**
+TP 还有一个代价：切开以后经常要重新交换或归并数据。比如 Row Parallel Linear 中，不同 Rank 可能分别产生 partial output，随后需要 reduction 才能得到后续层需要的结果。根据具体布局，常见 collective 包括 AllReduce、AllGather 和 ReduceScatter；后续计算需要 replicated Tensor 时，就恢复完整结果；能够消费 sharded Tensor 时，继续保留分片。
 
-所以 TP 的本质是：
+TP 的容量与通信取舍可以概括为：
 
 > **用更多本地 HBM 和计算单元换取更小的单 Rank shard，同时付出跨 Rank 通信成本。**
 
@@ -147,7 +145,7 @@ TP 解决了“同一份模型怎么拆”。当模型已经能运行，服务�
 
 这说明一个很重要的边界：
 
-> **普通 DP 不能解决“单份模型放不下”的问题。**
+> **普通 DP 的每个 Replica 都需要容纳一份可运行的模型。**
 
 单份模型如果必须 TP8 才能装下，那么每个 DP Replica 仍然需要自己的 TP8 shard 集合。DP 解决的是并发和吞吐，而不是把一份权重继续切小。
 
@@ -189,11 +187,11 @@ attn_dp_rank 7   │ R14   │ R15   │
                  └───────┴───────┘
 ```
 
-这和“8 套完整 TP16 Replica”完全不是一回事。
+仍是这 16 个 Rank 协作，Attention 在其中划分了 8 个请求组。
 
 SGLang 官方 DPA 文档也明确区分了普通 DP 和 DPA：普通 DP 是完整模型 Replica；DPA 则让 Attention 的不同 DP shard 独立处理 batch 与 KV，并在 MoE 场景下经常与 EP 组合。对应文档见 [`dp_dpa_smg_guide.mdx`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/docs/docs/advanced_features/dp_dpa_smg_guide.mdx)。
 
-因此以后看到 `dp_size`，第一反应不应该是“复制了多少套模型”，而应该先问：**这是普通 DP，还是已经开启了 DP Attention？** 这个问题不回答，`TP16 / DP8` 几乎没有完整的拓扑含义。
+解释 `dp_size` 时，先确定是普通 DP 还是 DP Attention，再展开 Replica 与组内 TP 宽度。`TP16 / DP8` 在这两种模式下对应不同拓扑。
 
 ## 五、EP：让 Token 找到对应专家
 
@@ -201,7 +199,7 @@ SGLang 官方 DPA 文档也明确区分了普通 DP 和 DPA：普通 DP 是完�
 
 Dense FFN 可以粗略理解为每个 Token 都经过同一套 MLP；MoE 则先经过 Router，为 Token 选择少量 Expert。这解释了为什么 `304B Total / 13B Active` 可以同时成立：模型拥有大量 Expert，但每个 Token 只命中其中一小部分。
 
-既然不同 Token 只会访问少量 Expert，一个自然的工程选择就是：**不要让每个 Rank 都保存全部 Expert，而是把 Expert ownership 分散出去。** 概念上，Rank 0 可以拥有一组 Expert，Rank 1 拥有另一组，后续 Rank 继续持有剩余 Expert。这就是 Expert Parallelism。
+既然不同 Token 只会访问少量 Expert，一个自然的工程选择就是：**将 Expert 权重分散到不同 Rank。** 概念上，Rank 0 可以拥有一组 Expert，Rank 1 拥有另一组，后续 Rank 继续持有剩余 Expert。这就是 Expert Parallelism。
 
 真实系统并不保证“一张卡正好连续放 N 个 Expert”。还可能涉及 shared experts、expert replication、EPLB 重排等机制。但 EP 的核心语义不变：
 
@@ -224,7 +222,7 @@ flowchart TD
 
 但同样要避免一个过度简化：
 
-> **EP 不等于 All-to-All。**
+> **EP 描述专家如何分布；All-to-All 描述 Token 如何跨 Rank 交换。**
 
 EP 描述的是 **Expert ownership 如何分片**；All-to-All 是某些 EP backend 用来完成 Token Dispatch / Combine 的通信方式。SGLang 当前 `none` backend 还可以走基于 AllReduce / AllGather 的路径，而 DeepEP、Ascend FuseEP 等 A2A backend 有自己的限制与实现。
 
@@ -235,7 +233,7 @@ EP 描述的是 **Expert ownership 如何分片**；All-to-All 是某些 EP back
 | Attention | `8 Attention-DP × 2 Attention-TP` |
 | MoE | `1 MoE-DP × 16 EP × 1 MoE-TP` |
 
-这才是 DeepSeek 分布式推理真正有意思的地方：**不是先做完 TP，再额外套一层 EP；而是同一批 Rank 在不同子模块里承担不同的数据 ownership。**
+同一批 Rank 在 Attention、Dense 和 MoE 子模块中采用不同的布局：有时协作计算同一 Token，有时处理各自的请求，有时接收发给本地 Expert 的 Token。
 
 ## 六、从权重分布回到一次 Forward
 

@@ -4,11 +4,11 @@
 
 下面用三条请求组成的小 batch 走完这个过程。先看序列长度和输入输出怎样变化，再沿途认识 `ScheduleBatch`、`ForwardBatch` 和缓存映射；DeepSeek-V4-Flash 的 mHC 与 MoE 放到它们实际参与计算的位置解释。
 
-本文讨论普通、非投机 Target Decode，固定到 SGLang commit <code>0f6761b54facebb47f2068f87ecccd8f14da3a0e</code>，核对日期为 2026-09-21。模型使用 DeepSeek-V4，正文只保留理解执行链真正需要的 V4 特性：mHC、DSV4 Attention、MoE 和 Vocab Parallel LM Head。
+本文讨论普通、非投机 Target Decode，固定到 SGLang commit <code>0f6761b54facebb47f2068f87ecccd8f14da3a0e</code>，核对日期为 2026-09-21。模型使用 DeepSeek-V4，正文只保留理解执行链需要的 V4 特性：mHC、DSV4 Attention、MoE 和 Vocab Parallel LM Head。
 
 ## 一、上一轮的输出怎样成为本轮输入
 
-这是第一次读 SGLang 最值得先弄清的地方。假设某个 Request 在这一轮开始前已经有 L 个位置的历史 KV：
+先固定一轮 Decode 的输入与输出。假设某个 Request 在这一轮开始前已经有 L 个位置的历史 KV：
 
 ~~~text
 logical position:
@@ -76,7 +76,7 @@ new_slot
 | 字段 | 普通 Decode 当前语义 |
 | --- | --- |
 | 当前 Forward 前已有 KV | positions <code>0 ... L-1</code> |
-| <code>input_ids[i]</code> | 上一轮采样、这一轮真正送入模型的 <code>y_L</code> |
+| <code>input_ids[i]</code> | 上一轮采样、这一轮送入模型的 <code>y_L</code> |
 | allocation 使用的旧长度 | <code>L</code> |
 | 新映射的 logical position | <code>L</code> |
 | <code>ForwardBatch.seq_lens[i]</code> | <code>L+1</code> |
@@ -170,7 +170,7 @@ kernel-facing
 
 所以更稳妥的心智模型是：
 
-> <code>ScheduleBatch.out_cache_loc</code> 来自 allocator 的 canonical allocation；进入 <code>ForwardBatch</code> 后，真正给 Kernel 使用的 write loc 还可能经过 ID-space translation。
+> <code>ScheduleBatch.out_cache_loc</code> 来自 allocator 的 canonical allocation；进入 <code>ForwardBatch</code> 后，给 Kernel 使用的 write loc 还可能经过 ID-space translation。
 
 到这里，整个控制边界可以画成：
 
@@ -216,7 +216,7 @@ hidden_states = self.embed_tokens(input_ids)
 
 因为：`hc_mult = 4`
 
-第一次看到这里，很容易误以为 Attention 和 MoE 都直接处理四路 hidden state。严格来说不是。
+Attention 和 MoE 子层消费二维 Working Hidden，多路持久状态由子层前后的 mHC 进行混合。
 
 对第一次阅读，只需要区分两种 Tensor：
 
@@ -251,9 +251,9 @@ flowchart TD
     P --> PRE --> W1 --> ATT --> W2 --> MID --> W3 --> MOE --> W4 --> POST --> P2
 ~~~
 
-<code>hc_pre()</code> 把四路 persistent state 混成当前子层真正消费的二维 Working Hidden，并维护内部 mixing coefficient；<code>hc_post()</code> 再把子层产生的 <code>[T,H]</code> 输出混回 <code>[T,4,H]</code>。
+<code>hc_pre()</code> 把四路 persistent state 混成当前子层消费的二维 Working Hidden，并维护内部 mixing coefficient；<code>hc_post()</code> 再把子层产生的 <code>[T,H]</code> 输出混回 <code>[T,4,H]</code>。
 
-所以第一次读 V4 时只需要记住：
+对应的形状变化是：
 
 > **mHC 的四路通道是跨子层保存和混合的状态；Attention 与 MoE 的主要计算入口仍然是普通 Token-row Tensor [T,H]。**
 
@@ -273,11 +273,11 @@ q_lora [T,1024]
 q [T, local_heads, 512]
 ~~~
 
-真正容易迷路的是 Cache ownership。
+下面按缓存的写入与历史读取两条路径展开。
 
 先把“写路径”和“读路径”分开。
 
-先记住两个方向：本轮新状态按 `out_cache_loc` 写入，请求历史按请求映射和页表读取。逻辑位置描述序列进度，物理槽位由缓存分配器决定。下面保留 DSV4 的具体映射，首次阅读可以先接着看 MoE。
+缓存访问分为两个方向：本轮新状态按 `out_cache_loc` 写入，请求历史按请求映射和页表读取。逻辑位置描述序列进度，物理槽位由缓存分配器决定。下面保留 DSV4 的具体映射，首次阅读可以先接着看 MoE。
 
 <details markdown="1">
 <summary>深入：Ascend DSV4 的写入、页表和压缩状态</summary>
@@ -462,7 +462,7 @@ flowchart TD
     T --> R --> D --> E --> G --> C --> O
 ~~~
 
-最值得理解的是 ownership 变化：
+Token 在这几步中改变数据归属：
 
 ~~~text
 进入 MoE 前：
@@ -475,7 +475,7 @@ Expert 算完：
 恢复 Token order
 ~~~
 
-所以 DeepEP / A2A 不是额外附加的“分布式复杂度”，而是 Token ownership 与 Expert ownership 不一致的直接结果。
+Token 与目标 Expert 位于不同 Rank 时，DeepEP / A2A 将输入送到 Expert，再把计算贡献送回。
 
 第一次读到这里，先理解 Dispatch 是 Token→Expert ownership 转换、Combine 是 Expert→Token ownership 恢复，就足够继续往下走。
 
@@ -551,7 +551,7 @@ _scatter_dp_attn_logits()
 
 如果 <code>attn_tp_size=1</code>，这一 DP replica 的 LM Head 本身就是完整 Vocabulary Weight，也不需要 vocab gather。
 
-因此最准确的入门结论不是“LM Head 输出 [B,V]”，而是：
+将行选择与词表分片分开后，LM Head 的输出关系是：
 
 > **LM Head 先按照 Vocabulary Parallel layout 产生 local vocab shard；LogitsProcessor 再恢复 Sampler 所需的完整 Vocabulary 维度和正确 Request row ownership。**
 
@@ -668,7 +668,7 @@ Attention / MoE:    [T,H]
 哪个 physical/cache page？
 ~~~
 
-并记住 C128 是独立 sidecar ownership。
+C128 则由独立 sidecar 管理。
 
 第五站读 MoE，只先找：
 
@@ -693,7 +693,7 @@ combine
 
 到这里，一次普通 SGLang Decode 已经完整串起来。
 
-真正值得形成的源码阅读习惯只有几个问题：
+沿调用链阅读时，可以用下面几项核对当前数据：
 
 ~~~text
 当前处理多少 Token？
@@ -708,7 +708,7 @@ combine
 Sample 出来的 Token 怎样成为下一轮 input？
 ~~~
 
-第一次读 SGLang 最应该学会的，不是“这个类是干什么的”，而是：
+将这些对象串起来，可以继续追踪：
 
 > **这个 Token 现在处在哪个时间点、哪个 Tensor、哪个 ownership 空间；下一步为什么必须发生这次状态或布局转换？**
 

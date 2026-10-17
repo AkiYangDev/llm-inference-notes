@@ -97,7 +97,7 @@ world_rank   = 6
 rank_in_group = 2
 ```
 
-SGLang 当前的 `get_tensor_model_parallel_rank()` 本质上就是返回当前进程在 TP Group 中的 `rank_in_group`；`get_moe_expert_parallel_rank()` 同样返回它在 MoE EP Group 中的 `rank_in_group`。对应 getter 可以直接在 [`parallel_state.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/parallel_state.py#L3088-L3168) 中看到。
+SGLang 当前的 `get_tensor_model_parallel_rank()` 就是返回当前进程在 TP Group 中的 `rank_in_group`；`get_moe_expert_parallel_rank()` 同样返回它在 MoE EP Group 中的 `rank_in_group`。对应 getter 可以直接在 [`parallel_state.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/parallel_state.py#L3088-L3168) 中看到。
 
 所以以后在源码里看到：
 
@@ -105,7 +105,7 @@ SGLang 当前的 `get_tensor_model_parallel_rank()` 本质上就是返回当前�
 rank = 2
 ```
 
-第一反应不应该是“第三张卡”，而应该先问：
+读取这个编号时，要同时找到它所属的 Group：
 
 > **这是哪个 Group / 哪套并行坐标系里的 Rank 2？**
 
@@ -137,7 +137,7 @@ flowchart TD
 
 TP Rank 相对直观：你属于哪个 TP Group，在里面排第几。
 
-真正容易写错的是 `dp_rank`。
+`dp_rank` 随 Native DP 与 DPA 模式改变含义。
 
 当前 SGLang 同一个 `--dp-size` 参数可以出现在两种很不一样的运行方式里：
 
@@ -376,7 +376,7 @@ PP = 1
 | `TP16 + DP8`，DPA 关闭 | 8 套完整的 16-way TP replica | 128 |
 | `TP16 + DP8 + --enable-dp-attention` | 1 个 16-way TP world，被 Attention 解释为 `DP8 × ATTN_TP2` | 16 |
 
-这也是阅读 DeepSeek-V4 DPA 源码时最值得先建立的边界。
+后续 Attention 与 MoE 通信都沿这套坐标展开。
 
 ## 四、MoE 怎样划分专家与张量分片
 
@@ -400,7 +400,7 @@ Global(TP) → MOE_DP → EP → MOE_TP
 
 见 [`engine.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/entrypoints/engine.py#L1906-L1928) 和 [`data_parallel_controller.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/data_parallel_controller.py#L682-L704)。
 
-这里真正应该记住的是顺序：`MOE_DP → EP → MOE_TP`
+这里按以下顺序展开坐标：`MOE_DP → EP → MOE_TP`
 
 其中 **`MOE_TP` 是最内层、变化最快的维度**。
 
@@ -513,7 +513,7 @@ moe_tp_rank = 0
 (dp=1, ep=2, tp=0)
 ```
 
-如果想让 `moe_tp_rank` 也真正出现，可以把例子换成：
+如果想让 `moe_tp_rank` 也出现，可以把例子换成：
 
 ```text
 tp_size     = 16
@@ -552,9 +552,9 @@ ep_size     = 4
 
 对应实现位于 [`parallel_state.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/parallel_state.py#L2809-L2895)。
 
-这里有一个边界需要保留：当 `attn_cp_size > moe_dp_size` 时，当前实现会让 `_MOE_DP` 直接复用 `_ATTN_CP`，用 CP partners 补齐进入 MoE 前需要共享的 Token。因此上面的常规三维 Group 图用于理解默认布局，但不能覆盖这个特殊 alias 分支。
+当 `attn_cp_size > moe_dp_size` 时，还有一条 alias 分支：`_MOE_DP` 直接复用 `_ATTN_CP`，借助 CP partners 共享进入 MoE 所需的 Token。查到这一条件时，应沿复用后的 Group 成员继续追踪。
 
-真正稳妥的阅读方式始终是：
+查找实际成员时，沿以下构造过程展开：
 
 > 先看 `tp_size / moe_dp_size / ep_size` 如何派生 `moe_tp_size`，再看当前配置最终创建了哪些 Group，而不是只凭参数名字想象拓扑。
 
@@ -616,11 +616,9 @@ MOE EP Group
 这套通信资源为哪种并行语义服务
 ```
 
-所以判断两个 Group 是否相同，不能只看：`成员是不是一样`
+判断 Group 身份时，同时核对成员列表和 `GroupCoordinator / process-group handle`。相同的成员可以对应独立创建的通信资源。
 
-还必须看：`是不是同一个 GroupCoordinator / process-group handle`
-
-这里也要避免再往前多推一步：`_MOE_EP` 是 SGLang 当前分布式状态中的 MoE EP process group；这并不意味着所有 DeepEP / FuseEP 的数据面通信都可以简单等同于“调用这个 group 做一个普通 collective”。MoE A2A backend 仍有自己的 dispatch / combine 执行路径。
+`_MOE_EP` 保存 MoE EP process group；DeepEP / FuseEP 在这套拓扑上组织各自的 dispatch / combine 数据路径。定位通信时，Group 成员与 backend 执行入口需要一起看。
 
 ## 六、沿源码确认 Rank 的含义
 
@@ -680,4 +678,4 @@ flowchart TD
 
 具体排查时，可以把进程身份、逻辑坐标和实际 Group 放在同一行记录。`tp_rank` 通常是 TP Group 内编号；`attn_dp_rank` 表达 Attention 拓扑坐标；`dp_rank` 则要结合 Native DP 或 DPA 模式解释。通信参与者最终由调用使用的 Group 决定。
 
-回到 `TP16 / DP8`：开启 DPA 且 CP=1 时，同一个 16-rank TP world 在 Attention 视角下分成 `8 × 1 × 2`；Native DP 则是 8 个完整 replica，每个 replica 做 16-way TP，PP=1 时共有 128 个 device worker。进入 MoE 后，再按 `moe_dp_size`、`ep_size` 与派生的 `moe_tp_size` 查找 Group 成员。不同 backend 可能施加额外的宽度约束，不能仅凭这些维度乘积判断配置可用。
+回到 `TP16 / DP8`：开启 DPA 且 CP=1 时，同一个 16-rank TP world 在 Attention 视角下分成 `8 × 1 × 2`；Native DP 则是 8 个完整 replica，每个 replica 做 16-way TP，PP=1 时共有 128 个 device worker。进入 MoE 后，再按 `moe_dp_size`、`ep_size` 与派生的 `moe_tp_size` 查找 Group 成员。配置可用性还取决于所选 backend 的宽度约束。

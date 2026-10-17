@@ -8,7 +8,7 @@ DeepSeek-V4 的一层从 Attention 进入 MoE 时，同一批 Rank 会改变分�
 
 ## 一、配置宽度怎样变成有效 Attention 布局
 
-当前 SGLang 的配置里有 `tp_size`、`dp_size`、`ep_size`，但真正进入模型执行后，还会派生出 `attn_dp_size`、`attn_tp_size`、`moe_dp_size`、`moe_ep_size`、`moe_tp_size`。
+当前 SGLang 的配置里有 `tp_size`、`dp_size`、`ep_size`，但进入模型执行后，还会派生出 `attn_dp_size`、`attn_tp_size`、`moe_dp_size`、`moe_ep_size`、`moe_tp_size`。
 
 最关键的计算在 [`derive_attention_widths()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/runtime_context.py#L249-L281)：
 
@@ -17,9 +17,9 @@ attn_dp_size = dp_size if enable_dp_attention else 1
 attn_tp_size = tp_size // attn_dp_size // attn_cp_size
 ~~~
 
-因此必须先记住：
+Attention 的有效 DP 宽度按开关派生：
 
-> **`dp_size=16` 本身并不意味着 `attn_dp_size=16`。只有 `enable_dp_attention=True` 时，`dp_size` 才成为 Attention 的有效 DP 宽度。**
+> **开启 `enable_dp_attention` 后，`dp_size` 参与派生 Attention 的有效 DP 宽度。**
 
 例如：
 
@@ -49,7 +49,7 @@ attn_cp_size = 1
 
 后文 TP32 / DP16 的讨论全部建立在 **DP Attention 已开启** 这个前提上。
 
-### SGLang 的 world 也不是简单 `TP × DP × EP`
+### 按并行模式计算 World Size
 
 `initialize_model_parallel()` 接受 tensor、attention-DP、attention-CP、expert、MoE-DP 等多个宽度。固定源码：[`initialize_model_parallel()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/distributed/parallel_state.py#L2515-L2585)。
 
@@ -84,7 +84,7 @@ flowchart TD
     M --> MTP[moe_tp_size]
 ~~~
 
-### Rank 布局也不是猜出来的
+### 从 Runtime Context 展开 Rank 坐标
 
 源码明确使用 `(dp, cp, tp)` 布局，TP 是最快变化维：
 
@@ -136,7 +136,7 @@ A = [A0, A1, ..., Ap]
 
 如果 Query 有 64 heads、`attn_tp_size=4`，概念上每个 Rank 负责约 16 个 Query heads。
 
-但 DeepSeek-V4 的共享 KV / latent 侧不能简单说成“和 Q 一样切”。当前 `wkv` 使用 `ReplicatedLinear`，就在 `wq_b` 前面。因此更准确的描述是：
+共享 KV / latent 侧由 `wkv` 的 `ReplicatedLinear` 生成，随后才执行 `wq_b`。对应的分工是：
 
 ~~~text
 Query-side projection -> attention-TP sharded
@@ -157,7 +157,7 @@ self.wo_b = RowParallelLinear(
 
 源码：[`wo_b`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L904-L913)。
 
-`RowParallelLinear` 先让各 Rank 计算 partial output。是否在内部归约，要看 `reduce_results`；不能把它内部的 global-TP AllReduce 当成所有 Attention 配置的路径。固定源码：[`RowParallelLinear`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/linear.py#L1422-L1696)。
+`RowParallelLinear` 先让各 Rank 计算 partial output。内部是否归约由 `reduce_results` 控制；Attention TP 子组还可在模型层显式归约。固定源码：[`RowParallelLinear`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/linear.py#L1422-L1696)。
 
 DeepSeek-V4 默认构造下的归约位置如下：
 
@@ -191,7 +191,7 @@ flowchart TD
 
 ## 三、MoE 的专家归属和通信组
 
-MoE 关心的不是 Query head shard，而是 Expert 权重归属。
+MoE 按 Expert 权重归属组织计算。
 
 SGLang 会单独构造 `_MOE_DP`、`_MOE_EP`、`_MOE_TP`。固定源码：[`MoE groups`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/distributed/parallel_state.py#L2770-L2895)。
 
@@ -225,13 +225,13 @@ else:
 
 MoE EP 仍然使用 standalone process group。
 
-> **same rank membership 不等于 same communicator object。**
+> **相同的 Rank 成员，可以拥有独立的 communicator 对象。**
 
 这个细节对排查跨机 collective mismatch、通信超时和 communicator 初始化非常重要。
 
 ## 四、Attention 与 MoE 之间的 Token 行转换
 
-DeepSeek-V4 最值得看的并行桥接函数是：[`_run_moe_ffn_dp_sync()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3748-L3915)。
+DeepSeek-V4 的并行桥接入口是：[`_run_moe_ffn_dp_sync()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3748-L3915)。
 
 它的职责可以概括成：
 
@@ -265,7 +265,7 @@ dp_gather_replicate(
 
 把 DP-local Token rows gather 到 MoE 可消费的更大全局 buffer。
 
-源码注释明确指出：Attention 已经在 attention TP 内完成 reduction，所以这些 hidden states 是 replicated 的，此处 gather 不能再把它们当 partial tensor 相加。
+源码注释明确指出：Attention 已经在 attention TP 内完成 reduction，所以这些 hidden states 是 replicated 的，此处 Gather 收集对应 Token 行，保留已完成的 Attention 结果。
 
 MoE 完成后，再使用 `reduce_scatterv`、`reduce_scatter` 或 `dp_scatter` 恢复本 Rank 的 Token slice。
 
@@ -315,7 +315,7 @@ hidden_states = (
 
 如果存在 `input_ids`，它们也按照同一个 `attn_tp_size` 做 token-row split。
 
-这里切的不是 hidden dimension，而是 **Token rows**。
+这里沿 **Token 行**拆分，保留每行的 Hidden 维。
 
 原因是 Attention 已经完成 TP reduction，同一个 attn-TP group 内 post-attention hidden rows 是 replicated 的。如果两个 Rank 都拿完整 Token rows 去做 EP dispatch，同一个 Token 会被 dispatch 多遍。
 
@@ -372,7 +372,7 @@ flowchart TD
     G --> N[Replicated rows · for next layer]
 ~~~
 
-这张图是理解“TP 与 EP 如何真正接上”的核心。
+这张图是理解“TP 与 EP 如何接上”的核心。
 
 ## 五、TP32 / DP16 示例与 DSpark 限制
 
@@ -461,7 +461,7 @@ DSpark DeepSeek-V4 MoE draft:
 也就是 DP size == TP size
 ~~~
 
-因此从“显式拒绝 TP32 / DP16”推进到“请求输出正确”，真正工作绝不是删除 `raise ValueError`。
+扩展到 TP32 / DP16 时，需要继续验证更宽 Attention TP 下的 Draft 布局与同步。
 
 错误信息已经直接指出已知风险：`attn_tp > 1 corrupts the MoE-under-DP all-reduce`
 
@@ -478,9 +478,7 @@ graph / eager consistency
 最终 logits / sampled token correctness
 ~~~
 
-所以这个问题本质上是：
-
-> **主模型已经有某种并行布局转换能力，不代表 speculative draft path 自动继承了同样的 ownership 语义。**
+Target 与 Draft 分别组织 Forward。扩展并行配置时，需要让两条路径中的 Token 归属、计数与决策同步对应起来。
 
 ## 六、Ascend 通信后端的分工
 
@@ -518,11 +516,7 @@ HCCL_BUFFSIZE
 
 > **Ascend 上标准 TP / DP / EP process-group collectives 通常由 HCCL 承担。**
 
-但不能写成：
-
-> Ascend 上所有跨卡通信都一定表现为一个独立 HCCL collective。
-
-原因有三点：
+此外还有两类后端分支，以及不同的事件呈现方式：
 
 1. 配置 ZBAL local memory 后，默认 distributed backend 可以切成 `zbal`；
 2. Ascend FuseEP 会把 dispatch、cross-rank exchange、Expert GEMM、combine 融进 `fused_deep_moe(...)`；
@@ -575,7 +569,7 @@ flowchart TD
     B2 --> N[Next Decoder Layer]
 ~~~
 
-真正困难的不是记住几个 collective 名字，而是知道：
+追踪一份 Tensor 时，需要确认：
 
 > **某个 collective 为什么恰好出现在这个位置，它是在恢复哪一种 ownership，又准备切换到哪一种 ownership。**
 

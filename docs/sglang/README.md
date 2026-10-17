@@ -6,7 +6,7 @@
 
 ## 入门桥梁
 
-- [从一次 Decode 读懂 SGLang：Tensor、缓存与下一枚 Token](../fundamentals/sglang-decode-source-reading-primer.md)：严格核清普通 Decode 的 L→L+1 时间语义、V4 mHC 的 [T,4,H]↔[T,H] 边界、Ascend 910C DSV4 的 SWA/C4/C128 ownership，以及 DP Attention / Vocab Parallel 下 Logits 与 Sampling 的 Group 边界。
+- [从一次 Decode 读懂 SGLang：Tensor、缓存与下一枚 Token](../fundamentals/sglang-decode-source-reading-primer.md)：解释普通 Decode 的 L→L+1 时间语义、V4 mHC 的 [T,4,H]↔[T,H] 边界、Ascend 910C DSV4 的 SWA/C4/C128 ownership，以及 DP Attention / Vocab Parallel 下 Logits 与 Sampling 的 Group 边界。
 
 ## 核心执行链
 

@@ -30,9 +30,7 @@ Draft candidate chain
 Target Verify
 ~~~
 
-但不能直接写：`MTP = NextN = EAGLE`
-
-因为它们不是同一个抽象层。
+其中 MTP 描述训练目标，NextN 是 Draft 模型实现，EAGLE Runtime 负责候选生成与验证流程。
 
 ### 为什么 CLI 写 NEXTN，运行时最后却看到 EAGLE
 
@@ -81,7 +79,7 @@ assert num_nextn_layers == 1, "Only 1 nextn layer is supported"
 
 [`DeepseekV4ForCausalLM.load_weights()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L5363-L5377)
 
-所以这篇文章真正研究的是：
+所以这篇文章研究的是：
 
 > **DeepSeek-V4 checkpoint 中的 MTP 权重，如何被 SGLang 物化成一个单层 NextN Draft Model，并由 EAGLE Runtime 反复调用，形成一条未来 Token 候选链。**
 
@@ -155,13 +153,13 @@ flowchart TD
     LM --> L[Next candidate logits]
 ~~~
 
-这说明 NextN 的 Draft 能力不是“模型很小但自己重新猜”。
+NextN 使用 Target 提供的 Hidden Feature，与输入 Token 一起生成候选。
 
 它更接近：
 
 > **Target 已经把上下文压成高质量 feature，NextN 在这个 feature 上做更便宜的未来 rollout。**
 
-### Target→Draft 的 hidden 不是普通 `[T, H]`
+### Target 到 Draft 的多路 Hidden Feature
 
 DeepSeek-V4 有 mHC multi-stream hidden。
 
@@ -243,7 +241,7 @@ Token embedding
 [2, M, 8]
 ~~~
 
-这才是当前 DeepSeek-V4 NextN 真正吃进去的 Draft feature。
+这才是当前 DeepSeek-V4 NextN 吃进去的 Draft feature。
 
 ## 三、Draft Extend 产生第一枚候选
 
@@ -284,7 +282,7 @@ hidden_states=batch_result.logits_output.hidden_states
 
 同时，NextN 的 input token 来自已经接受的 Target token path；最终边界 token 会保留为下一轮的 `bonus_tokens`。
 
-Draft Extend 真正执行一次：
+Draft Extend 执行一次：
 
 ~~~python
 draft_logits_output = self.draft_runner.forward(
@@ -334,7 +332,7 @@ flowchart TD
     DH --> F
 ~~~
 
-可以用一句话记：
+按输入与产出对应起来：
 
 > **bonus 是 Target→Draft 的边界输入；candidate1 是 Draft Extend 对这个边界状态做一次 NextN forward 后得到的 proposal。**
 
@@ -383,7 +381,7 @@ num_draft_tokens = 4
 
 [`_handle_eagle_family()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/arg_groups/speculative_hook.py#L1067-L1078)
 
-但这不代表：`MTP 生成 4 枚 Draft Token`
+其中 1 个位置留给旧 bonus，其余 3 个位置是 Draft 候选。
 
 ### `draft_forward()` 里只有 3 枚 Draft candidate
 
@@ -485,7 +483,7 @@ Verify Window:
 | 从上一轮 Target 状态算起的 NextN forward 总数 | 3 | 1 次 Draft Extend + 2 次 Draft Decode |
 | Target Verify window | 4 | `[bonus, d1, d2, d3]` |
 
-这也是为什么 `num_draft_tokens` 不能直接翻译成“Draft Model 预测了多少 Token”。
+`num_draft_tokens` 描述整个 Verify 窗口，计数时包含旧 bonus 所占的位置。
 
 在 EAGLE 里，它更接近：
 
@@ -521,9 +519,7 @@ DeepseekV4DecoderLayer(
 
 [`deepseek_v4_nextn.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_nextn.py)
 
-这里的 `0` 不能理解成：`没有 KV Cache`
-
-它真正表达的是：
+`compress_ratio=0` 选择 SWA 路径：
 
 > **这个 NextN Layer 不使用 C4/C128 compressed extra-cache path，而使用 DSV4 的 SWA path。**
 
@@ -616,7 +612,7 @@ Target Model 仍然是 Target 自己的：`SWA / C4 / C128`
 
 ## 六、Ascend 上的模型、Worker 与 Backend
 
-到这里可以把理论和你真正关心的 Ascend 部署接起来。
+到这里可以把理论和你关心的 Ascend 部署接起来。
 
 固定版本的 DeepSeek-V4-Flash Ascend 官方文档给出的 speculative 配置就是：
 
@@ -635,7 +631,7 @@ Target Model 仍然是 Target 自己的：`SWA / C4 / C128`
 
 [DeepSeek-V4-Flash Ascend Tutorial](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/docs/docs/hardware-platforms/ascend-npus/model-deployment/tutorials/deepseek_v4_flash.mdx)
 
-也就是说，Ascend 上官方生产示例真正走的是：
+也就是说，Ascend 上官方生产示例走的是：
 
 ~~~text
 MTP checkpoint
@@ -697,7 +693,7 @@ ATTENTION_BACKENDS["dsv4"](draft_model_runner)
 - [`DraftBackendFactory._create_dsv4_prefill_backend()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/draft_utils.py#L574-L601)
 - [`attention_registry.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/attention/attention_registry.py#L166-L192)
 
-所以真正的 Ascend 执行层级可以画成：
+所以 Ascend 执行层级可以画成：
 
 ~~~mermaid
 flowchart TD
@@ -719,9 +715,7 @@ flowchart TD
 
 如果启用 NPU graph，EAGLE 还有对应的 NPU Draft / Draft-Extend graph runner；那是执行优化层，不改变上面的算法状态机。
 
-因此“DeepSeek-V4 MTP 在 Ascend 上怎么跑”最精确的回答不是：`NPU 跑一个 MTP Head`
-
-而是：
+这几层共同组成 Ascend 上的 MTP 执行路径：
 
 > **MTP 权重被装进单层 NextN Draft Model，EAGLE Worker 用 Ascend DSV4 Draft Extend + Multi-Step Draft Backend 迭代构造候选，再交给完整 DeepSeek-V4 Target 做 Verify。**
 
@@ -729,7 +723,7 @@ flowchart TD
 
 NextN 仍按候选顺序推进：Draft Extend 给出第一枚候选，后续 rollout 再生成下一枚。收益来自用较轻的 Draft 替代一部分昂贵的 Target Decode，并由 Target 对候选窗口统一验证。
 
-在相同批次与资源条件下，设一轮实际推进 `A` 个输出 Token。普通 Decode 的对应成本约为 `A × C_target`；投机周期则包含 Draft Extend、rollout、Target Verify、Accept 与状态整理。后者总耗时更低时，才得到这一轮的生成加速。候选数和实际接受数需要分别记录，不能把提出的候选全部算成有效产出。
+在相同批次与资源条件下，设一轮实际推进 `A` 个输出 Token。普通 Decode 的对应成本约为 `A × C_target`；投机周期则包含 Draft Extend、rollout、Target Verify、Accept 与状态整理。后者总耗时更低时，才得到这一轮的生成加速。成本按实际执行的候选工作计算，产出按最终接受并提交的 Token 计算。
 
 | 一轮中的工作 | 作用 |
 | --- | --- |

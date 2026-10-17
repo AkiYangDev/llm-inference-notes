@@ -126,7 +126,7 @@ ScheduleBatch(DECODE)
         └─ DRAFT_EXTEND_V2 ForwardBatch
 ```
 
-这就是全文最重要的第一层抽象：
+这两层的职责分别是：
 
 > **`ScheduleBatch(DECODE)` 是 Scheduler 的宏观 transaction；Draft / Verify / Accept 是这个 transaction 内部的执行阶段。**
 
@@ -202,7 +202,7 @@ TARGET_VERIFY
 DRAFT_EXTEND_V2
 ```
 
-则是 Worker / ModelRunner 真正执行某个内部 forward 时的设备执行模式。
+则是 Worker / ModelRunner 执行某个内部 forward 时的设备执行模式。
 
 因此不要把：`ScheduleBatch.forward_mode == DECODE`
 
@@ -214,7 +214,7 @@ DRAFT_EXTEND_V2
 
 ## 二、CPU、设备与下一轮状态怎样错开
 
-真正理解 Scheduler，要先分清六个对象：
+下面先列出参与跨轮交接的六个对象：
 
 ```text
 Req
@@ -243,7 +243,7 @@ ForwardBatch:
 
 [`schedule_batch.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
 
-但 speculative + overlap 后，真正困难的是：
+启用投机解码与 Overlap 后，几项状态会错开推进：
 
 > **这些对象不再保证在任意瞬间都显示同一个 sequence length。**
 
@@ -493,7 +493,7 @@ Req.seqlen = P + 1
 
 如果本轮又接受 4 个输出：`D1 D2 D3 B2`
 
-Device 真正 materialize 的 Verify rows 是：`old_bonus D1 D2 D3`
+Device  materialize 的 Verify rows 是：`old_bonus D1 D2 D3`
 
 也是 4 个。
 
@@ -514,7 +514,7 @@ kv_committed_len + 1
 
 新的那 `+1` 就是 `B2`。
 
-> 这个关系是理解 active speculative request 的非常好用的心智模型，但不要把它当成所有 transition / mixed / finished 状态的全局 assert；源码真正维护的是各 owner 的 boundary contract。
+> 上式对应这里的活跃投机请求：已确认输出比已物化 KV 多一枚待输入的 bonus。进入 Transition、Mixed 或 Finished 状态后，再按各自处理阶段读取长度。
 
 ## 三、预留 KV 空间并保留提交边界
 
@@ -585,7 +585,7 @@ alloc_for_spec_decode(...)
 
 [`alloc_for_spec_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/mem_cache/allocation.py)
 
-真正更新的是：
+更新的是：
 
 ```python
 req.kv.kv_allocated_len =
@@ -656,7 +656,7 @@ Draft / Verify 可以在：`[C, A)`
 
 ## 四、on_publish 发布哪一部分进度
 
-现在进入真正的一轮运行。
+现在进入一轮运行。
 
 Scheduler 主循环大致是：
 
@@ -719,7 +719,7 @@ DRAFT
 → DRAFT_EXTEND
 ```
 
-两层状态机不能混在一起。
+Scheduler 管理请求与批次，Worker 在一次执行内推进 Draft、Verify 与 Accept；两者通过返回结果交接状态。
 
 ---
 
@@ -829,9 +829,7 @@ commit_hidden()
 
 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-所以绝不能把：`on_publish`
-
-解释成：`“本轮所有 device commit 已经完成”`
+`on_publish` 将下一轮所需的长度先交给调度链路，部分 Device Commit 则继续按原依赖执行。
 
 ---
 
@@ -906,7 +904,7 @@ Schedule Stream:
           Prepare Schedule N+1
 ```
 
-真正 overlap 的是：`CPU / schedule preparation`
+ overlap 的是：`CPU / schedule preparation`
 
 和：`当前 Worker 剩余 device work`
 
@@ -1022,7 +1020,7 @@ for name, value in sched_snapshot.items():
 | `batch.seq_lens.add_(1)` | 原 Tensor 的内容已改变，恢复引用不能撤销它 |
 | 修改字段所引用的列表或嵌套对象 | 不会因 `setattr` 自动恢复内部内容 |
 
-因此，所有 dataclass 字段都被纳入引用恢复范围，不等于所有 mutation 都能回滚。共享对象的原地写入仍需要各自的 ownership、拷贝或同步约束。下文 `sampling_info.copy_for_forward()` 的独立处理也不能用字段快照来替代。
+隔离区保存并恢复 dataclass 字段的绑定。共享 Tensor、列表和嵌套对象的内容则由各自的拷贝与同步方式保护，下文 `sampling_info.copy_for_forward()` 就负责其中一部分。
 
 这条边界隔离的是临时字段替换。
 
@@ -1087,7 +1085,7 @@ rebind batch.spec_info
 
 Isolation 的设计是：`先恢复快照中的字段绑定`
 
-然后：`只重新提交真正属于 next iteration contract 的状态`
+然后：`只重新提交属于 next iteration contract 的状态`
 
 #### Overlap 路径
 
@@ -1176,7 +1174,7 @@ temporary EagleVerifyInput
 temporary verify seq_lens
 ```
 
-它们都属于当前 forward transaction，不应该跨轮泄漏。
+这些临时字段绑定随当前 Forward 结束而恢复，下一轮输入由返回结果重新接入。
 
 ---
 
@@ -1322,13 +1320,7 @@ write position = C
 full seq_len = C + 1
 ```
 
-所以这个 `+1` 的本质不是：
-
-> “FutureMap 的 seq_len 定义变了。”
-
-而是：
-
-> **同一个 KV-ready frontier 被转换成 one-token EXTEND 的 post-write length。**
+这里将同一个 KV-ready Frontier 转换为单 Token EXTEND 写入后的长度，因此使用 `C+1`。
 
 ---
 
@@ -1362,7 +1354,7 @@ reserves from the right base.
 
 这再次证明：`+1`
 
-是 “pending bonus 被当前 EXTEND 真正 commit” 的局部语义。
+是 “pending bonus 被当前 EXTEND  commit” 的局部语义。
 
 ---
 
@@ -1448,7 +1440,7 @@ extend_len = 1
 
 所以 `mix_with_running()` 只能先拿 host request state 做一个 provisional tail。
 
-到了真正 forward entry：
+到了 forward entry：
 
 ```python
 resolve_forward_inputs()
@@ -1466,7 +1458,7 @@ fresh seq_lens
 
 这就是：`late binding`
 
-真正存在的原因。
+存在的原因。
 
 </details>
 
@@ -1517,7 +1509,7 @@ flowchart TD
     Y --> B
 ```
 
-这张图里真正存在三类“时间”。
+这张图里存在三类“时间”。
 
 ### Past：CPU 已经 settle 的事实
 
@@ -1593,7 +1585,7 @@ Future
 
 ### Debug Scheduler 时建议同时打印这些字段
 
-以后如果你真正去 Debug Spec V2 Scheduler，我会优先打印：
+Debug Spec V2 Scheduler 时，可以把下列字段按请求与轮次并排记录：
 
 ```text
 rid

@@ -1,6 +1,6 @@
 # 投机解码
 
-Speculative Decoding 的 Draft / Verify、接受策略、Verify 调度、缓存提交与状态一致性。这里重点关注 DeepSeek-V4 与 SGLang 中 speculative state 如何真正进入 Runtime，而不是只解释算法概念。
+Speculative Decoding 的 Draft / Verify、接受策略、Verify 调度、缓存提交与状态一致性。这里重点关注 DeepSeek-V4 与 SGLang 中 speculative state 如何进入 Runtime。
 
 ## 核心执行链
 

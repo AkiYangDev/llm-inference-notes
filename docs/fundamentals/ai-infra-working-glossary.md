@@ -4,7 +4,7 @@
 
 查词可以从下面的速查表进入；想建立整体认识，可以从“一次请求的全局地图”顺着读。每个词条解释它解决什么问题、与相邻概念有什么关系，并给出继续读源码的入口。
 
-> **源码与适用范围**：SGLang 源码入口固定到 <code>sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a</code>，核对日期为 2026-09-21。路径级入口用于帮助定位概念，不代表某个高层语义永远只由一个文件实现。SGLang 仍在快速演进，未来目录、类名和 backend 能力可能变化。
+> **源码与适用范围**：SGLang 源码入口固定到 <code>sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a</code>，核对日期为 2026-09-21。路径用于定位相应模块；完整调用关系在各专题文章中展开。
 
 ## 速查：按当前问题找术语
 
@@ -38,7 +38,7 @@
 | [Backend](#backend) | 当前语义选择哪套具体实现 |
 | [CANN / Operator](#operator-kernel) | 上层 Forward 如何进入 Ascend 计算栈 |
 | [Tiling](#canntiling-tilingkey) | 大 Tensor 如何切成 Device 可执行任务 |
-| [Kernel](#operator-kernel) | 真正在 Device 上跑的计算程序 |
+| [Kernel](#operator-kernel) | 在 Device 上跑的计算程序 |
 | [BF16 / W8A8](#bf16w8a8-modelslim) | 数据精度与量化格式 |
 | [ModelSlim](#bf16w8a8-modelslim) | Ascend 量化格式/方法如何接入 Runtime |
 | [PD Disaggregation](#pd-disaggregation) | Prefill 与 Decode 的状态如何跨实例交接 |
@@ -84,21 +84,19 @@ flowchart TD
 | --- | --- | --- |
 | 模型语义 | Token、Embedding、Q/K/V、Attention、MLA、MoE、Logits | 模型数学上在算什么？ |
 | 推理生命周期 | Prefill、Decode、KV Cache、Prefix Cache | 一条请求如何逐步生成？ |
-| Runtime | Req、Scheduler、ScheduleBatch、ForwardBatch、ModelRunner | 哪些请求在这一轮真正执行？ |
+| Runtime | Req、Scheduler、ScheduleBatch、ForwardBatch、ModelRunner | 哪些请求在这一轮执行？ |
 | 内存 | Page、KV Pool、Activation、Workspace、Buffer | 状态放在哪里，显存怎么分配？ |
 | 分布式 | Rank、Group、TP、DP、DPA、EP、CP、Collective | 谁拥有哪部分数据，谁和谁通信？ |
 | 投机解码 | Draft、Verify、Accept、DSpark | 怎样用更便宜的预测换取更少的 Target Decode？ |
 | Device 执行 | Backend、CANN、Operator、Tiling、Kernel、Stream | Python 里的 Forward 最终怎样落到 910C？ |
 
-以后碰到陌生词时，第一反应不要是“缩写是什么意思”，而是先问：
+遇到陌生术语，可以先确定它在系统中的位置：
 
 > **它属于上面哪一层？它的上游输入是什么，下游又会影响什么？**
 
-这一步比背定义重要得多。
-
 ### 快速源码入口索引
 
-下面这张表是本文最适合工作中反复回来查的一部分。第一次阅读可以先浏览，不要求一次看懂；以后日志、启动参数或源码里遇到某个词，可以直接从这里跳进去。
+日志、启动参数或源码里遇到相应术语时，可以从这张表进入对应模块。
 
 | 核心词 | SGLang 当前入口 | 进去先看什么 |
 | --- | --- | --- |
@@ -133,23 +131,23 @@ flowchart TD
 
 第一，**不要从整个仓库目录开始翻**。带着一个问题跳到入口，再顺着对象和调用链往下追。
 
-第二，**路径只是坐标，不是结论**。例如 Attention 不是只存在于一个 backend 文件里；真正完整的行为还要结合模型层、Runtime metadata、backend 和底层算子一起看。
+第二，沿调用关系继续读。以 Attention 为例，模型层准备输入，Runtime 提供 metadata，backend 组织缓存访问，底层算子完成计算。
 
 ## 二、模型：从 Token 与 Tensor 到 Logits
 
 大模型最上层的问题是：模型究竟在处理什么？
 
-答案不是“文字”，而是 Tensor。
+模型内部处理的是 Tensor。
 
 用户输入先经过 Tokenizer。文本被切分、映射为 Token ID，然后通过 Embedding 进入连续向量空间。假设某个模型的 hidden size 是 H，那么一个 Token 可以抽象成长度为 H 的向量；多 Token 共同形成 hidden states。
 
-这里最重要的不是背某个 shape，而是形成三个源码阅读问题：
+读到一个 Tensor 时，可以顺着三个问题确认它的含义：
 
 1. 这个 Tensor 的**语义**是什么？
 2. 它的 **shape** 是什么？
 3. 它的 **dtype** 是什么？
 
-同样是二维 Tensor，它可能是 hidden states、weight、KV cache、temporary buffer；shape 相同不代表含义相同。
+同样是二维 Tensor，它可能是 hidden states、weight、KV cache、temporary buffer；它的用途还由所在阶段与消费者决定。
 
 ### Hidden States、Residual 与 Norm
 
@@ -171,9 +169,9 @@ V = XWv
 
 随后通过 Q 与 K 的相关性决定怎样聚合 V。
 
-Multi-Head Attention 的意义，是让不同投影子空间并行建模不同关联模式。需要避免一个常见误解：不能把某个 Head 稳定地等价为“语法 Head”“实体 Head”之类的人类可解释功能；这些最多只是帮助入门的例子。
+Multi-Head Attention 的意义，是让不同投影子空间并行建模不同关联模式。各 Head 的功能由训练形成；“语法 Head”“实体 Head”等说法适合作为局部观察或教学类比。
 
-在 DeepSeek 语境中还会遇到 **MLA**。它的重要工程意义之一，是改变 K/V 的表示与缓存方式，从而降低传统 Attention 下 KV Cache 的压力。理解 MLA 的重点不是先背全部公式，而是先建立这条因果关系：
+在 DeepSeek 语境中还会遇到 **MLA**。它的重要工程意义之一，是改变 K/V 的表示与缓存方式，从而降低传统 Attention 下 KV Cache 的压力。MLA 的表示变化沿下面这条关系影响缓存：
 
 ~~~text
 Attention 结构
@@ -189,7 +187,7 @@ Attention 结构
 
 ### MLP、GEMM 与 MoE
 
-Transformer 的另一大块是 MLP / FFN。Linear 层最终大量落成 GEMM，也就是通用矩阵乘法。因此你以后看到 BF16 GEMM、INT8 GEMM、Grouped GEMM、Expert GEMM，本质上都在讨论不同精度、不同布局和不同 batch 形态下的矩阵乘法。
+Transformer 的另一大块是 MLP / FFN。Linear 层最终大量落成 GEMM，也就是通用矩阵乘法。因此你以后看到 BF16 GEMM、INT8 GEMM、Grouped GEMM、Expert GEMM，都在讨论不同精度、不同布局和不同 batch 形态下的矩阵乘法。
 
 MoE 把单一 FFN 进一步拆成多个 Expert：
 
@@ -207,15 +205,15 @@ Expert Compute
 Combine
 ~~~
 
-这条链一旦跨设备，就同时变成模型问题与通信问题。Router 决定 Token 去哪里，EP 决定哪些 Rank 持有哪些 Expert，DeepEP 等通信 backend 负责把 Token 送过去并把结果收回来，Expert Runner 再负责真正的 GEMM。
+这条链一旦跨设备，就同时变成模型问题与通信问题。Router 决定 Token 去哪里，EP 决定哪些 Rank 持有哪些 Expert，DeepEP 等通信 backend 负责把 Token 送过去并把结果收回来，Expert Runner 再负责 GEMM。
 
-这也是为什么看 DeepSeek MoE 源码时，不能只盯着 Expert Linear 层：真正的性能瓶颈可能出现在 Router、Permutation、All-to-All、Dispatch/Combine 或 Expert GEMM 任意一段。
+MoE 性能分析也沿这条链展开，分别查看 Router、Permutation、Dispatch/Combine 和 Expert GEMM 的耗时。
 
 ### Logits 与 Sampling
 
-模型最后不是直接输出文字，而是输出 **Logits**：对词表中候选 Token 的原始分数。
+模型最后输出 **Logits**：对词表中候选 Token 的原始分数。
 
-随后 Sampling 决定真正选哪个 Token。常见词包括 Greedy、Temperature、Top-K、Top-P。
+随后 Sampling 决定选哪个 Token。常见词包括 Greedy、Temperature、Top-K、Top-P。
 
 因此最简化的生成链是：
 
@@ -233,15 +231,13 @@ Next Token
 
 SGLang 当前分别可以从 [logits_processor.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/logits_processor.py) 和 [sampler.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/sampler.py) 进入。
 
-这一层真正应该记住的不是几十个公式，而是：
+后文沿这些 Tensor 的用途继续解释缓存、并行与 Kernel：
 
 > **模型结构决定 Tensor 语义；Tensor 语义决定后面的缓存、并行和 Kernel 需要处理什么数据。**
 
 ## 三、运行时：生成阶段、缓存与调度
 
-模型会算，并不代表已经理解“推理服务”。
-
-真正的在线推理系统还要解决：同时来了几百个请求，谁先跑？一轮跑多少 Token？KV Cache 不够怎么办？Prefill 会不会把 Decode 堵死？某个请求结束后能不能立即把空位让给新请求？
+在线推理服务还要安排持续到来的请求：同时来了几百个请求，谁先跑？一轮跑多少 Token？KV Cache 不够怎么办？Prefill 会不会把 Decode 堵死？某个请求结束后能不能立即把空位让给新请求？
 
 这就是 Runtime 的世界。
 
@@ -282,9 +278,9 @@ HBM 压力 ↑
 
 现代 Runtime 通常不会给每个 Request 预留一大块固定连续空间，而是把 KV Pool 按 Page / Block 管理，让逻辑 Sequence 和物理位置分离。
 
-SGLang 当前 [memory_pool.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/mem_cache/memory_pool.py) 中可以直接看到 **ReqToTokenPool** 与 **KVCache** 这样的结构：前者把请求映射到 token location，后者管理真正的缓存存储抽象。
+SGLang 当前 [memory_pool.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/mem_cache/memory_pool.py) 中可以直接看到 **ReqToTokenPool** 与 **KVCache** 这样的结构：前者把请求映射到 token location，后者管理缓存存储抽象。
 
-这类代码之所以不像 Transformer 论文，是因为你已经不在“模型数学层”，而是在“操作系统式的内存管理层”。
+这一层负责请求状态的分配、寻址与回收，和后端工程中的内存管理职责相近。
 
 ### Prefix Cache 与 RadixCache
 
@@ -301,11 +297,11 @@ SGLang 使用 Prefix Cache 复用已有 KV。当前源码中非常直接的入�
 
 ### Req、Scheduler、ScheduleBatch、ForwardBatch、ModelRunner
 
-这五个词是阅读 SGLang 最值得优先搞清楚的一组。
+这五个对象把一条请求从接收到设备执行串起来。
 
 **Req** 保存一条请求跨越多轮生成的状态，不只是 Prompt。它会携带长度、输出 Token、Sampling 参数、缓存状态、结束条件以及各种 Runtime metadata。
 
-**Scheduler** 每一轮决定谁真正进入计算。它面对的是 Waiting Requests、Running Requests、Token Budget、KV Capacity、Prefill / Decode 状态以及 Speculative 状态。
+**Scheduler** 每一轮决定谁进入计算。它面对的是 Waiting Requests、Running Requests、Token Budget、KV Capacity、Prefill / Decode 状态以及 Speculative 状态。
 
 **ScheduleBatch** 是调度侧对“这一轮跑什么”的表达。
 
@@ -332,7 +328,7 @@ flowchart TD
 - ForwardBatch：[forward_batch_info.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/model_executor/forward_batch_info.py)
 - ModelRunner：[model_runner.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/model_executor/model_runner.py)
 
-这一组概念的关键不是记住类名，而是理解**状态边界**：
+这些对象按状态持续时间分工：
 
 > Req 是跨轮次生命周期；ScheduleBatch 是本轮调度视图；ForwardBatch 是本轮 Device Forward 视图。
 
@@ -348,7 +344,7 @@ Decode 期间大量小 Kernel 又会放大 Host Launch Overhead，因此还会�
 
 最后是 **Overlap**：把原本串行的计算、通信、结果处理或下一轮准备重叠起来。Overlap 并不天然等于更快，因为两个任务可能竞争同一资源，也可能增加 Buffer 和同步复杂度。
 
-所以 Runtime 优化的本质经常不是“一个算子更快”，而是：
+Runtime 还可以通过以下安排缩短请求等待：
 
 > **让更多有用工作在正确的时间进入 Device，同时避免内存、通信和同步成为新的瓶颈。**
 
@@ -401,7 +397,7 @@ DP Group = [2, 6, 10, 14]
 → DP Rank = 1
 ~~~
 
-所以源码里看到 TP rank、DP rank、EP rank、Draft rank、Verify rank 时，不要把它们理解成五套硬件，而是理解为：
+TP、DP、EP、Draft 和 Verify Rank 分别描述当前进程在相应阶段的角色：
 
 > **同一个进程在不同通信坐标系中的身份。**
 
@@ -425,7 +421,7 @@ TP 把同一个 Layer 内的大 Tensor / GEMM 拆到多个 Rank 共同完成。
 
 > **模型 Replica 处理不同数据。**
 
-而 SGLang 中的 **DP Attention / DPA** 不能简单理解成“普通 DP 的另一个名字”。
+SGLang 的 **DP Attention / DPA** 则在同一个模型并行世界内，为 Attention 划分请求与 KV。
 
 当前并行宽度派生集中在 [runtime_context.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/runtime_context.py)。其中 Attention 维度会根据配置派生出：
 
@@ -445,9 +441,7 @@ dp_size = 8
 enable_dp_attention = true
 ~~~
 
-不能直接翻译成“16 份 TP 再乘 8 份模型副本”。
-
-真正应该继续问：
+展开该配置时，需要核对：
 
 - Attention DP Group 怎么划？
 - 每个 DP replica 内还有多少-way Attention TP？
@@ -497,7 +491,7 @@ SGLang 当前 EP 主流程可以从 [ep_moe/layer.py](https://github.com/sgl-pro
 
 SGLang 当前有 [deepep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py) 和 [deepep_v2.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep_v2.py) 等 dispatcher。
 
-而 Expert 真正如何计算，则是另一层 Runner；Ascend 路径可以继续看 [moe_runner/ascend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/moe_runner/ascend.py)。
+而 Expert 如何计算，则是另一层 Runner；Ascend 路径可以继续看 [moe_runner/ascend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/moe_runner/ascend.py)。
 
 所以应该把两件事拆开：
 
@@ -509,11 +503,11 @@ Ascend MoE Runner
 → 到了本 Rank 后 Expert GEMM 怎么算
 ~~~
 
-这一区分非常重要。很多性能问题不是“GEMM 慢”，而是 Dispatch / Combine 比 Expert Compute 更贵；反过来也可能通信已经隐藏得很好，瓶颈转移到 Expert GEMM。
+如果 Dispatch / Combine 比专家计算更久，就先检查通信与重排；如果通信被独立工作覆盖，专家 GEMM 又可能成为主要耗时。
 
 ### Collective：AllReduce、AllGather、ReduceScatter、All-to-All
 
-这些是通信原语，不是并行策略。
+这些通信原语服务于 TP、DP、EP 等并行布局。
 
 - **AllReduce**：所有 Rank 贡献局部值，归约后所有 Rank 都得到结果；
 - **AllGather**：每个 Rank 持有一部分，最终所有 Rank 得到完整集合；
@@ -522,7 +516,7 @@ Ascend MoE Runner
 
 从很多常见算法的逻辑上，可以把 AllReduce 理解成 ReduceScatter + AllGather 两阶段，但这是一种语义/算法模型，不意味着底层实现一定机械调用两个 API。
 
-Ascend 环境中还会看到 **HCCL**。它属于 Collective Communication Library 层，是 AllReduce、AllGather、All-to-All 等通信真正落地的重要基础设施之一。
+Ascend 环境中还会看到 **HCCL**。它属于 Collective Communication Library 层，是 AllReduce、AllGather、All-to-All 等通信落地的重要基础设施之一。
 
 **RDMA** 则更下层，它描述远程内存访问/网络数据搬运能力，不是 TP 或 EP 本身。
 
@@ -550,9 +544,7 @@ HCCL / 专用 MoE backend / 网络传输能力
 
 **SP：Sequence Parallelism** 同样涉及 sequence 维，但经典实现往往服务于 TP 场景下 activation 的切分与内存优化，和 CP 的整体上下文分布式语义并不等价。
 
-所以“CP 和 SP 都切 Sequence”只是一层表象，不能作为完整定义。
-
-真正读源码时，要以当前框架对 Group、Tensor Layout 和 Collective 的定义为准。
+区分 CP 与 SP 时，要同时看当前框架划分的 Group、每个 Rank 持有的 Tensor，以及计算中发生的通信。
 
 ## 五、投机解码：Draft、Verify 与 Accept
 
@@ -590,7 +582,7 @@ flowchart TD
 - DSpark Head；
 - N-gram 等非神经路径。
 
-当前 DeepSeek-V4 文档里已经存在 checkpoint 自带 DSpark head 的部署方式；与此同时，Ascend 某些 CI / 模型配置也仍会显式传入 speculative draft model path。也就是说，不能把一个部署形态写成算法定义。
+当前 DeepSeek-V4 文档里已经存在 checkpoint 自带 DSpark head 的部署方式；与此同时，Ascend 某些 CI / 模型配置也仍会显式传入 speculative draft model path。两种部署都服务于 Draft 提议，模型权重的组织方式各有不同。
 
 最稳妥的心智模型是：
 
@@ -602,9 +594,9 @@ Draft 只是假设未来。
 
 Target Verify 才决定候选是否符合 Target Model 的分布/选择规则。
 
-随后 **Accept** 确定最终哪些 Token 真正进入历史。
+随后 **Accept** 确定最终哪些 Token 进入历史。
 
-真正困难的是：Accept 不只是更新 token_ids，还要决定哪些状态正式成为历史，例如：
+Accept 同时推进输出序列与后续可见状态，包括：
 
 - Sequence Length；
 - Position；
@@ -618,7 +610,7 @@ Target Verify 才决定候选是否符合 Target Model 的分布/选择规则。
 
 这也是理解 rollback、compact、commit、reclaim 等词的基础。
 
-### Acceptance Rate 高不等于一定更快
+### 接受长度怎样与周期成本一起决定收益
 
 投机解码收益取决于：
 
@@ -648,9 +640,7 @@ Draft + Verify + KV + Scheduler + Communication 的总成本
 - KV ownership 在哪个坐标系里定义？
 - 如果 Draft 与 Target 的并行布局不同，谁负责 bridge？
 
-因此像 “TP != DP” 的支持问题，本质绝不只是删除一条 assert。
-
-真正的完成标准应该是：
+扩展 TP / DP 组合时，需要让下面几项一起对应新布局：
 
 ~~~text
 允许新的配置
@@ -672,7 +662,7 @@ KV / Sequence State 正确
 
 到这里，我们还主要在 Python / Runtime / Tensor 层。
 
-真正把计算执行到 Ascend 910C，还需要继续往下追。
+把计算执行到 Ascend 910C，还需要继续往下追。
 
 ### Backend：同一高层语义的具体实现选择
 
@@ -683,7 +673,7 @@ SGLang 中经常看到：
 - MoE Runner Backend；
 - Quantization Backend。
 
-Backend 不应该简单理解成“另一种模型算法”。
+Backend 将模型所需的计算映射到具体设备实现，选择算子、布局与执行方式。
 
 它更像：
 
@@ -693,7 +683,7 @@ Backend 不应该简单理解成“另一种模型算法”。
 
 当前注册入口在 [attention_registry.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/attention/attention_registry.py)，Ascend DSV4 具体实现继续进入 [ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)。
 
-### 从 Operator 到 Kernel 不是严格一对一
+### Operator 怎样映射到 Kernel
 
 为了建立直觉，可以画成：
 
@@ -711,18 +701,14 @@ NPU Kernel
 Ascend 910C
 ~~~
 
-但一定要记住：
-
-> **这是一张认知图，不代表一个 Operator 永远对应一个 Kernel。**
-
-现实里可能出现：
+算子到 Kernel 的映射随融合与分派变化：
 
 - 一个高层 Operator 启动多个 Kernel；
 - 多个高层操作被 Fuse；
 - 同一个 Operator 因 Shape / DType / Mode 选择不同 Kernel；
 - 某些路径还包含 Host 侧预处理、Workspace 和额外通信。
 
-所以性能分析不能停在“调用了 Attention 算子”，还要继续问：
+分析 Attention 耗时时，继续确认：
 
 - 最后走了哪个 dispatch branch？
 - Shape / dtype 是什么？
@@ -732,7 +718,7 @@ Ascend 910C
 
 ### CANN、Tiling 与 TilingKey
 
-可以把 CANN 理解成 Ascend AI 软件栈中的关键基础设施集合，而不是单个 Python 包。
+CANN 是 Ascend AI 软件栈中的基础设施集合，向上承接算子调用，向下组织设备执行。
 
 对于自定义/高性能算子，常见的一个思路是：
 
@@ -786,7 +772,7 @@ Weight 8-bit
 Activation 8-bit
 ~~~
 
-但这远远不足以定义一套完整量化方案。
+完整方案还包括下面这些选择：
 
 还必须继续问：
 
@@ -798,11 +784,11 @@ Activation 8-bit
 - 哪些层排除量化？
 - Linear 与 MoE 使用什么 Kernel？
 
-因此“两个模型都叫 W8A8”不代表运行时格式和性能行为相同。
+比较两个 W8A8 模型时，需要将这些格式与执行选择逐项对齐。
 
 SGLang 当前 ModelSlim 入口在 [modelslim.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/quantization/modelslim/modelslim.py)，相关 scheme 继续位于同目录下。
 
-这也是量化排障时最值得建立的习惯：
+排查量化路径时，对齐以下配置：
 
 > 不要停在“模型是 W8A8”，要继续追到“这一个 Layer 的 Weight/Activation 具体是什么格式，最终被哪个 Kernel 消费”。
 
@@ -863,7 +849,7 @@ ForwardBatch
 在 MoE 阶段又怎样重新解释
 ~~~
 
-也就是从“知道 TP/DP/EP 的定义”，走到真正能分析 parallel layout。
+也就是从“知道 TP/DP/EP 的定义”，走到能分析 parallel layout。
 
 ### 如果你在看 DSpark / 投机解码
 
@@ -893,7 +879,7 @@ ForwardBatch
 
 ### 把术语放回正在排查的问题
 
-真正值得长期记住的，不是几十个孤立缩写，而是下面这条因果链：
+把这些词放回一次推理，可以沿下列关系连接起来：
 
 ~~~mermaid
 flowchart TD
@@ -922,7 +908,7 @@ flowchart TD
 
 看到 **attn_tp_group**，不要只问“TP 是什么”，而要问 Group 中包含哪些 Global Rank、当前 Attention DP/TP 坐标系是什么。
 
-看到 **DeepEP**，先判断它是 Dispatch/Combine 通信层，而不是 Expert GEMM 本身。
+看到 **DeepEP**，沿 Dispatch/Combine 追踪 Token 交换，再到 Expert Runner 查看 GEMM。
 
 看到 **TilingKey**，先判断你已经进入 Operator → Kernel Dispatch 层。
 

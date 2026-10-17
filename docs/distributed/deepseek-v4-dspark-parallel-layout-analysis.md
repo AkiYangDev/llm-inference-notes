@@ -4,7 +4,7 @@
 
 要理解这个差异，需要分别看 Draft 的并行上下文、各 Rank 的 Token 计数，以及投机决策同步。下面沿这三处源码展开：先定位限制，再说明现有布局如何衔接，最后列出验证更宽 Attention TP 所需的检查项。
 
-> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。讨论 DeepSeek-V4 MoE draft + DSpark V2 + DP Attention。限制发生在通用 DSpark worker，而不是某个 NPU kernel，因此不能把它表述成“昇腾硬件不支持 TP≠DP”；但 NPU Draft 仍有 ModelSlim、独立 vocab modules、shared-expert fusion 等平台特有边界。
+> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。讨论 DeepSeek-V4 MoE draft + DSpark V2 + DP Attention。限制位于通用 DSpark worker 的配置检查中。NPU Draft 还涉及 ModelSlim、独立 vocab modules 和 shared-expert fusion 等平台分支，后文分别说明。
 
 ## 一、启动限制发生在哪里
 
@@ -35,15 +35,15 @@ draft_is_moe = True
 attn_tp_size > 1
 ~~~
 
-所以 TP32 / DP16 在真正创建 DeepSeek-V4 draft worker 之前就被拒绝。
+所以 TP32 / DP16 在创建 DeepSeek-V4 draft worker 之前就被拒绝。
 
-这条 guard 没有 `is_npu()` 判断，也没有 HCCL 判断。因此源码直接能证明的是：
+这条 guard 没有 `is_npu()` 判断，也没有 HCCL 判断。这项限制位于：
 
-> **当前限制属于 DSpark DeepSeek-V4 MoE draft 的 runtime correctness guard，而不是 Ascend NPU 硬件能力声明。**
+> **这项限制由 DSpark Worker 的配置检查实施，位于通用 MoE Draft Runtime 中。**
 
 报错文本进一步给出一个重要线索：`attn_tp > 1 corrupts the MoE-under-DP all-reduce`
 
-但这仍然只是 guard 作者对已知 failure mode 的描述。仅凭这一句，还不能严谨地确定“第几个 all-reduce、哪一个 Tensor、哪一个 Rank 首先错误”。后面会单独区分已知事实和待验证根因。
+报错把线索指向 MoE-under-DP 的 all-reduce。定位还要向前走一步：对照各 Rank 的 Tensor 行归属与归约结果，找到第一次分歧。
 
 ## 二、Dense Draft 与 MoE Draft 的并行上下文
 
@@ -66,7 +66,7 @@ return draft_tp_context(
 )
 ~~~
 
-`draft_tp_context()` 本质上调用 `patch_tensor_parallel_group(tp_group)`。源码注释写的是：`Draft model doesn't use dp and has its own tp group.`
+`draft_tp_context()` 调用 `patch_tensor_parallel_group(tp_group)`。源码注释写的是：`Draft model doesn't use dp and has its own tp group.`
 
 固定源码：[`draft_tp_context()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L706-L718)。
 
@@ -90,7 +90,7 @@ _draft_is_moe = True
 => DSparkWorkerV2._draft_context() = nullcontext()
 ~~~
 
-这是**源码事实**。
+
 
 ### MoE Draft 为什么保留跨 DP 的参与关系
 
@@ -105,13 +105,9 @@ dp_moe_sync = (
 
 随后 Draft forward 会额外填充 DP/MoE 同步 metadata；空闲 Rank 也需要执行 `run_idle_participation()` 进入 draft model forward。
 
-所以可以合理推断：
+这些调用表明，MoE Draft 的执行保留了跨 DP / MoE Rank 的同步与 collective 参与关系。这也解释了它与 Dense Draft 的上下文选择为何不同：整个 Forward 要继续使用 MoE 所需的通信拓扑。
 
-> **MoE draft 不能简单像 Dense draft 那样把整个模型世界缩成一个 DP-local `attn_tp_group`，因为 Draft MoE path 还依赖跨 DP / MoE rank 的同步与 collective participation。**
-
-但这句话属于**由代码结构支持的设计推断**，不是某条源码注释直接宣布的 root cause。
-
-还有一个更细的点：`DraftBlockProposer._base_logits_context()` 在 `dp_moe_sync=True` 时，会短暂使用 `draft_tp_context(attn_tp_group)` 来计算 proposal-side base logits。也就是说，代码并不是“MoE draft 永远不用 attn_tp_group”，而是：
+还有一个更细的点：`DraftBlockProposer._base_logits_context()` 在 `dp_moe_sync=True` 时，会短暂使用 `draft_tp_context(attn_tp_group)` 来计算 proposal-side base logits。`attn_tp_group` 在这两个阶段的用途不同：
 
 ~~~text
 Draft model forward / MoE
@@ -127,7 +123,7 @@ Draft model forward / MoE
 
 这里需要区分 draft 模型参数和实际通信布局。
 
-`ScheduleBatch.global_num_tokens` 在 decode-family DP 同步语义里并不是一个 scalar“全局 Token 总数”。它是：
+在 decode-family DP 同步中，`ScheduleBatch.global_num_tokens` 保存：
 
 > **每个相关 Rank 的原始同步计数列表；在普通 decode-family round 中，这些原始值是 per-rank request counts。**
 
@@ -235,7 +231,7 @@ TP32 / DP16 / CP1 时，这就是每个 DP replica 内的 2-rank Attention TP gr
 
 但必须非常清楚：
 
-> **`SpecTpSync` 不是 DP/MoE synchronization mechanism。**
+> **`SpecTpSync` 在所选 TP Group 内同步投机决策，DP / MoE 的模型通信另由对应路径完成。**
 
 它的类注释是：`Broadcasts a speculative decision from rank 0 to its TP group.`
 
@@ -291,17 +287,7 @@ Draft MoE distributed execution
 
 ## 五、Planner 的 DP Tier Gather 条件
 
-如果只看到：
-
-~~~python
-and get_parallel().attn_tp_size == 1
-~~~
-
-很容易写成：
-
-> DSpark Verify Planner 只支持 attn_tp=1。
-
-这是错误的泛化。
+`attn_tp_size == 1` 出现在 DP-tier gather 的启用条件中：
 
 真实代码里这个条件属于：
 
@@ -326,29 +312,15 @@ not scheduler skip all-gather
 
 固定源码：[`DSparkVerifyPlanner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_planner.py)。
 
-所以源码事实是：
+`attn_tp_size == 1` 与上面的其他条件一起，开启 compact ragged-verify 的 DP-tier token-count gather。它控制的是这一条优化分支。
 
-> **`attn_tp_size == 1` 是 compact ragged-verify 下 DP-tier token-count gather 这条优化路径的启用条件之一。**
-
-它不是：`整个 Planner 的全局合法性条件`
-
-也不能单独拿来证明：`TP32/DP16 的根因就在 Verify Planner`
-
-当前 DSparkWorker guard 已经在 Planner 初始化之前阻止 MoE draft 的 `attn_tp_size>1`，所以 Planner 的其他路径是否能在放开 guard 后完整工作，还需要实测。
-
-这个条件最多告诉我们：
-
-> **至少部分 DP-specific verify scheduling / graph-tier logic 是在 pure DP-attention（attn_tp=1）的 topology 下设计和测试的。**
-
-这是风险信号，不是已确认 root cause。
+当前 Worker 在 Planner 初始化前就拒绝 MoE Draft 的 `attn_tp_size>1`。因此，要验证更宽的 Attention TP，需要先处理 Worker 限制，再检查 Planner 的宽度选择、计数与 Graph Tier。
 
 ## 六、验证更宽 Attention TP 需要哪些证据
 
-结合这些调用关系，可以得到：
+继续排查时，需要看 Draft 实际复用了哪些布局转换。
 
-> **不能把当前问题简单归因为“Draft 缺少 target 的 token split / all-gather”。**
-
-原因是 DeepSeek-V4 DSpark stage 直接继承 `DeepseekV4DecoderLayer`，其 `_run_ffn()` 明确调用：
+DeepSeek-V4 DSpark stage 直接继承 `DeepseekV4DecoderLayer`，其 `_run_ffn()` 明确调用：
 
 ~~~python
 self._run_moe_ffn_dp_sync(
@@ -361,7 +333,7 @@ self._run_moe_ffn_dp_sync(
 
 固定源码：[`DSparkV4Stage._run_ffn()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_dspark.py#L701-L778)。
 
-也就是说，target model 那套 Attention→MoE bridge 并不是完全与 Draft 隔离。
+Draft 因此复用了这部分 Attention→MoE bridge，排查时继续检查调用前后的行布局与计数。
 
 ### 从限制定位到运行验证
 
@@ -375,7 +347,7 @@ self._run_moe_ffn_dp_sync(
 | Graph 与 Verify 模式 | 在正确 Eager 基础上分别验证 | padding、tier 选择或 metadata 是否改变语义？ |
 | Ascend 目标环境 | 使用实际 ModelSlim、通信后端与部署拓扑 | 平台分支能否保持同样的正确性？ |
 
-这里的实验不是部署建议：单独去掉 guard 不能证明该拓扑可用。应先找到第一处错误，再决定修复落在 bridge、metadata 还是后续执行路径。
+验证顺序是先建立正确基线，再逐边界比较更宽拓扑的输出。第一处差异会指明修复应落在 bridge、metadata 还是后续执行路径。
 
 ### 按依赖顺序推进验证
 
@@ -397,7 +369,7 @@ TP32 / DP16 + DSpark ON
 → 再扩展 graph / multi-request / cross-node
 ~~~
 
-最值得记录的 Trace 字段：
+按请求与轮次记录以下 Trace 字段：
 
 ~~~text
 global_rank
@@ -441,7 +413,7 @@ vs
 Ascend NPU / ModelSlim / HCCL backend-specific correctness
 ~~~
 
-不能因为 CUDA eager 下通过，就直接宣布 Ascend 跨机 TP32/DP16 已完成。
+CUDA Eager 结果可作为对照，Ascend 跨机配置则要覆盖上面的 ModelSlim、HCCL 与 Graph 路径。
 
 ## 七、区分模型布局、计数与决策
 

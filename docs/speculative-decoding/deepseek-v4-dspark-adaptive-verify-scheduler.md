@@ -2,7 +2,7 @@
 
 同一 batch 中，有的请求后几枚 Draft 很可能被接受，有的请求可能很快遇到不匹配。如果 Verify 预算有限，把相同长度分给所有请求，未必能得到最多的有效输出。
 
-DSpark 的自适应调度用置信度估计前缀存活概率，再结合执行成本分配 `verify_lens`。本文先用预算分配解释它在优化什么，再区分训练目标、运行时校准与成本模型。最后回到执行路径：`cap-accept` 只限制接受范围，真正进入 compact 才会缩减逻辑输入行数；本文固定版本的 Ascend 910C 配方仍使用 static。
+DSpark 的自适应调度用置信度估计前缀存活概率，再结合执行成本分配 `verify_lens`。本文先用预算分配解释它在优化什么，再区分训练目标、运行时校准与成本模型。最后回到执行路径：`cap-accept` 只限制接受范围，进入 compact 才会缩减逻辑输入行数；本文固定版本的 Ascend 910C 配方仍使用 static。
 
 <details markdown="1">
 <summary>版本与源码入口</summary>
@@ -15,7 +15,7 @@ DSpark 的自适应调度用置信度估计前缀存活概率，再结合执行�
 | DeepSeek DeepSpec | <code>005e03b81cec38b7da6399833d609ee89a2587f2</code> |
 | 核对日期 | 2026-09-21 |
 
-证据边界也先说明：DeepSpec 是 DeepSeek 官方公开的 DSpark 训练实现，可以确认公开 DSpark Confidence Head 的训练语义；但本文没有找到公开的 DeepSeek-V4-Flash 专用训练配置，可以证明实际 V4 checkpoint 完全按同一训练 recipe 产生。因此本文会区分“官方公开 DSpark 训练语义”和“V4 checkpoint 在 SGLang 中的运行时消费语义”。
+训练侧以 DeepSeek 公开的 DeepSpec DSpark 实现为例，运行侧分析 SGLang 怎样消费 V4 Checkpoint 的 Confidence Head。V4-Flash 的完整训练配方未公开，下面分别沿这两套实现解释标签与校准。
 
 </details>
 
@@ -104,7 +104,7 @@ s3 = c1*c2*c3
 
 因为每个 c 都在 0 到 1 之间，所以同一 Request 内：`s1 >= s2 >= s3 >= ...`
 
-前缀概率随位置不增，但仅靠这一点还不足以处理相等概率。固定实现对并列值优先选较早的位置，再按请求编号排序，才保证所选位置构成前缀。最终得到：`verify_lens = [l1, l2, ..., lB]`
+前缀概率随位置不增；出现并列值时，实现优先选择较早的位置，再按请求编号排序，从而保留前缀结构。最终得到：`verify_lens = [l1, l2, ..., lB]`
 
 并通过 <code>SpecTpSyncSite.DSPARK_PLAN</code> 在相关 TP Group 内同步。
 
@@ -237,7 +237,7 @@ per-position Temperature
 calibrated cumulative survival
 ~~~
 
-两边不是严格同一个 label space。
+两侧标签分别对应分布重叠程度与 Greedy 前缀是否匹配。
 
 ### STS 更像运行时语义桥
 
@@ -256,7 +256,7 @@ S_k = product(i<=k) c_i
 
 > **把训练为 probabilistic conditional accept-rate predictor 的 checkpoint head，校准成当前 calibration workload 下更可信的 cumulative greedy-prefix survival signal。**
 
-它并不是简单地“对训练时同一标签做温度缩放”。
+校准在这里将模型分数映射到运行时观察的 Greedy 前缀事件。
 
 ### Sampling 模式是一个重要边界
 
@@ -266,13 +266,7 @@ S_k = product(i<=k) c_i
 
 如果真实服务使用 temperature / top-p / top-k / rejection sampling，最终 Accept Decision 的随机变量不再等同于这个 greedy label。
 
-所以不能写：
-
-> STS 校准后就是任意 sampling policy 的真实 acceptance probability。
-
-更严谨的说法是：
-
-> **当前 STS 把 Confidence cumulative survival 校准到 greedy Target-argmax prefix correctness；对其它 sampling policy 是否无偏，需要单独验证。**
+STS 当前校准到 Greedy Target-argmax Prefix Correctness。服务切换到其他 Sampling Policy 后，接受事件也随之变化，对应概率需要按该 Policy 的实际结果重新检查。
 
 ## 三、tau 怎样对应期望输出推进
 
@@ -363,7 +357,7 @@ E[sum(commit_lens)]
 B + sum(survival)
 ~~~
 
-因此 tau 的结构不是拍脑袋 heuristic；在概率事件严格对齐时，它就是 expected committed progress。
+当 Survival 描述的概率事件与实际接受事件一致时，tau 等于期望提交长度。
 
 ### Cap 本身也没有破坏这个推导
 
@@ -409,7 +403,7 @@ current survival
 
 所以最稳妥的结论是：
 
-> **tau 是一个具有严格期望解释的 committed-progress surrogate；只有当 survival 与当前 acceptance event 对齐、状态时滞和二次调度修正都可忽略时，它才接近无偏的 expected committed progress。**
+> **tau 用于估计提交长度。Survival 与接受事件对齐，且状态时滞和二次调度修正足够小时，这项估计接近期望提交长度。**
 
 ## 四、SPS 成本模型与 Graph Tier
 
@@ -539,7 +533,7 @@ Compact/off-diagonal profiling 会记录真实 graph tier，还会检查：`grap
 
 > **带真实 Graph tier discontinuity 的 trace 经过 64-bin additive OLS 后，还能恢复正确的 cliff 和最优 budget。**
 
-所以 Additive SPS 的严格定位应该是：
+Additive SPS 在这里承担的角色是：
 
 > **更能表达 Request-count effect 的经验 cost approximation，而不是 graph-tier-aware 精确模型。**
 
@@ -610,7 +604,7 @@ Target 输入仍是固定：`B * verify_num_draft_tokens`
 
 ### compact
 
-compact 才会构造 <code>RaggedVerifyLayout</code>，真正压紧 Query rows。
+compact 才会构造 <code>RaggedVerifyLayout</code>，压紧 Query rows。
 
 例如：`verify_lens = [2,1,4]`
 
@@ -686,7 +680,7 @@ actual_seq_lengths_q =
 
 这等价于假设每个 Request 的 Query width 都是同一个 N。
 
-真正的 compact layout 例如：`verify_lens = [2,1,4]`
+ compact layout 例如：`verify_lens = [2,1,4]`
 
 需要的是：
 
@@ -714,13 +708,9 @@ Graph replay context 也维护固定：`tokens_per_bs`
 
 并基于它构造 compressor position、seqused、sparse metadata 和 kernel metadata。
 
-因此即使只讨论 eager compact，也不能因为 Worker 能构造 RaggedVerifyLayout 就宣称 NPU 后端已经语义正确。
+因此，NPU 的适配工作落在 Query 与 Compressor Metadata 上：将固定 `n_draft`、`tokens_per_bs` 改为各请求的 Verify 长度，再让这些长度与 Query Rows、位置、Sparse Metadata 和 Kernel 实参对应。
 
-当前更准确的状态是：
-
-> **没有看到一个单一“禁止 NPU compact”的总 guard，但 NPU DSV4 attention / compressor metadata 还没有实现与 CUDA ragged layout 对等的 per-request Query geometry。absence of guard 不等于 support。**
-
-### 放开 910C compact 至少需要这些能力
+### 910C Compact 的适配工作
 
 | 层 | 当前状态 / 缺口 |
 |---|---|
@@ -741,7 +731,7 @@ Graph replay context 也维护固定：`tokens_per_bs`
 
 官方 910C DSV4 配置同时存在 TP、DP Attention、MoE EP、DeepEP 和 DSpark。
 
-Compact 下不同 DP rank 的本地 Request 数和 <code>sum(verify_lens)</code> 都可能不同，但相关 collective 不能让各 Rank 随意选择互不一致的 Graph tier。
+Compact 下不同 DP rank 的本地 Request 数和 <code>sum(verify_lens)</code> 都可能不同，相关 Rank 的 Graph Tier 选择还需要满足同一次 Collective 的形状与参与约定。
 
 Planner 已经存在：
 
@@ -755,7 +745,7 @@ DP-global max token tier
 
 以及 idle-rank participation 机制。
 
-但把它真正带到 Ascend 910C，需要同时验证：
+但把它带到 Ascend 910C，需要同时验证：
 
 ~~~text
 ragged Attention geometry
@@ -878,22 +868,18 @@ commit_lens/new_seq_lens
 
 ### 实现支持范围对照
 
-| 结论 | 当前证据 |
+| 组件 | 当前实现方式 |
 | --- | --- |
-| Confidence Head 是 per-position scalar predictor | 源码确认 |
-| DeepSpec 公开训练 target 为 <code>1-TV(q,p)</code> | 官方训练源码确认 |
-| V4 checkpoint 公开训练 recipe 与 DeepSpec 完全一致 | **未公开证明** |
-| STS label 是 binary greedy prefix correctness | SGLang 源码确认 |
-| Training target 与 STS label 严格同构 | **否** |
-| 事件对齐时 tau 等于期望 commit progress | 由 <code>commit_lens=correct_len+1</code> 可直接推导 |
-| 一般 Runtime 中 tau 是无偏真值 | **否，只是 surrogate** |
-| 1D SPS 可表达显式 cliff | 数据结构与单测确认 |
-| Additive SPS 一定恢复 Graph tier cliff | **未证明，存在平滑风险** |
-| CUDA DSV4 支持 ragged verify graph | capability 与 metadata 源码确认 |
-| NPU DSV4 支持 ragged verify graph | **当前未 opt-in** |
-| NPU DSV4 eager Verify 已消费 ragged verify_lens | **当前 metadata 仍固定 draft_token_num** |
-| 当前 Ascend 910C 官方 DSpark recipe | 注册 CI 配置使用 static；配置存在本身不代表测试已通过 |
-| 910C compact 性能收益 | **需 backend 补齐后实测** |
+| Confidence Head | 每个位置输出一个标量 |
+| DeepSpec 训练标签 | `1-TV(q,p)`；V4 完整训练配方未公开 |
+| STS 标签 | Greedy 前缀正确性的二值结果 |
+| tau | 根据 Survival 估计提交长度 |
+| 1D SPS | 直接保存吞吐曲线，可表达离散变化 |
+| Additive SPS | 拟合成本组成，Graph Tier 切换处需检查误差 |
+| CUDA DSV4 Ragged Verify | 有对应 Capability 与 Metadata 路径 |
+| NPU DSV4 Verify | 当前 Metadata 使用固定 Draft 宽度，注册配置采用 static |
+
+NPU Compact 的适配完成后，再用相同负载比较 Verify 时间、整轮耗时与有效产出。
 
 把前面的数据流连起来：
 
@@ -942,7 +928,7 @@ NPU DSV4 Target Verify
 SGLANG_RAGGED_VERIFY_MODE=static
 ~~~
 
-下一步真正值得做的不是再调一个 Confidence threshold，而是：
+对 Ascend 910C，下一步先完成后端输入几何的适配：
 
 > **先让 DeepseekV4AscendAttnBackend 正确消费 RaggedVerifyLayout，把 Query / Compressor / Graph metadata 从 fixed-width 改成 per-request verify_lens，再逐层恢复 TP / DP / DeepEP 能力。**
 
