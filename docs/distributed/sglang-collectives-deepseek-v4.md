@@ -1,21 +1,11 @@
-# SGLang 里的 AllReduce、AllGather、ReduceScatter、All-to-All 到底在搬什么？用 DeepSeek-V4 画清 Group、Tensor 和通信方向
+# SGLang Collective：从张量分片到 Attention 与 MoE 通信
 
-上一篇 [SGLang 里的 Rank 和 Group 到底是什么？](sglang-rank-group-deepseek-v4.md) 解决了一个基础问题：Rank 表示进程在某套并行坐标系中的位置，Group 表示这次通信谁和谁是一组。
+两个 Rank 手里各有一个 Tensor，接下来该用 AllReduce 还是 AllGather，取决于它们之间的关系：如果是同一结果的局部贡献，就需要求和；如果是不同区间的分片，就需要拼接；如果 Token 要送到拥有目标 Expert 的 Rank，则需要改变数据归属。
 
-再往下一层，真正决定数据怎么流动的是 Collective。看到 all_reduce、all_gather_into_tensor、reduce_scatter_tensor、buffer.dispatch、buffer.combine 这些调用时，只记住“求和、收集、全互换”还不够。真正要问的是：
+下面先用小张量看清四种 collective 的输入和输出，再进入 DeepSeek-V4 的 Attention、DP Attention 与 MoE。每次通信都追问同一件事：通信前谁持有什么，通信后谁还需要什么。
 
-~~~text
-通信前：
-每个 Rank 手里是什么 Tensor？
-
-这些 Tensor 之间是什么关系？
-是不同 shard，还是同一个结果的 partial contribution？
-
-通信后：
-每个 Rank 应该拿完整结果，
-还是只拿自己的 shard，
-还是把 Token 的 owner 改成 Expert owner？
-~~~
+<details markdown="1">
+<summary>版本与源码入口</summary>
 
 本文固定到以下 SGLang 源码：
 
@@ -37,15 +27,11 @@ commit: 176dbcb85d3b7737564e4911947035cc0af65f0a
 
 本文区分两层：Collective 的高层数据语义，以及 SGLang 当前版本选择的具体实现。高层语义相同，不代表底层一定调用同名的通用 API。
 
----
+</details>
 
-## 一、先只看 Tensor：四种 Collective 到底把数据变成什么
+## 一、四种 Collective 的输入与输出
 
-假设有四个 Rank：
-
-~~~text
-Group = [R0, R1, R2, R3]
-~~~
+假设有四个 Rank：`Group = [R0, R1, R2, R3]`
 
 ### AllReduce：同一个逻辑结果的局部贡献需要求和
 
@@ -153,9 +139,7 @@ R3: [D0 D1 D2 D3]
 | ReduceScatter | 同一逻辑 Tensor 的 partial contribution | 每人拿 reduced 结果的一块 | 是 | 否 |
 | All-to-All | 每人持有发往不同目标的数据 | 每人只收发给自己的数据 | 否 | 否 |
 
----
-
-## 二、TP Linear 为什么天然出现 AllGather 和 AllReduce
+## 二、TP Linear 需要什么通信
 
 先看 Y = XW。
 
@@ -205,9 +189,7 @@ P0/P1 都只是 partial sum，完整结果是 P0+P1，因此天然需要 Reduce�
 
 > 不同 Rank 手里是不同位置的 shard，考虑 Gather；是同一个逻辑结果的 partial contribution，考虑 Reduce。
 
----
-
-## 三、DeepSeek-V4 Attention：attn_tp_all_reduce 的真实边界
+## 三、Attention 输出在哪个 Group 内归约
 
 把 DeepSeek-V4 简化成“Attention 后做 AllReduce”不够精确。当前源码真正的归约边界在 Attention 输出投影 wo_b 的 RowParallel partial output。
 
@@ -222,11 +204,7 @@ attn_tp_size == global tp_size
 
 ### 情况一：ATTN_TP 等于整个 TP Group
 
-如果：
-
-~~~text
-attn_tp_size == tp_size > 1
-~~~
+如果：`attn_tp_size == tp_size > 1`
 
 wo_b 是 RowParallelLinear，局部 GEMM 得到的是同一个 Attention output 的 partial contribution。此时 RowParallelLinear 内部直接使用 global TP Group AllReduce。
 
@@ -247,11 +225,7 @@ DP = 8
 ATTN_TP = 2
 ~~~
 
-此时：
-
-~~~text
-1 < attn_tp_size < global tp_size
-~~~
+此时：`1 < attn_tp_size < global tp_size`
 
 如果 wo_b 直接做 global TP AllReduce，就会把不同 Attention-DP shard 的结果错误相加。
 
@@ -281,11 +255,7 @@ ATTN_TP Group AllReduce
 
 ### 情况三：ATTN_TP=1
 
-如果 TP=DP，例如 TP8/DP8：
-
-~~~text
-attn_tp_size = 1
-~~~
+如果 TP=DP，例如 TP8/DP8：`attn_tp_size = 1`
 
 每个 Attention-DP shard 只有一个 Rank，没有 partial contribution 需要跨 Rank 求和，因此无需 Attention TP AllReduce。
 
@@ -299,9 +269,7 @@ attn_tp_size = 1
 
 当前 mHC AllReduce fusion 也没有打破这个边界：相关路径明确要求 global TP 等于 ATTN_TP 且等于 4，并要求 wo_b.reduce_results=True，因此它属于 full-TP reduction 的融合实现，不是 DPA subgroup 的第二次归约。
 
----
-
-## 四、dp_gather_replicate：三种实现为什么语义等价
+## 四、DP Attention 怎样恢复完整 Token 行
 
 DeepSeek-V4 从 DPA Attention 进入没有 A2A backend 的 MoE 路径时，会调用 dp_gather_replicate。
 
@@ -331,11 +299,7 @@ SUM_LEN
 非 elastic WORLD gather
 ~~~
 
-因为 ATTN_TP=1，每个 DP shard 天然只有一个 contributor，所以可以直接按照每个 DP Rank 的真实 token count 做 variable-length gather：
-
-~~~text
-[M0,H] + [M1,H] + ... → [M_global,H]
-~~~
+因为 ATTN_TP=1，每个 DP shard 天然只有一个 contributor，所以可以直接按照每个 DP Rank 的真实 token count 做 variable-length gather：`[M0,H] + [M1,H] + ... → [M_global,H]`
 
 ### SUM_LEN + AllReduce：互不重叠的非零区间
 
@@ -358,11 +322,7 @@ DP2/ATP0: [0 0 0 0 E F]
 DP2/ATP1: [0 0 0 0 0 0]
 ~~~
 
-然后对 full TP Group 做 SUM AllReduce：
-
-~~~text
-[A B C D E F]
-~~~
+然后对 full TP Group 做 SUM AllReduce：`[A B C D E F]`
 
 因为每个逻辑 row 只有一个真实 contributor。
 
@@ -403,9 +363,7 @@ ATP1: [C D]
 
 普通非 elastic 主线主要围绕 TP Group；Elastic EP 场景下部分 gather 可以切到 expanded WORLD Group，因此不能把 TP Group 写成所有配置下永远唯一的参与者。
 
----
-
-## 五、ReduceScatter：什么时候真正替代 post-expert AllReduce
+## 五、ReduceScatter 怎样合并归约与分发
 
 DPA → MoE 不等于“一定 Gather 后 ReduceScatter”。当前 no-A2A 路径至少有三种 combine 方式。
 
@@ -506,9 +464,7 @@ C. skip post-expert reduce → ReduceScatter
 
 只有 B/C 才是真正“用 ReduceScatter 替代 post-expert AllReduce”。
 
----
-
-## 六、Ascend 910C：DeepEP 和 FuseEP 都做 A2A，但数据面不是一条路径
+## 六、Ascend DeepEP 与 FuseEP 的执行路径
 
 MoE 的 All-to-All 本质是 owner migration：
 
@@ -636,9 +592,7 @@ final hidden
 | 核心 backend | DeepEP/ZBAL Buffer | fused_deep_moe |
 | 高层语义 | Token owner ↔ Expert owner | Token owner ↔ Expert owner |
 
----
-
-## 七、重新串起 DeepSeek-V4 一层：真正变化的是 Tensor ownership
+## 七、沿一层模型追踪数据归属
 
 把上一篇 Rank/Group 和这一篇 Collective 连起来，可以得到一条稳定的源码阅读路径：
 
@@ -666,37 +620,15 @@ flowchart TD
     L --> M["post-expert AllReduce + dp_scatter"]
     L --> N["ReduceScatter / ReduceScatterV"]
 
-    H -->|"DeepEP"| O["layout → dispatch"]
-    O --> P["Local Expert Compute"]
-    P --> Q["combine"]
+    H -->|"DeepEP"| O["按 Attention TP 拆分 Token 行"]
+    O --> O2["DeepEP Dispatch"]
+    O2 --> P["Local Expert Compute"]
+    P --> Q["DeepEP Combine"]
+    Q --> Q2["按需 AllGather 恢复 Attention 行"]
 
     H -->|"Ascend FuseEP"| R["fused_deep_moe"]
 ~~~
 
-真正的因果链是：
+DeepEP 分支中的拆分和恢复适用于 `attn_tp_size>1` 的对应 bridge；宽度为 1 时不需要这组 Attention TP 行转换。图中的 no-A2A 与 FuseEP 是不同后端路径，应按实际配置选择。
 
-~~~text
-Parallel Layout
-    ↓
-决定当前 Rank 拥有什么 Tensor
-    ↓
-下一阶段需要什么 ownership
-    ↓
-决定 Reduce / Gather / Scatter / A2A 语义
-    ↓
-SGLang 再根据 padding、shape、backend、硬件选具体实现
-~~~
-
-以后看到任何通信代码，可以固定问五个问题：
-
-1. 哪个 Group 在通信？
-2. 通信前每个 Rank 的 Tensor 语义和 shape 是什么？
-3. 不同 Rank 的数据是 shard，还是 partial contribution？
-4. 下一阶段希望每个 Rank 拥有什么？
-5. 当前代码是通用 Collective API，还是专用 backend 的 fused data plane？
-
-最后可以把整套方法压成一句话：
-
-> **Group 决定和谁通信，Tensor relationship 决定要不要 Reduce，ownership transition 决定要 Gather、Scatter 还是 A2A，backend 决定这件事最终怎么执行。**
-
-当这四层能同时看清，TP、DPA、MoE、DeepEP、FuseEP 就不再是几个互相独立的模块，而是同一份 hidden states 在不同并行阶段不断改变 owner 的过程。
+读通信代码时，先写下通信前各 Rank 持有的 Tensor：它是不同位置的分片，还是同一结果的局部贡献？再确定下游需要完整结果还是分片结果，最后确认所用 Group 和 backend。这四项信息比单独看到 `all_reduce` 或 `dispatch` 的函数名更能说明数据在做什么。

@@ -1,52 +1,12 @@
-# 一个 Tensor 明明很小，为什么却偷偷占着整个 Batch？
+# 小 Tensor 为什么保活大内存：SGLang PR #39120 的 View 缓存修复
 
-> 从 SGLang PR #39120 理解 PyTorch View、Storage、Ownership 与 Cache Memory Accounting
+一个逻辑大小只有 0.8 MiB 的 Tensor，可能让约 7.8 MiB 的底层存储一直无法释放。原因是它来自一个更大的 batch Tensor 的切分：小 Tensor 保留了对整块 Storage 的引用。
 
-写推理系统时，我们经常会用一个很自然的公式估算 Tensor 内存：
-
-```text
-Tensor bytes = numel × element_size
-```
-
-比如一个 BF16 Tensor 有 100 万个元素，那么逻辑 payload 大约就是 2 MB。大多数时候，这个直觉没问题。
-
-但如果这个 Tensor 是从另一个更大的 Tensor `split`、slice 或 view 出来的呢？
-
-这时候可能发生一件很反直觉的事：**你看到的是一个很小的 Tensor，但只要它还活着，整个 Batch 的大块底层 Storage 就可能继续活着。**
-
-SGLang PR [#39120](https://github.com/sgl-project/sglang/pull/39120) 修的就是这样一个问题：
-
-```text
-Fix multimodal embedding cache retaining full batches through views
-```
-
-| 项目 | 信息 |
-| --- | --- |
-| PR | [sgl-project/sglang #39120](https://github.com/sgl-project/sglang/pull/39120) |
-| 状态 | merged |
-| Merge commit | `24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97` |
-| 改动规模 | 2 files / +11 / -10 |
-| 难度 | ★★☆☆☆ |
-| 类型 | Memory / Correctness |
-| 核心知识 | Tensor View、Storage、Ownership、Lifetime、Cache Accounting |
-| 为什么值得读 | 用十几行代码暴露“逻辑对象大小 ≠ 实际保活资源”这一类非常典型的系统 Bug |
-| 适用边界 | SGLang Multimodal Embedding Cache；本文借此解释通用 PyTorch Storage 语义 |
-
-> **30 秒结论**
->
-> SGLang 的批量多模态编码在返回一个整体 Tensor 时，会用 `torch.split()` 拆成多个 item embedding。PyTorch 官方文档将 `split()` 列为 View operation：这些小 Tensor 可以共享同一个底层 Storage，而不是各自拥有独立 allocation。
->
-> 旧 Cache 却用 `numel() * element_size()` 统计 Entry 大小。于是一个逻辑上只有 0.8 MiB 的小 View，可能让一次历史 Batch 的 7.8 MiB Storage 继续存活，而 Cache 账面只记 0.8 MiB。
->
-> PR #39120 的修复是：让 Cache 看到真实 backing storage；当一个**准备入库**的 Tensor 其 Storage 大于自身 payload 时，先 `clone()` 成独立紧凑 Storage，再缓存。
->
-> 核心 invariant 是：**Cache Budget 必须约束 Cache 真正保持存活的资源，而不只是缓存对象表面可见的逻辑 payload。**
+SGLang [PR #39120](https://github.com/sgl-project/sglang/pull/39120) 修复了多模态 Embedding Cache 中的这一问题。旧缓存按可见元素大小记账，却可能保活更大的资源；补丁在需要时把入库的 View 复制成独立存储。下面用一个最小例子解释引用、内存计数和复制时机。
 
 本文固定到 `sgl-project/sglang@24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97`。PyTorch View / Storage 语义参考官方 [Tensor Views](https://docs.pytorch.org/docs/main/tensor_view.html)、[Storage](https://docs.pytorch.org/docs/2.14/storage.html) 与 [`Tensor.expand`](https://docs.pytorch.org/docs/stable/generated/torch.Tensor.expand.html) 文档。
 
----
-
-## 一、问题：为什么一个 0.8 MiB Tensor，可能让 7.8 MiB 一直活着？
+## 一、小 View 怎样保活整个 Batch
 
 先不看 SGLang。假设一次批量多模态编码处理 10 个 item，每个 item 产生 100 个 token，hidden size 为 4096，dtype 为 BF16。
 
@@ -133,9 +93,7 @@ Batch C → 只剩一个小 View 被缓存 → pin 住 Batch C Storage
 
 这更准确地叫 **unintended retention**，而不是“内存彻底泄漏”：Storage 仍然有合法引用，只是活得比系统真正需要的更久。
 
----
-
-## 二、最小背景：Payload Size 和 Backing Storage Size 为什么不是一回事？
+## 二、逻辑大小与底层 Storage
 
 理解这个 PR，最重要的是分清两个数字。
 
@@ -155,11 +113,7 @@ tensor.untyped_storage().nbytes()
 
 `untyped_storage()` 返回 Tensor 的底层 UntypedStorage；Storage 是保存实际字节的数据容器。
 
-对一个普通独立 Tensor：
-
-```text
-payload bytes ≈ storage bytes
-```
+对一个普通独立 Tensor：`payload bytes ≈ storage bytes`
 
 但对一个从大 Batch 切出来的 View：
 
@@ -187,23 +141,13 @@ def _get_tensor_size(embedding):
     return embedding.element_size() * embedding.numel()
 ```
 
-也就是默认：
+也就是默认：`Cache Cost = Tensor Payload`
 
-```text
-Cache Cost = Tensor Payload
-```
-
-但 Cache 真正需要约束的是：
-
-```text
-只要这个 Entry 还活着，哪些底层资源必须继续活着？
-```
+但 Cache 真正需要约束的是：`只要这个 Entry 还活着，哪些底层资源必须继续活着？`
 
 这里还要注意 `reshape()`：PyTorch 官方文档明确说明 `reshape()` 可能返回 View，也可能返回新 Tensor，因此不能仅凭 API 名字猜是否发生 copy。做资源核算时，更可靠的问题是：**最终到底引用了什么 Storage？**
 
----
-
-## 三、根因：Cache 记的是 Payload，但真正延长的是 Storage Lifetime
+## 三、缓存记账怎样遗漏真实占用
 
 回到固定 merge commit 的 SGLang 源码。
 
@@ -229,13 +173,13 @@ split_embeddings = torch.split(
 
 ```mermaid
 flowchart TD
-    B["Batched multimodal embedding<br/>large shared Storage"]
+    B["Batched multimodal embedding · large shared Storage"]
     S["torch.split()"]
-    V1["small View A<br/>small payload"]
-    V2["small View B<br/>small payload"]
+    V1["small View A · small payload"]
+    V2["small View B · small payload"]
     C["Long-lived Multimodal Cache"]
-    A["Old accounting<br/>numel × element_size"]
-    R["Reality<br/>View may retain whole Batch Storage"]
+    A["Old accounting · numel × element_size"]
+    R["Reality · View may retain whole Batch Storage"]
 
     B --> S
     S --> V1
@@ -264,9 +208,7 @@ Lifetime
 
 一个缓存条目“拥有”的不只是一个 Python Tensor 对象，它还会延长与该 Tensor 关联资源的 lifetime。
 
----
-
-## 四、修复：为什么既要看 Storage，又不能简单按 Storage Size 记账？
+## 四、在入库前分离不必要的共享存储
 
 PR #39120 的核心改动位于 [`multimodal_cache.py`](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/python/sglang/srt/mem_cache/multimodal_cache.py#L65-L130)。
 
@@ -290,11 +232,7 @@ data_size = min(
 )
 ```
 
-如果 Entry 能被 Cache 接纳，并且：
-
-```text
-storage_size > data_size
-```
+如果 Entry 能被 Cache 接纳，并且：`storage_size > data_size`
 
 才做：
 
@@ -363,11 +301,7 @@ PR 没有无脑 `clone()` 所有 Entry。
 
 典型例子是 `expand()`。PyTorch 官方文档明确说明 `expand()` 不分配新内存，而是通过 stride=0 创建 View。
 
-因此可能有：
-
-```text
-payload_size > storage_size
-```
+因此可能有：`payload_size > storage_size`
 
 此时并不存在“小 Tensor pin 大 Storage”的问题。用 `min(storage_size, payload_size)` 可以避免把这种 Tensor 错判成需要 compact 的对象。
 
@@ -383,22 +317,20 @@ flowchart TD
     C{"storage > target cost?"}
     CL["clone to independent Storage"]
     KEEP["keep original Tensor"]
-    ADD["recompute actual storage<br/>and cache"]
+    ADD["recompute actual storage · and cache"]
 
     T --> S
     T --> P
     S --> M
     P --> M
     M --> F
-    F -- No --> X["Reject<br/>no copy"]
+    F -- No --> X["Reject · no copy"]
     F -- Yes --> C
     C -- Yes --> CL --> ADD
     C -- No --> KEEP --> ADD
 ```
 
----
-
-## 五、验证与边界：这次修复证明了什么，又没有证明什么？
+## 五、验证修复与兼容行为
 
 PR #39120 很适合练习 Evidence Ladder，因为作者对验证边界写得比较克制。
 
@@ -458,95 +390,10 @@ PR 作者明确说明 GPU performance tests 和 model accuracy tests 没有运�
 
 不要把它扩大成“所有 Tensor View 内存问题都被解决”。
 
----
+## 六、把内存预算落到资源所有权
 
-## 六、迁移：这个小 PR 真正教给我们的 AI Infra 方法是什么？
+这次修复把三个量对齐了：缓存条目的逻辑大小、它实际保活的 Storage，以及缓存预算用于驱逐的计数。对于文中的切分 View，复制放在“进入长期缓存”的位置，避免短期计算过程提前承担不必要的拷贝。
 
-这篇最值得带走的不是 `untyped_storage().nbytes()` 这个 API，而是三层工程直觉。
+检查类似代码时，可以沿引用关系走一遍：谁创建了大 Tensor，哪些 View 共享它，哪个容器延长了引用生命周期，驱逐一个条目后还有谁保活底层存储。只有这些关系明确，才知道按 payload 计数、按 Storage 去重计数，还是在入库时分离存储更合适。
 
-**第一层：系统里的 Tensor 不只是 shape + dtype。**
-
-做模型数学时，我们常把 Tensor 理解成：
-
-```text
-shape + dtype + values
-```
-
-做 Runtime 时，更完整的问题是：
-
-```text
-logical view
-+ storage
-+ stride / offset
-+ device
-+ ownership
-+ lifetime
-```
-
-因为系统不只关心“它表示什么”，还关心“它真正占哪块资源、谁还引用它、什么时候才能释放”。
-
-**第二层：Memory Accounting 必须和 Ownership / Lifetime 对齐。**
-
-PR #39871 学到的是：
-
-```text
-Configured Value ≠ Derived Runtime Value
-```
-
-PR #39120 学到的是：
-
-```text
-Logical Tensor Payload ≠ Physical Retained Storage
-```
-
-它们背后其实是同一种工程能力：**不要只相信对象表面暴露的数字，要追到底层真正发生的资源关系。**
-
-以后看到 Cache、Memory Pool、Pinned Buffer、KV Page、Offload Tensor、Graph Buffer、RDMA Pack Buffer，都值得问：
-
-```text
-账本统计的单位是什么？
-真正被保活的资源是什么？
-两者的 ownership 是否一一对应？
-```
-
-如果答案是否定的，就可能存在 under-account、over-account、double-count 或 unintended retention。
-
-**第三层：Code Review 时特别检查“短生命周期 View → 长生命周期容器”。**
-
-看到类似代码：
-
-```python
-big_tensor = model(...)
-parts = torch.split(big_tensor, ...)
-
-for p in parts:
-    cache[key] = p
-```
-
-脑子里应该自动出现几个问题：
-
-```text
-1. p 是独立 allocation，还是 View？
-2. Cache 留下 p，会让多大的 backing Storage 继续活着？
-3. Cache budget 按 payload、storage，还是共享 Storage 身份记账？
-4. Evict 一个 Entry 后，实际能释放多少资源？
-5. copy / clone 应该发生在计算路径，还是长期 ownership 边界？
-6. Regression test 检查了 Value，还是也检查了 Ownership / Lifetime？
-```
-
-这套检查规则值得迁移到 KV Cache、Activation Cache、Prefix Cache、CPU Offload、Pinned Host Buffer、Graph Input Buffer、Tensor Pool 与通信 staging buffer——但具体实现仍必须逐处核实，不能因为都是 View 就机械 `clone()`。
-
-最后把这篇压成一句话：
-
-> **PR #39120 修的不是“Tensor 太大”，而是“Cache 对自己真正保活了什么资源理解错了”。**
-
-当你开始习惯继续追问：
-
-```text
-这个对象真正引用什么？
-谁拥有它？
-谁决定它什么时候释放？
-账本统计的到底是不是这个资源？
-```
-
-你就已经不只是会用 Tensor，而是在从推理 Runtime 的资源所有权和生命周期角度看系统了。
+这个结论适用于文中连续 batch 切分出的 strided Tensor。其他 layout、共享方式和缓存用途要分别判断；尤其不要把“发现 View 就 clone”当成通用修复，否则可能把原本有意复用的资源变成重复拷贝。

@@ -1,72 +1,12 @@
-# 从一个 10 行 PR 看懂 SGLang 的 Attention 并行拓扑：PR #39871 为什么 TP16 不是 AttnTP16？
+# 日志里的 TP16 为什么应是 TP8：SGLang PR #39871
 
-大型 AI Infra 项目里，最值得读的 PR 不一定是改动最大的。
+配置 `tp_size=16、dp_size=2`，启用 DP Attention，且 `attn_cp_size=1` 时，Attention TP 宽度是 8。SGLang 曾在相关日志中直接打印原始 `tp_size`，把它误报成 16；实际运行时的宽度派生并没有算错。
 
-有些 PR 只改几行，却正好暴露一个非常典型的系统错误：**程序真正运行的语义已经经过一层 Runtime Derivation，但某个下游消费者还在直接使用原始配置值。**
-
-SGLang PR [#39871](https://github.com/sgl-project/sglang/pull/39871) 就属于这种案例。它只改 1 个文件、`+8/-2`，没有修改 Attention Kernel、Process Group、Collective 或模型输出；它修的是一条错误日志：
-
-```text
-Fix DSA partial DP-TP mode log to use derived attn_tp_size
-```
-
-表面问题只是：
-
-```text
-tp_size = 16
-dp_size = 2
-
-旧日志：attn_tp_size = 16
-真实值：attn_tp_size = 8
-```
-
-但如果顺着这个差异继续追，会自然连到 SGLang 很重要的一组工程概念：
-
-```text
-Configured Value
-        ↓
-Runtime Derivation
-        ↓
-Attention Width
-        ↓
-Rank / Group
-        ↓
-Observability
-```
-
-| 项目 | 信息 |
-| --- | --- |
-| PR | [sgl-project/sglang #39871](https://github.com/sgl-project/sglang/pull/39871) |
-| 标题 | `Fix DSA partial DP-TP mode log to use derived attn_tp_size` |
-| 状态 | merged |
-| Merge commit | `803f0c93d20104cf19ff6a95f7ef580b9fe449a2` |
-| 改动规模 | 1 file / +8 / -2 |
-| 难度 | ★☆☆☆☆ |
-| 类型 | Correctness / Observability |
-| 核心知识 | DP Attention、Runtime Derivation、Rank / Group、Single Source of Truth |
-| 为什么值得读 | 改动极小，却完整暴露 `Configured Value ≠ Derived Runtime Value` 这一类常见系统 Bug |
-| 适用边界 | DSA 的 CUDA / ROCm model-specific adjustment；不是 Ascend 910C Runtime 修复 |
-
-> **30 秒结论**
->
-> `tp_size` 是配置叶子，`attn_tp_size` 是 Attention 拓扑中的派生宽度。开启 DP Attention 后，二者不一定相等。
->
-> 对于 `tp_size=16, dp_size=2, attn_cp_size=1, enable_dp_attention=true`：
->
-> ```text
-> attn_dp_size = 2
-> attn_tp_size = 16 / 2 / 1 = 8
-> ```
->
-> Runtime 的宽度派生本来就是正确的；Bug 在于 Logging 绕过了这套派生语义，直接把 `cfg.tp_size` 打成 `attn_tp_size`。
->
-> 所以这个 PR 真正修的不是“并行计算”，而是 **Operational Truth 与 Runtime Truth 不一致**。
+[PR #39871](https://github.com/sgl-project/sglang/pull/39871) 让这条日志改用已有的派生结果。这个小补丁适合观察配置系统里常见的问题：输入参数经过 Runtime 解释后，下游日志是否仍在使用未经解释的原值。
 
 本文固定到 `sgl-project/sglang@803f0c93d20104cf19ff6a95f7ef580b9fe449a2`。如果想完整理解 WORLD、Rank、Group、DPA 与 MoE EP，可继续阅读[《SGLang 里的 Rank 和 Group 到底是什么？》](../distributed/sglang-rank-group-deepseek-v4.md)；本文只保留读懂这个 PR 所需的最小背景。
 
----
-
-## 一、问题与 Impact：日志错一个数字，为什么值得专门修？
+## 一、日志里的宽度与实际运行值
 
 PR 给出的原始日志是：
 
@@ -95,11 +35,7 @@ attention weights will be sharded across 16 ranks.
 
 为什么这会误导排障？
 
-假设你看到：
-
-```text
-AttnTP = 16
-```
+假设你看到：`AttnTP = 16`
 
 很自然会开始问：
 
@@ -109,11 +45,7 @@ AttnTP = 16
 是不是 Attention weight 真被切成了 16 份？
 ```
 
-但真实 topology 如果是：
-
-```text
-AttnTP = 8
-```
+但真实 topology 如果是：`AttnTP = 8`
 
 那么整个问题模型从第一步就错了。
 
@@ -126,9 +58,7 @@ Operational Truth   = 16
 
 这里的 Correctness 不是模型数学 correctness，而是 **Observability Correctness**：人看到的系统必须和机器实际运行的系统一致。
 
----
-
-## 二、最小背景：为什么 `tp_size=16`，Attention 却可以只做 TP8？
+## 二、从 TP16 / DP2 推导 Attention TP8
 
 理解这个 PR，只需要先看一个函数：
 
@@ -188,21 +118,13 @@ flowchart TB
     W["TP world = 16 ranks"]
     W --> D0["Attention DP 0"]
     W --> D1["Attention DP 1"]
-    D0 --> T0["Attention TP group<br/>8 ranks"]
-    D1 --> T1["Attention TP group<br/>8 ranks"]
+    D0 --> T0["Attention TP group · 8 ranks"]
+    D1 --> T1["Attention TP group · 8 ranks"]
 ```
 
-所以：
+所以：`tp_size = 16`
 
-```text
-tp_size = 16
-```
-
-和：
-
-```text
-attn_tp_size = 8
-```
+和：`attn_tp_size = 8`
 
 完全可以同时成立。
 
@@ -218,9 +140,7 @@ attn_tp_size == 1
 
 > **原始配置里的 `tp_size`，不是所有子模块最终运行时都必须直接采用的 TP width。**
 
----
-
-## 三、History + Root Cause：规则已经统一了，为什么日志还会漂移？
+## 三、派生规则与错误日志的来源
 
 **在 #39871 之前，Attention TP 的派生规则是怎样组织的？**
 
@@ -281,11 +201,11 @@ derive_attention_widths()
 flowchart LR
     subgraph B[Before]
         direction TB
-        BC["Config<br/>tp=16 / dp=2 / cp=1 / DPA=on"]
+        BC["Config · tp=16 / dp=2 / cp=1 / DPA=on"]
         BD["derive_attention_widths()"]
-        BR["Runtime topology<br/>AttnTP = 8 ✓"]
+        BR["Runtime topology · AttnTP = 8 ✓"]
         BL["Logging reads cfg.tp_size"]
-        BW["Log<br/>AttnTP = 16 ✗"]
+        BW["Log · AttnTP = 16 ✗"]
         BC --> BD --> BR
         BC --> BL --> BW
     end
@@ -294,9 +214,9 @@ flowchart LR
         direction TB
         AC["Config"]
         AD["derive_attention_widths()"]
-        AR["Runtime<br/>AttnTP = 8 ✓"]
+        AR["Runtime · AttnTP = 8 ✓"]
         AL["Logging reuses derived width"]
-        AW["Log<br/>AttnTP = 8 ✓"]
+        AW["Log · AttnTP = 8 ✓"]
         AC --> AD
         AD --> AR
         AD --> AL --> AW
@@ -313,9 +233,7 @@ flowchart LR
 
 这个 invariant 比 `16 → 8` 这个具体数字稳定得多。
 
----
-
-## 四、修复：为什么不是简单写一行 `tp_size // dp_size`？
+## 四、补丁怎样复用统一计算入口
 
 修复后的代码位于 [`model_hook.py`](https://github.com/sgl-project/sglang/blob/803f0c93d20104cf19ff6a95f7ef580b9fe449a2/python/sglang/srt/arg_groups/model_hook.py#L285-L300)。
 
@@ -374,11 +292,7 @@ D.py → 直接打印 tp
 
 而 `derive_attention_widths()` 本身存在的理由，就是让 Rank 计算和其他消费者**不要持有第二份 arithmetic**。
 
-所以这个修复真正重要的不是：
-
-```text
-16 / 2 = 8
-```
+所以这个修复真正重要的不是：`16 / 2 = 8`
 
 而是：
 
@@ -392,9 +306,7 @@ Many consumers reuse it
 
 这就是 Single Source of Truth 在 Runtime 代码里的具体样子。
 
----
-
-## 五、Validation Surface：这个 PR 到底验证了什么，又没有验证什么？
+## 五、检查日志变化与行为范围
 
 这次改动属于 log-only；下面分别核对日志变化、测试覆盖和行为范围。
 
@@ -405,7 +317,7 @@ Many consumers reuse it
 | **Source-confirmed** | merge commit 中 Logging 调用 `derive_attention_widths()`；helper 的公式和共享 arithmetic 目的可直接从源码确认 |
 | **PR-confirmed** | PR 作者明确说明错误发生在 partial DP Attention warning，且是 log-only、no behavioral impact |
 | **Measured** | 没有 accuracy benchmark，也没有 performance benchmark；PR 明确认为二者不适用于这次 log-only 改动 |
-| **Inference / Transfer** | “configured value 绕过 derived runtime value”是一类可迁移的 Review Pattern |
+| **Inference / Transfer** | 其他日志项也应检查配置值与有效运行值是否混用 |
 
 再看 Validation Surface：
 
@@ -438,7 +350,7 @@ Runtime 行为没有被 diff 修改
 都经过了专门 runtime regression test
 ```
 
-### Scope：这个 PR没有修什么？
+### 补丁的行为范围
 
 它没有改变：
 
@@ -461,74 +373,11 @@ if not get_platform().is_npu and not get_platform().is_xpu:
 
 > **#39871 修复了 CUDA / ROCm DSA model-specific adjustment 中 partial DP Attention 的日志语义；它没有修复或改变 Ascend 910C 的 Runtime Parallelism。**
 
----
+## 六、配置派生值的使用原则
 
-## 六、迁移：以后 Review SGLang 源码时，应该问什么？
+原始配置和有效运行值承担不同职责。`tp_size` 用来表达用户的配置意图；日志描述 Attention 的实际宽度时，应使用同一套派生规则得到的 `attn_tp_size`。把算术公式再复制一遍，即使眼下能得到 8，也会多出一个需要跟随 DP、CP 和启用条件维护的位置。
 
-如果读完只记住：
-
-```text
-TP16 / DP2 = AttnTP8
-```
-
-这篇 PR 的学习价值还没有吃完。
-
-真正值得迁移的是这个 Bug Pattern：
-
-```text
-Configured Value
-        ≠
-Derived Runtime Value
-```
-
-原始配置值往往没有错，真正的问题是**某个下游消费者选错了语义层级**。
-
-类似风险还可能出现在：
-
-```text
-buffer capacity
-graph bucket
-effective batch size
-KV committed length
-Draft / Verify layout
-MoE backend
-memory budget
-```
-
-但“可能存在同类风险”不等于这些模块现在真的有 Bug；每个具体结论仍需要重新核源码。
-
-### 可以直接带走的 Review Questions
-
-以后看到运行时代码直接读取 `cfg.xxx`，可以先问：
-
-```text
-1. 这个值是 configured leaf，还是 derived runtime state？
-
-2. 是否已经存在 helper / context / coordinator
-   定义了同一语义？
-
-3. 当前代码是不是重新复制了一份 arithmetic？
-
-4. Runtime、Logging、Metrics、Debug 输出
-   是否共享同一个 truth source？
-
-5. enable flag、DP、CP、EP、Spec、Graph
-   会不会改变这个值的最终语义？
-
-6. 如果这里错了，影响的是 Runtime behavior，
-   还是只影响 Observability？
-
-7. 这个 contract 是近期重构后集中起来的吗？
-   有没有旧 consumer 还没有迁移？
-
-8. CI 真的覆盖到了这个配置和失败路径吗？
-```
-
-最后把 #39871 压缩成一句真正可迁移的工程规则：
-
-> **当系统已经存在 Runtime Derivation 时，下游消费者应该依赖派生后的语义，而不是重新从原始配置猜一次答案。**
-
-这也是为什么一个只有 10 行左右改动的 PR 值得认真读：它没有发明新算法，却非常完整地展示了一个大型系统里常见的维护问题——**核心语义已经集中，但边缘消费者仍可能残留旧的事实来源。**
+因此，这个补丁的价值是让日志与 Runtime 共用含义一致的结果。复核时只需把链路走完：配置进入派生函数，Runtime 消费派生状态，日志读取同一语义，再用目标配置检查输出。
 
 ### 固定源码与延伸阅读
 

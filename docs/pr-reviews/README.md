@@ -12,8 +12,8 @@
 
 ## 已发布
 
-- [PR #39871：为什么 TP16 不是 AttnTP16？](sglang-pr-39871-attention-parallel-widths.md)：从错误日志切入，追到 Runtime Derivation、前置配置重构背景、Impact / Validation Surface，并提炼 `Configured Value ≠ Derived Runtime Value` 的 Review Pattern。
-- [PR #39120：一个 Tensor 明明很小，为什么却偷偷占着整个 Batch？](sglang-pr-39120-tensor-view-storage-cache.md)：从 `torch.split` View 保活整块 Batch Storage 的问题切入，理解 Logical Payload、Backing Storage、Ownership、Lifetime 与 Cache Memory Accounting。
+- [PR #39871：为什么 TP16 不是 AttnTP16？](sglang-pr-39871-attention-parallel-widths.md)：从错误日志追到 Attention 宽度派生规则，说明补丁怎样复用运行时计算结果，以及日志修复的行为范围。
+- [PR #39120：小 Tensor 为什么保活大内存：SGLang PR #39120 的 View 缓存修复](sglang-pr-39120-tensor-view-storage-cache.md)：从 `torch.split` View 保活整块 Batch Storage 的问题切入，理解 Logical Payload、Backing Storage、Ownership、Lifetime 与 Cache Memory Accounting。
 
 ## 怎么读这个栏目
 

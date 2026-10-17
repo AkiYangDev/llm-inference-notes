@@ -1,86 +1,14 @@
-# SGLang 投机解码调度：跨轮状态、KV 预留与 Overlap
+# SGLang 投机解码调度：请求进度、设备状态与跨轮交接
 
-前面的几篇文章已经分别拆过 Draft、Target Verify、Tree Attention、Accept Decision、KV Commit / Compact / Rollback，以及多卡场景下 Draft / Verify / Accept 如何保持一致。
+Scheduler 通常把一轮投机解码作为一次 DECODE 工作交给 Spec Worker；Draft、Verify、Accept 和提交在 Worker 内部展开。返回后，Scheduler 再更新请求状态，并安排下一轮。
 
-把这些模块拼起来以后，还剩下一个更底层的问题：
-
-> **到底是谁在驱动这一整轮 Speculative Decoding？**
-
-直觉上很容易把它理解成：
-
-```text
-Scheduler
-  ↓
-调度 Draft Batch
-  ↓
-调度 Verify Batch
-  ↓
-调度 Accept Batch
-  ↓
-调度下一轮
-```
-
-但当前 SGLang Spec V2 的实际设计并不是这样。
-
-更准确的结构是：
-
-```text
-                    Scheduler
-
-                ScheduleBatch(DECODE)
-                        │
-                        │ 一次 run_batch()
-                        ▼
-              Speculative Model Worker
-                        │
-          ┌─────────────┼─────────────┐
-          │             │             │
-        Draft        Verify         Accept
-          │             │             │
-          └─────────────┼─────────────┘
-                        │
-                  Draft / State Commit
-                        │
-                        ▼
-              GenerationBatchResult
-                 /                \
-                /                  \
-               ▼                    ▼
-       CPU Result Settle       Next-round Relay
-               │                    │
-               ▼                    ▼
-          Req / KV ledger      FutureMap / spec_info
-```
-
-也就是说：
-
-> **Scheduler 通常调度的是一次 speculative decode iteration，而不是分别调度 Draft、Verify、Accept 三个全局 batch；真正的 Draft → Verify → Accept 微状态机在 Spec Worker 内部展开。**
-
-这篇文章就沿着这个边界讲清楚：
-
-```text
-Req / ReqKvInfo
-       ↓
-ScheduleBatch
-       ↓
-ForwardBatch
-       ↓
-Spec Worker
-       ↓
-GenerationBatchResult
-       ↓
-FutureMap + BatchResultProcessor
-       ↓
-下一轮
-```
+开启 Overlap 后，设备已经确定的下一轮输入可能领先于 CPU 完成的结果处理。本文跟随同一条请求说明这种错开如何由序列长度、KV 预留、publish 和 FutureMap 管理，再把 Mixed Tail 的特殊交接放到进阶部分。
 
 > **源码基线**：本文基于 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。重点覆盖当前 Spec V2 Scheduler、EAGLE / EAGLE3、DSpark、DFLASH、UNO、NGRAM 及 overlap relay。
 >
-> 本文重点不是再次解释 speculative decoding 算法，而是解释 **Scheduler ownership、跨轮时钟、KV watermark、forward transaction 与 overlap relay**。
+> 本篇关注 **Scheduler ownership、跨轮时钟、KV watermark、forward transaction 与 overlap relay**。
 
----
-
-## 一、先说结论：SGLang 有两层状态机，而不是一个大状态机
+## 一、Scheduler 与 Spec Worker 的分工
 
 理解 Speculative Scheduler 最容易犯的错误，是把 Scheduler 状态和 speculative algorithm 状态混成一层。
 
@@ -132,11 +60,7 @@ ScheduleBatch
 
 ### 第二层：Spec Worker Micro State
 
-当 Scheduler 已经决定：
-
-```text
-这一轮跑 DECODE
-```
+当 Scheduler 已经决定：`这一轮跑 DECODE`
 
 以后，Spec Worker 才进一步展开：
 
@@ -190,11 +114,7 @@ commit_hidden / state
 
 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-所以同样一个：
-
-```text
-ScheduleBatch.forward_mode = DECODE
-```
+所以同样一个：`ScheduleBatch.forward_mode = DECODE`
 
 进入 Spec Worker 后，内部可能创建多个不同用途的 `ForwardBatch`：
 
@@ -271,11 +191,7 @@ TARGET_VERIFY
 DRAFT_EXTEND_V2
 ```
 
-其中：
-
-```text
-DECODE
-```
+其中：`DECODE`
 
 主要是 Scheduler 层的一轮 decode transaction。
 
@@ -288,11 +204,7 @@ DRAFT_EXTEND_V2
 
 则是 Worker / ModelRunner 真正执行某个内部 forward 时的设备执行模式。
 
-因此不要把：
-
-```text
-ScheduleBatch.forward_mode == DECODE
-```
+因此不要把：`ScheduleBatch.forward_mode == DECODE`
 
 理解成：
 
@@ -300,9 +212,7 @@ ScheduleBatch.forward_mode == DECODE
 
 在 Spec V2 中完全不是。
 
----
-
-## 二、六个核心对象与三套时钟：Overlap 下它们究竟允许错开多少？
+## 二、CPU、设备与下一轮状态怎样错开
 
 真正理解 Scheduler，要先分清六个对象：
 
@@ -355,11 +265,7 @@ def seqlen(self) -> int:
 
 > **CPU Request 目前已经正式接受了多少逻辑 token？**
 
-注意它依赖：
-
-```text
-req.output_ids
-```
+注意它依赖：`req.output_ids`
 
 而 `output_ids` 是在 `BatchResultProcessor` 处理本轮结果时才增加的。
 
@@ -411,11 +317,7 @@ no pre-claim;
 resolve commits the full accepted run uniformly.
 ```
 
-`kv_committed_len` 的正常 Spec V2 owner 是：
-
-```text
-SchedulerBatchResultProcessor._resolve_spec_v2_tokens()
-```
+`kv_committed_len` 的正常 Spec V2 owner 是：`SchedulerBatchResultProcessor._resolve_spec_v2_tokens()`
 
 而不是 Draft Worker。
 
@@ -441,17 +343,9 @@ new_seq_lens = old_seq_lens + accept_lens
 
 然后通过 `FutureMap.publish()` 让下一轮 device-side scheduling 提前看到这个新 frontier。
 
-因此在 overlap 下：
+因此在 overlap 下：`ScheduleBatch.seq_lens`
 
-```text
-ScheduleBatch.seq_lens
-```
-
-可以已经是：
-
-```text
-Verify N 的新 frontier
-```
+可以已经是：`Verify N 的新 frontier`
 
 而 CPU 上：
 
@@ -482,11 +376,7 @@ the 2x window absorbs it.
 
 > **one verify，不是 one token。**
 
-如果一次 Verify 接受：
-
-```text
-accept_lens = 4
-```
+如果一次 Verify 接受：`accept_lens = 4`
 
 那么 overlap 窗口里完全可能出现：
 
@@ -498,17 +388,9 @@ Host ledger:
 Req.kv.kv_committed_len = C
 ```
 
-差距是：
+差距是：`4 tokens`
 
-```text
-4 tokens
-```
-
-但仍然只是：
-
-```text
-1 个尚未 CPU settle 的 verify iteration
-```
+但仍然只是：`1 个尚未 CPU settle 的 verify iteration`
 
 这和 `event_loop_overlap()` 的结构完全一致。
 
@@ -545,37 +427,17 @@ def get_alloc_reserve_per_decode() -> int:
 
 这是非常漂亮的一条设计关系。
 
-因为 Scheduler N+1 轮做 memory planning 时：
+因为 Scheduler N+1 轮做 memory planning 时：`Host kv_committed_len`
 
-```text
-Host kv_committed_len
-```
+可能还只到：`C`
 
-可能还只到：
+但 Device 实际已经通过 Verify N 前进到了：`C + accepted_N`
 
-```text
-C
-```
-
-但 Device 实际已经通过 Verify N 前进到了：
-
-```text
-C + accepted_N
-```
-
-如果 reserve 只按一轮最大 speculative footprint：
-
-```text
-1 × alloc_len
-```
+如果 reserve 只按一轮最大 speculative footprint：`1 × alloc_len`
 
 就可能因为 host committed clock 落后一轮而低估下一轮 workspace。
 
-所以当前设计使用：
-
-```text
-2 × alloc_len
-```
+所以当前设计使用：`2 × alloc_len`
 
 吸收：
 
@@ -602,11 +464,7 @@ KV-ready committed prefix
                  pending terminal bonus
 ```
 
-其中 `B`：
-
-```text
-已经存在于 req.output_ids
-```
+其中 `B`：`已经存在于 req.output_ids`
 
 但它自己的 KV 还要在下一轮作为 root 被 materialize。
 
@@ -633,17 +491,9 @@ Req.seqlen = P + 1
 
 下一轮 Target Verify 把 bonus 当 root 写入位置 `P`。
 
-如果本轮又接受 4 个输出：
+如果本轮又接受 4 个输出：`D1 D2 D3 B2`
 
-```text
-D1 D2 D3 B2
-```
-
-Device 真正 materialize 的 Verify rows 是：
-
-```text
-old_bonus D1 D2 D3
-```
+Device 真正 materialize 的 Verify rows 是：`old_bonus D1 D2 D3`
 
 也是 4 个。
 
@@ -666,9 +516,7 @@ kv_committed_len + 1
 
 > 这个关系是理解 active speculative request 的非常好用的心智模型，但不要把它当成所有 transition / mixed / finished 状态的全局 assert；源码真正维护的是各 owner 的 boundary contract。
 
----
-
-## 三、`prepare_for_decode()`：Speculative Scheduler 先 Reserve，绝不提前 Commit
+## 三、预留 KV 空间并保留提交边界
 
 当 running batch 准备进入下一轮 decode 时：
 
@@ -744,13 +592,7 @@ req.kv.kv_allocated_len =
     max(req.kv.kv_allocated_len, nxt_kv_len)
 ```
 
-没有：
-
-```text
-kv_committed_len += speculative width
-```
-
-所以：
+没有：`kv_committed_len += speculative width`
 
 ```text
 Prepare
@@ -770,37 +612,23 @@ Declare Future Correct
 
 ### 两个 watermark 的职责完全不同
 
-```text
-kv_allocated_len
-```
+`kv_allocated_len`
 
 回答：
 
 > **这一轮 speculative working set 最多可以写到哪里？**
 
-而：
-
-```text
-kv_committed_len
-```
+而：`kv_committed_len`
 
 回答：
 
 > **Target 已经正式确认到哪里？**
 
-因此：
-
-```text
-allocation
-```
+因此：`allocation`
 
 发生在 Draft / Verify 之前。
 
-而：
-
-```text
-host commit
-```
+而：`host commit`
 
 必须等 Accept 结果 settle 以后。
 
@@ -820,19 +648,13 @@ host commit
                     kv_committed_len          kv_allocated_len
 ```
 
-Draft / Verify 可以在：
-
-```text
-[C, A)
-```
+Draft / Verify 可以在：`[C, A)`
 
 里临时写 future。
 
 但只有 Accept 决定的那一段最终会成为下一轮 committed prefix。
 
----
-
-## 四、一轮 `ScheduleBatch(DECODE)` 内部发生什么，以及 `on_publish()` 到底发布的是什么？
+## 四、on_publish 发布哪一部分进度
 
 现在进入真正的一轮运行。
 
@@ -882,15 +704,9 @@ _draft_extend_for_decode()
 GenerationBatchResult
 ```
 
-Verify 内部会临时把 forward 变成：
-
-```text
-TARGET_VERIFY
-```
+Verify 内部会临时把 forward 变成：`TARGET_VERIFY`
 
 并创建 Target Model 用的 `ForwardBatch`。
-
-因此：
 
 ```text
 Scheduler Macro State:
@@ -940,17 +756,9 @@ GenerationBatchResult(
 
 这就是 Scheduler abstraction 的价值。
 
-Scheduler 不需要知道：
+Scheduler 不需要知道：`EAGLE Tree 是怎么长的`
 
-```text
-EAGLE Tree 是怎么长的
-```
-
-也不需要知道：
-
-```text
-DSpark Planner 怎么决定 verify token budget
-```
+也不需要知道：`DSpark Planner 怎么决定 verify token budget`
 
 它只要求算法最后回答：
 
@@ -1021,17 +829,9 @@ commit_hidden()
 
 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-所以绝不能把：
+所以绝不能把：`on_publish`
 
-```text
-on_publish
-```
-
-解释成：
-
-```text
-“本轮所有 device commit 已经完成”
-```
+解释成：`“本轮所有 device commit 已经完成”`
 
 ---
 
@@ -1049,17 +849,9 @@ on_publish(new_seq_lens)
 把 accepted target hidden materialize 到 draft KV
 ```
 
-因此 publish 仍然位于：
+因此 publish 仍然位于：`next frontier 已经确定`
 
-```text
-next frontier 已经确定
-```
-
-和：
-
-```text
-全部后处理都做完
-```
+和：`全部后处理都做完`
 
 之间。
 
@@ -1079,11 +871,7 @@ UNO 在 acceptance 算出 `new_seq_lens` 后直接 publish。
 
 ### 为什么这样仍然安全？
 
-因为 publish 主要允许：
-
-```text
-schedule_stream
-```
+因为 publish 主要允许：`schedule_stream`
 
 提前做下一轮 host / allocation planning。
 
@@ -1118,17 +906,9 @@ Schedule Stream:
           Prepare Schedule N+1
 ```
 
-真正 overlap 的是：
+真正 overlap 的是：`CPU / schedule preparation`
 
-```text
-CPU / schedule preparation
-```
-
-和：
-
-```text
-当前 Worker 剩余 device work
-```
+和：`当前 Worker 剩余 device work`
 
 而不是让两个依赖状态的 model forward 乱序。
 
@@ -1158,25 +938,15 @@ batch.seq_lens
 当前已经 KV-ready 的 prompt boundary
 ```
 
-Target Prefill 采样出来的 next token 只是：
-
-```text
-下一轮 pending root / bonus
-```
+Target Prefill 采样出来的 next token 只是：`下一轮 pending root / bonus`
 
 它还不属于 KV-ready prefix。
 
-所以下一轮 Verify 的 frontier 仍然就是：
-
-```text
-batch.seq_lens
-```
+所以下一轮 Verify 的 frontier 仍然就是：`batch.seq_lens`
 
 这和 Decode 中 terminal bonus 的 frontier 语义完全一致。
 
----
-
-## 五、`_forward_isolation()`：Spec Worker 可以临时改 ScheduleBatch，但一律不能偷走 Scheduler Ownership
+## 五、隔离临时字段与保护共享对象
 
 这里要区分字段替换和共享对象修改。
 
@@ -1207,11 +977,7 @@ DECODE
 TARGET_VERIFY
 ```
 
-或者临时：
-
-```text
-batch.spec_info = EagleVerifyInput
-```
+或者临时：`batch.spec_info = EagleVerifyInput`
 
 如果这些 worker-internal mutation 泄漏回 Scheduler，下一轮就可能被错误地识别为：
 
@@ -1271,25 +1037,13 @@ batch.sampling_info =
     sched_sampling_info.copy_for_forward()
 ```
 
-原因是一个 Spec iteration 内部可能多次：
-
-```text
-ForwardBatch.init_new()
-```
+原因是一个 Spec iteration 内部可能多次：`ForwardBatch.init_new()`
 
 如果直接复用 Scheduler 的 sampling state，penalty 等状态可能被重复 accumulate。
 
-因此：
+因此：`Scheduler sampling state`
 
-```text
-Scheduler sampling state
-```
-
-和：
-
-```text
-forward-local sampling view
-```
+和：`forward-local sampling view`
 
 也被隔离开了。
 
@@ -1319,17 +1073,9 @@ rebind batch.spec_info
 
 旧 tensor Python 引用如果提前丢掉，Caching Allocator 可能在 forward stream 还没读完时复用那块显存。
 
-所以：
+所以：`semantic rollback`
 
-```text
-semantic rollback
-```
-
-和：
-
-```text
-GPU tensor lifetime
-```
+和：`GPU tensor lifetime`
 
 这里同时被 isolation 管住。
 
@@ -1339,17 +1085,9 @@ GPU tensor lifetime
 
 关键就在这里。
 
-Isolation 的设计是：
+Isolation 的设计是：`先恢复快照中的字段绑定`
 
-```text
-先恢复快照中的字段绑定
-```
-
-然后：
-
-```text
-只重新提交真正属于 next iteration contract 的状态
-```
+然后：`只重新提交真正属于 next iteration contract 的状态`
 
 #### Overlap 路径
 
@@ -1365,19 +1103,11 @@ batch.spec_info.future_indices =
     future_indices
 ```
 
-但：
-
-```text
-batch.seq_lens
-```
+但：`batch.seq_lens`
 
 不会直接在这里赋成 `new_seq_lens`。
 
-因为它已经通过：
-
-```text
-FutureMap.publish(new_seq_lens)
-```
+因为它已经通过：`FutureMap.publish(new_seq_lens)`
 
 进入 device relay。
 
@@ -1426,17 +1156,9 @@ batch.input_ids = None
 
 ### 哪些字段必须保持 rollback？
 
-最典型的有：
+最典型的有：`forward_mode`
 
-```text
-forward_mode
-```
-
-Scheduler 外部仍然应该看到：
-
-```text
-DECODE
-```
+Scheduler 外部仍然应该看到：`DECODE`
 
 而不是 Worker 内部临时的：
 
@@ -1458,37 +1180,24 @@ temporary verify seq_lens
 
 ---
 
-### 可以把 `_forward_isolation()` 理解成真正的 Transaction
+### 字段隔离与显式提交的边界
 
-```text
-BEGIN
+Worker 执行时可以临时替换本轮 `forward_mode`、`out_cache_loc`、`spec_info` 或 `seq_lens` 的字段绑定；退出隔离区后，再从返回结果显式接入下一轮所需状态。
 
-ScheduleBatch(DECODE)
-       │
-       ├─ temporary Draft mutation
-       ├─ temporary TARGET_VERIFY mutation
-       ├─ temporary out_cache_loc
-       ├─ temporary spec_info
-       └─ temporary seq_lens view
+| 对象变化 | 隔离区退出后的处理 |
+| --- | --- |
+| `ScheduleBatch` 字段被重新绑定 | 恢复进入时保存的字段值或对象引用 |
+| 原 Tensor 或嵌套对象被原地修改 | 浅快照不会自动撤销，需要调用方单独保护 |
+| 下一轮 Draft 输入、长度与 bonus | 通过对应结果和交接路径显式发布或提交 |
 
-Worker returns GenerationBatchResult
+因此，调试时既要检查字段最终指向谁，也要检查共享对象是否发生原地写入。只比较退出前后的字段绑定，无法覆盖第二类问题。
 
-ROLLBACK
-all ScheduleBatch fields
+普通投机 Decode 的状态交接已经在前五节说明。Mixed Tail 还要把待处理的边界 Token 作为 EXTEND 输入重建，下面单独展开这条路径。
 
-COMMIT ONLY:
-  next_draft_input
-  new_seq_lens relay
-  next bonus / topk / hidden state
+## 六、进阶：Mixed Tail 的 FutureMap 重建
 
-END
-```
-
-这个模型非常适合 Debug Spec V2。
-
----
-
-## 六、FutureMap 的 `new_seq_lens + 1` 为什么只出现在 Mixed Tail 重建，而且它不是 DP Attention 的通用规则？
+<details markdown="1">
+<summary>展开 Mixed Tail 的字段变化与 +1 来源</summary>
 
 局部代码看起来的偏移，需要放回 mixed-tail 的执行语境。
 
@@ -1509,13 +1218,7 @@ out_cache_loc[-n:] =
     req_to_token[idx, fresh]
 ```
 
-为什么这里突然：
-
-```text
-new_seq_lens + 1
-```
-
-？
+这里为什么使用 `new_seq_lens + 1`？
 
 前面明明一直说：
 
@@ -1537,31 +1240,15 @@ new prefill requests
 running decode requests
 ```
 
-会被塞进同一个：
-
-```text
-ForwardMode.MIXED
-```
+会被塞进同一个：`ForwardMode.MIXED`
 
 batch。
 
-running decode request 此时不是按 speculative Verify 的形态运行，而是被临时改写成：
+running decode request 此时不是按 speculative Verify 的形态运行，而是被临时改写成：`1-token EXTEND tail`
 
-```text
-1-token EXTEND tail
-```
+`mix_with_running()` 明确写：`a tail's prefix is its row length - 1`
 
-`mix_with_running()` 明确写：
-
-```text
-a tail's prefix is its row length - 1
-```
-
-Spec 路径还写：
-
-```text
-Spec rows sit at the committed base
-```
+Spec 路径还写：`Spec rows sit at the committed base`
 
 ---
 
@@ -1569,31 +1256,15 @@ Spec rows sit at the committed base
 
 就是当前 pending bonus。
 
-假设 FutureMap fresh frontier 是：
+假设 FutureMap fresh frontier 是：`C`
 
-```text
-C
-```
-
-代表：
-
-```text
-[0, C)
-```
+代表：`[0, C)`
 
 已经 KV-ready。
 
-而：
+而：`bonus`
 
-```text
-bonus
-```
-
-位于：
-
-```text
-position C
-```
+位于：`position C`
 
 还没有 materialize KV。
 
@@ -1607,11 +1278,7 @@ extend token:
 bonus at C
 ```
 
-所以 Extend 语义下的 full sequence length 必须是：
-
-```text
-C + 1
-```
+所以 Extend 语义下的 full sequence length 必须是：`C + 1`
 
 于是：
 
@@ -1693,11 +1360,7 @@ reserves from the right base.
 
 [`SchedulerBatchResultProcessor.process_batch_result_prefill()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/batch_result_processor.py)
 
-这再次证明：
-
-```text
-+1
-```
+这再次证明：`+1`
 
 是 “pending bonus 被当前 EXTEND 真正 commit” 的局部语义。
 
@@ -1705,63 +1368,31 @@ reserves from the right base.
 
 ### 为什么不是所有 FutureMap resolve 都 `+1`？
 
-普通 speculative decode 下一轮仍然要把 pending bonus 当：
+普通 speculative decode 下一轮仍然要把 pending bonus 当：`Verify root`
 
-```text
-Verify root
-```
+它需要的 prefix frontier 就是：`C`
 
-它需要的 prefix frontier 就是：
+而不是：`C + 1`
 
-```text
-C
-```
-
-而不是：
-
-```text
-C + 1
-```
-
-如果你提前把：
-
-```text
-ScheduleBatch.seq_lens = C + 1
-```
+如果你提前把：`ScheduleBatch.seq_lens = C + 1`
 
 那等于宣称 bonus 的 KV 已经存在。
 
 但实际上它还没 forward。
 
-所以普通 next-spec iteration 必须：
+所以普通 next-spec iteration 必须：`seq_lens = new_seq_lens`
 
-```text
-seq_lens = new_seq_lens
-```
+只有：`Mixed batch 把 bonus 直接变成一枚 EXTEND input`
 
-只有：
-
-```text
-Mixed batch 把 bonus 直接变成一枚 EXTEND input
-```
-
-时才需要：
-
-```text
-new_seq_lens + 1
-```
+时才需要：`new_seq_lens + 1`
 
 ---
 
 ### 这个 `+1` 也不是 DP Attention 的通用规则
 
-这次 Review 还发现一个需要特别澄清的点。
+这里还要区分 Mixed Tail 与普通 DP Attention 的处理。
 
-当前 Scheduler 在：
-
-```text
-spec + DP Attention
-```
+当前 Scheduler 在：`spec + DP Attention`
 
 下明确写：
 
@@ -1782,11 +1413,7 @@ DP Attention 还有另一条路径：
 maybe_convert_decode_to_extend()
 ```
 
-当别的 DP rank 正在跑 extend、而当前 rank 是 decode 时，为了保持 mode-homogeneous、复用 extend graph，它会把整个 decode batch 临时转换成：
-
-```text
-1-token EXTEND view
-```
+当别的 DP rank 正在跑 extend、而当前 rank 是 decode 时，为了保持 mode-homogeneous、复用 extend graph，它会把整个 decode batch 临时转换成：`1-token EXTEND view`
 
 对应：
 
@@ -1805,11 +1432,7 @@ prefix = seq_len - 1
 extend_len = 1
 ```
 
-它不是：
-
-```text
-FutureMap.resolve_mixed_spec_tails()
-```
+它不是：`FutureMap.resolve_mixed_spec_tails()`
 
 因此更准确的结论是：
 
@@ -1819,11 +1442,7 @@ FutureMap.resolve_mixed_spec_tails()
 
 ### 为什么要 late-bind？
 
-因为 mixed batch 在 schedule time 构造时：
-
-```text
-CPU Req clock
-```
+因为 mixed batch 在 schedule time 构造时：`CPU Req clock`
 
 可能还落后于 GPU 最新 verify。
 
@@ -1835,11 +1454,7 @@ CPU Req clock
 resolve_forward_inputs()
 ```
 
-才有资格等待 `publish_ready` 并读取：
-
-```text
-FutureMap.new_seq_lens_buf
-```
+才有资格等待 `publish_ready` 并读取：`FutureMap.new_seq_lens_buf`
 
 于是重新绑定：
 
@@ -1849,17 +1464,13 @@ fresh out_cache_loc
 fresh seq_lens
 ```
 
-这就是：
-
-```text
-late binding
-```
+这就是：`late binding`
 
 真正存在的原因。
 
----
+</details>
 
-## 七、把整个 Scheduler 状态机串起来：它管理的是 Past、Present 与 Future 三个边界
+## 七、把跨轮状态交还 Scheduler
 
 现在可以把全文压缩成一张图。
 
@@ -1916,11 +1527,7 @@ Req.output_ids
 Req.kv.kv_committed_len
 ```
 
-这是：
-
-```text
-Committed Past
-```
+这是：`Committed Past`
 
 ---
 
@@ -1934,11 +1541,7 @@ ForwardBatch
 temporary TARGET_VERIFY / DRAFT_EXTEND states
 ```
 
-这是：
-
-```text
-Executing Present
-```
+这是：`Executing Present`
 
 ---
 
@@ -1954,11 +1557,7 @@ next_draft_input
 topk / hidden / confidence ...
 ```
 
-这是：
-
-```text
-Safe Future
-```
+这是：`Safe Future`
 
 Spec V2 Scheduler 的核心价值，就是允许：
 
@@ -2041,8 +1640,6 @@ FutureMap.output_tokens_buf[req_pool_idx]
 
 只要这四个问题先回答，绝大多数“为什么差 1 / 为什么多一轮 / 为什么 seq_len 不一样”的问题都会变得清楚。
 
----
-
 ## 源码阅读入口
 
 固定版本：
@@ -2078,10 +1675,4 @@ sgl-project/sglang
 | DP decode→extend conversion | [`dp_attn.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/dp_attn.py) |
 | Bookkeeping ownership regression test | [`test_decode_bookkeeping_ownership.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/test/registered/unit/spec/test_decode_bookkeeping_ownership.py) |
 
-这套 Scheduler 设计最后可以压缩成一句话：
-
-> **SGLang Spec V2 不是强迫 CPU Request Truth、Device Forward Frontier 和 speculative future 在每个时刻完全同步，而是通过明确的 owner、watermark、transaction rollback 和 FutureMap relay，让它们可以安全地错开一轮，从而换取 overlap。**
-
-真正需要守住的不是“所有长度永远相等”，而是：
-
-> **每一只时钟只能由正确的 owner 推进，而且在下一次真正消费它之前，必须通过对应的 boundary contract 收敛。**
+阅读跨轮日志时，先标明每个长度属于 CPU 请求记录、设备执行进度，还是尚未由 Host 结算的下一轮结果。再沿 publish、resolve 和结果处理检查它何时被消费。这样既允许准备与执行重叠，也能判断某次长度差异是预期时差，还是漏提交、重复提交或共享对象被意外修改。

@@ -1,41 +1,13 @@
-# SGLang 里的 Rank 和 Group 到底是什么？用 DeepSeek-V4 画清 TP Rank、DP Rank、EP Rank
+# SGLang Rank 与 Group：读懂 TP、DP Attention 和 EP 坐标
 
-刚开始阅读 SGLang 的分布式源码时，最容易让人困惑的往往不是 AllReduce、All-to-All，而是一些看起来非常基础的变量：
+一个 SGLang 进程可以同时有 `tp_rank`、`attn_tp_rank`、`attn_dp_rank` 和 `moe_ep_rank`。这些编号描述它在不同并行布局中的位置：Attention 关心请求分组与 head 分片，MoE 关心专家归属，两者使用同一批进程，却未必使用同一套通信组。
 
-```python
-tp_rank
-dp_rank
+本文用 `TP16 / DP8` 的 DP Attention 示例展开这组坐标，再看 Native DP 和 MoE 的区别。先分清三种编号：整个分布式作业里的 world rank、某个通信组内的 rank，以及用于分配请求的逻辑 DP 编号。
 
-attn_tp_rank
-attn_dp_rank
-attn_cp_rank
+<details markdown="1">
+<summary>版本与源码入口</summary>
 
-moe_dp_rank
-moe_ep_rank
-moe_tp_rank
-```
-
-为什么一个进程同时有这么多个 Rank？`tp_rank=6` 和 `moe_ep_rank=6` 是不是同一件事？`dp_rank=1` 是不是“第二张卡”？为什么 DeepSeek-V4 的 Attention 和 MoE 又各自有一套 Rank？
-
-这些问题如果只用“TP 是切 Tensor、DP 是切数据、EP 是切 Expert”来回答，很快就会卡住。因为在 SGLang 里，真正需要建立的不是三个缩写的定义，而是一套**坐标系意识**：
-
-> **Rank 表示一个执行进程在某个并行坐标系中的位置；Group 则决定这套坐标系里谁和谁是一组、哪些 Rank 会共同参与某次通信。**
-
-同一个执行进程完全可以同时拥有：
-
-```text
-world_rank      = 6
-tp_rank         = 6
-attn_dp_rank    = 3
-attn_tp_rank    = 0
-moe_dp_rank     = 1
-moe_ep_rank     = 2
-moe_tp_rank     = 0
-```
-
-这些数字并不矛盾，只是在回答不同的问题。
-
-本文以 DeepSeek-V4 的 SGLang 推理场景作为贯穿案例，重点解释 TP、DP Attention 与 MoE EP 的 Rank / Group 关系。源码固定到：
+源码固定到：
 
 ```text
 sgl-project/sglang
@@ -54,9 +26,9 @@ commit: 176dbcb85d3b7737564e4911947035cc0af65f0a
 
 SGLang 的并行实现仍在快速演进，因此下面讲的是这个固定 commit 的实现语义，而不是把某个类名或参数组合当成永久 API。
 
----
+</details>
 
-## 一、Rank 不是“第几张卡”，而是“你在这个 Group 里排第几”
+## 一、同一个进程的多套编号
 
 先不要管 TP、DP、EP，只看四个执行进程：
 
@@ -77,11 +49,7 @@ WORLD Group
 └────────┴────────┴────────┴────────┘
 ```
 
-此时：
-
-```text
-world_size = 4
-```
+此时：`world_size = 4`
 
 而每个进程都有一个 WORLD Rank：
 
@@ -124,8 +92,6 @@ local rank:  0   1   2   3
                      ↑
 ```
 
-因此：
-
 ```text
 world_rank   = 6
 rank_in_group = 2
@@ -167,9 +133,7 @@ flowchart TD
 
 这张图后面会不断用到。
 
----
-
-## 二、SGLang 里的 `dp_rank` 最特殊：Native DP 与 DPA 下不是同一种拓扑语义
+## 二、Native DP 与 DP Attention 的区别
 
 TP Rank 相对直观：你属于哪个 TP Group，在里面排第几。
 
@@ -221,11 +185,7 @@ TP ranks: 0 1 2 3
 
 ### DPA：`dp_rank` 会由 `tp_rank` 派生
 
-启用：
-
-```text
---enable-dp-attention
-```
+启用：`--enable-dp-attention`
 
 以后，`DataParallelController` 不再按 `dp_size` 启动多套完整 TP replica，而是走 `launch_dp_attention_schedulers()`。这个路径只调用一次 `launch_tensor_parallel_group(...)`，随后在 TP Rank 循环内部，根据 `tp_rank` 计算当前进程属于哪个 Attention DP shard。源码见 [`data_parallel_controller.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/data_parallel_controller.py#L548-L600) 与 [`data_parallel_controller.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/data_parallel_controller.py#L641-L672)。
 
@@ -278,9 +238,7 @@ ep_rank
 
 同一个单词 `DP`，在不同层级里描述的并不是完全相同的对象。
 
----
-
-## 三、用 `TP16 / DP8` 画清 DPA：这里不是 16×8=128 张卡
+## 三、展开 TP16 / DP8 的坐标
 
 现在进入最容易产生误解的例子。
 
@@ -294,11 +252,7 @@ attn_cp_size = 1
 PP = 1
 ```
 
-看到 `TP=16`、`DP=8`，如果把传统 Native DP 的心智模型直接套过来，很容易下意识认为：
-
-```text
-16 × 8 = 128 devices
-```
+看到 `TP=16`、`DP=8`，如果把传统 Native DP 的心智模型直接套过来，很容易下意识认为：`16 × 8 = 128 devices`
 
 **在这个 DPA 配置里，这个结论是错的。**
 
@@ -397,7 +351,7 @@ attn_tp_rank = 0
 
 这里发生的是**同一组 16 个 model-parallel Rank 的坐标重解释**，而不是额外复制 8 套 16 卡模型。
 
-### 为什么一定要把 Native DP 摆在旁边比较
+### 相同 TP / DP 数字对应的两种设备规模
 
 如果我们保持：
 
@@ -407,29 +361,13 @@ dp_size = 8
 PP = 1
 ```
 
-但关闭：
+但关闭：`enable_dp_attention = False`
 
-```text
-enable_dp_attention = False
-```
+那么 `DataParallelController.launch_dp_schedulers()` 会真的循环八次 `dp_rank`，每个 DP replica 都启动一套完整 16-way TP Group。此时设备 worker 数量才是：`8 replicas × 16 TP workers = 128 device workers`
 
-那么 `DataParallelController.launch_dp_schedulers()` 会真的循环八次 `dp_rank`，每个 DP replica 都启动一套完整 16-way TP Group。此时设备 worker 数量才是：
+所以同样是：`TP16 / DP8`
 
-```text
-8 replicas × 16 TP workers = 128 device workers
-```
-
-所以同样是：
-
-```text
-TP16 / DP8
-```
-
-必须先问：
-
-```text
-是否启用了 DPA？
-```
+必须先问：`是否启用了 DPA？`
 
 两种模式的拓扑完全不同：
 
@@ -440,9 +378,7 @@ TP16 / DP8
 
 这也是阅读 DeepSeek-V4 DPA 源码时最值得先建立的边界。
 
----
-
-## 四、到了 MoE，同一批 TP Rank 又会被 reshape 成 `MOE_DP × EP × MOE_TP`
+## 四、MoE 怎样划分专家与张量分片
 
 Attention 的坐标系解决的是：不同请求 / KV 如何分到 Attention DP shard，以及一个 shard 内还剩多少 Attention TP。
 
@@ -464,11 +400,7 @@ Global(TP) → MOE_DP → EP → MOE_TP
 
 见 [`engine.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/entrypoints/engine.py#L1906-L1928) 和 [`data_parallel_controller.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/data_parallel_controller.py#L682-L704)。
 
-这里真正应该记住的是顺序：
-
-```text
-MOE_DP → EP → MOE_TP
-```
+这里真正应该记住的是顺序：`MOE_DP → EP → MOE_TP`
 
 其中 **`MOE_TP` 是最内层、变化最快的维度**。
 
@@ -480,11 +412,7 @@ moe_tp_size
 tp_size / moe_dp_size / moe_ep_size
 ```
 
-因此在一个 TP Group 内，可以把一维 `tp_rank` 展开成三维坐标：
-
-```text
-(moe_dp_rank, moe_ep_rank, moe_tp_rank)
-```
+因此在一个 TP Group 内，可以把一维 `tp_rank` 展开成三维坐标：`(moe_dp_rank, moe_ep_rank, moe_tp_rank)`
 
 在常规布局下可写成：
 
@@ -593,11 +521,7 @@ moe_dp_size = 2
 ep_size     = 4
 ```
 
-那么：
-
-```text
-moe_tp_size = 2
-```
+那么：`moe_tp_size = 2`
 
 开头几个 Rank 就变成：
 
@@ -618,7 +542,7 @@ moe_tp_size = 2
 
 这时“`MOE_TP` 是最快变化维”就非常直观了。
 
-### Group 构造为什么能反证这个顺序
+### 用 Group 成员核对坐标展开顺序
 
 `parallel_state.py` 的真实 Group 构造也和上面的三维展开一致：
 
@@ -634,9 +558,7 @@ moe_tp_size = 2
 
 > 先看 `tp_size / moe_dp_size / ep_size` 如何派生 `moe_tp_size`，再看当前配置最终创建了哪些 Group，而不是只凭参数名字想象拓扑。
 
----
-
-## 五、Ascend 910C 上一个很重要的细节：`EP=TP` 也不代表 `_MOE_EP` 就是 `_TP`
+## 五、EP 与 TP 宽度相同，Group 仍可能不同
 
 现在来看一个很容易因为“成员相同”而误判的细节。
 
@@ -648,23 +570,11 @@ ep_size = 8
 moe_dp_size = 1
 ```
 
-那么：
+那么：`moe_tp_size = 1`
 
-```text
-moe_tp_size = 1
-```
+从成员列表上看，TP Group 和 MoE EP Group 都可能包含：`[0, 1, 2, 3, 4, 5, 6, 7]`
 
-从成员列表上看，TP Group 和 MoE EP Group 都可能包含：
-
-```text
-[0, 1, 2, 3, 4, 5, 6, 7]
-```
-
-很容易于是得出：
-
-```text
-_MOE_EP == _TP
-```
+很容易于是得出：`_MOE_EP == _TP`
 
 但当前 SGLang 在 NPU 路径上**明确不是这么做的**。
 
@@ -679,11 +589,7 @@ else:
 
 源码见 [`parallel_state.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/parallel_state.py#L2837-L2865)。
 
-代码旁边甚至直接注明：
-
-```text
-NPU requires a standalone group for MOE expert parallelism
-```
+代码旁边甚至直接注明：`NPU requires a standalone group for MOE expert parallelism`
 
 所以在 Ascend 910C / NPU 路径里，即使：
 
@@ -710,23 +616,13 @@ MOE EP Group
 这套通信资源为哪种并行语义服务
 ```
 
-所以判断两个 Group 是否相同，不能只看：
+所以判断两个 Group 是否相同，不能只看：`成员是不是一样`
 
-```text
-成员是不是一样
-```
-
-还必须看：
-
-```text
-是不是同一个 GroupCoordinator / process-group handle
-```
+还必须看：`是不是同一个 GroupCoordinator / process-group handle`
 
 这里也要避免再往前多推一步：`_MOE_EP` 是 SGLang 当前分布式状态中的 MoE EP process group；这并不意味着所有 DeepEP / FuseEP 的数据面通信都可以简单等同于“调用这个 group 做一个普通 collective”。MoE A2A backend 仍有自己的 dispatch / combine 执行路径。
 
----
-
-## 六、回到源码：看到任何 Rank，都先问三个问题
+## 六、沿源码确认 Rank 的含义
 
 现在再回看 Scheduler 保存的 `ParallelState`，就会发现它其实很合理。
 
@@ -782,74 +678,6 @@ flowchart TD
     MG --> C
 ```
 
-以后源码里看到任何 Rank，先问三个问题：
+具体排查时，可以把进程身份、逻辑坐标和实际 Group 放在同一行记录。`tp_rank` 通常是 TP Group 内编号；`attn_dp_rank` 表达 Attention 拓扑坐标；`dp_rank` 则要结合 Native DP 或 DPA 模式解释。通信参与者最终由调用使用的 Group 决定。
 
-**第一，它属于哪套坐标系？**
-
-```text
-WORLD？
-TP？
-Attention DP / CP / TP？
-MoE DP / EP / TP？
-```
-
-**第二，这个 Rank 是真正的 `group.rank_in_group`，还是 controller / topology 层的逻辑身份？**
-
-例如：
-
-```text
-tp_rank       → TP Group local rank
-moe_ep_rank   → MoE EP Group local rank
-
-dp_rank       → 需要结合 Native DP / DPA 模式理解
-attn_dp_rank  → Attention topology 的 DP 坐标
-```
-
-**第三，当前代码真正使用的是哪个 Group？**
-
-这决定了后面的通信参与者。
-
-于是读 DeepSeek-V4 分布式源码时，就不再只看到一串缩写，而会看到两个连续的 layout transformation：
-
-```text
-同一个 TP world
-        │
-        ├── Attention
-        │      ↓
-        │   DP × CP × TP
-        │
-        └── MoE
-               ↓
-            DP × EP × TP
-```
-
-这也是为什么 DeepSeek-V4 的 Attention 和 MoE 可以使用完全不同的并行组织方式，而物理进程本身并没有换掉。
-
-最后再回到 `TP16 / DP8` 这个例子，就可以很准确地说：
-
-```text
-DPA 开启：
-16 个 TP Rank
-→ Attention 视角下 reshape 为 8 × 1 × 2
-→ 仍然是这一套 16-rank model-parallel world
-
-Native DP：
-8 个 replica
-× 每个 replica 16-way TP
-→ PP=1 时是 128 个 device worker
-```
-
-而到了 MoE，又应该重新问：
-
-```text
-moe_dp_size 是多少？
-ep_size 是多少？
-moe_tp_size 派生成多少？
-_MOE_EP / _MOE_DP / _MOE_TP 最终各包含谁？
-```
-
-只要形成这种“**先找坐标系，再找 Group，最后看 Collective**”的习惯，后面的 DeepSeek-V4 DP Attention、Expert Parallel、DeepEP，甚至 DSpark 中 Draft / Target / Verify 不同的 TP/DP/EP Layout，都会变得容易很多。
-
-因为它们底层都在回答同一个问题：
-
-> **同一批执行进程，在这一阶段应该怎样被解释成正确的逻辑坐标，以及这次通信到底应该发生在哪个 Group 里。**
+回到 `TP16 / DP8`：开启 DPA 且 CP=1 时，同一个 16-rank TP world 在 Attention 视角下分成 `8 × 1 × 2`；Native DP 则是 8 个完整 replica，每个 replica 做 16-way TP，PP=1 时共有 128 个 device worker。进入 MoE 后，再按 `moe_dp_size`、`ep_size` 与派生的 `moe_tp_size` 查找 Group 成员。不同 backend 可能施加额外的宽度约束，不能仅凭这些维度乘积判断配置可用。

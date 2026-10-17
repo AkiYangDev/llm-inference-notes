@@ -416,3 +416,9 @@ a,button,.article-card,.skill-card {transition:background-color .18s,border-colo
   .header,.footer,.toc-panel,.mobile-toc,.reading-toolbar,.reading-progress,.copy-code,.code-gutter,.expand-diagram,.article-series,.series-pager,.reading-actions,.related-articles,.article-end,.resume-reading,.reading-shortcuts,.bookmark-button,dialog,.toast{display:none!important}
   .prose pre.numbered-code{padding-left:16px}.prose pre,.diagram,.table-scroll{break-inside:avoid}.hero,.article-card,.skill-card{box-shadow:none}
 }
+
+/* Optional implementation depth stays visible as a reading choice. */
+.prose details {margin:24px 0;border:1px solid var(--line);border-radius:10px;padding:0 18px;background:var(--card)}
+.prose details>summary {padding:14px 0;cursor:pointer;font-weight:600;line-height:1.65;overflow-wrap:anywhere}
+.prose details[open]>summary {border-bottom:1px solid var(--line);margin-bottom:18px}
+.prose details>:last-child {margin-bottom:18px}

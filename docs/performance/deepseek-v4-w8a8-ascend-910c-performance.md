@@ -1,39 +1,11 @@
-# DeepSeek-V4 W8A8 在 Ascend 910C 上为什么不一定更快？从 Decode 小 M、FRACTAL_NZ 到 CANN Tiling
+# DeepSeek-V4 W8A8 性能分析：小 M、NZ 布局与测量方法
 
-上一篇 [《DeepSeek-V4 W8A8 推理在 Ascend 910C 上到底发生了什么？从量化权重到 INT8 MatMul Kernel》](../ascend/deepseek-v4-w8a8-ascend-910c.md) 已经把执行链追到了：
+W8A8 把部分矩阵乘法换成低精度路径，同时增加激活动态量化、Scale 处理和相关算子开销。最终收益取决于同一负载下省下的 GEMM 时间，能否覆盖这些额外成本。
 
-~~~text
-ModelSlim W8A8_DYNAMIC
-        ↓
-BF16 hidden
-        ↓
-Dynamic Quant
-        ↓
-INT8 activation + per-token scale
-        ↓
-npu_quant_matmul / npu_grouped_matmul
-        ↓
-ACLNN / CANN
-        ↓
-Ascend 910C AI Core
-~~~
+Decode 的小 M、MoE 的 Expert Batch 分散，以及 NZ 布局和 Tiling，都可能改变这个收支。下面沿具体算子分析这些因素，并给出对应测量方法。文中引用的 arch35 源码用于解释该分支的实现，910C 的实际路径仍需与目标环境对应。
 
-接下来真正值得问的不是“INT8 理论算力是不是更高”，而是：
-
-> **这条 INT8 数据通路在当前 workload 下，究竟有没有把理论优势兑现成 TTFT、TPOT 和吞吐收益？**
-
-对 DeepSeek-V4 这种同时包含 Attention、MoE、DeepEP、DPA 和投机推理的模型，答案不可能只由 dtype 决定。
-
-评估收益时，应比较同一工作负载下的总耗时：量化 GEMM 节省了多少时间，是否足以覆盖动态量化、Scale 处理、格式转换和额外 Launch 的成本。小 M、Expert Batch 分散、Layout 与 Tiling 会改变这些项的大小。
-
-Attention、通信和其他未被量化的工作仍留在总时间里，限制端到端加速比；它们不能再次作为额外开销从 GEMM 的节省量中扣除。若计算与通信有重叠，还要以实际关键路径上的时间差为准。
-
-下面沿四个问题检查具体实现：
-
-1. <code>npu_dynamic_quant</code> 在 Decode 小 M 时到底能从源码证明什么；
-2. <code>aclnnQuantMatmulWeightNz</code> 对 M=1/2/4/8 是否真的存在固定 tiling bucket；
-3. FRACTAL_NZ 对 DeepSeek-V4-Flash 的真实 N/K shape 到底意味着什么；
-4. Expert-local <code>M_e</code> 与 <code>npu_grouped_matmul</code> 是否存在源码可证明的性能 cliff。
+<details markdown="1">
+<summary>版本与源码入口</summary>
 
 源码固定到：
 
@@ -48,9 +20,9 @@ Attention、通信和其他未被量化的工作仍留在总时间里，限制�
 
 文中的 CANN GitHub 仓库用于源码检索便利；发布或部署时仍应以目标环境实际安装的 CANN 版本为准。
 
----
+</details>
 
-## 一、先建立正确的性能模型：W8A8 优化的是一部分时间，不是整个 Decode
+## 一、量化收益与额外开销怎样比较
 
 一个普通 Dense Linear 可以写成：
 
@@ -83,8 +55,6 @@ npu_quant_matmul
    ↓
 BF16 Y
 ~~~
-
-因此：
 
 ~~~text
 T_W8A8_linear
@@ -155,11 +125,7 @@ else:
     quant_out, dynamic_scale = torch.ops.npu.npu_dynamic_quant(x)
 ~~~
 
-也就是说，如果上游 fused/prolog kernel 已经产生：
-
-~~~text
-(INT8 payload, scale)
-~~~
+也就是说，如果上游 fused/prolog kernel 已经产生：`(INT8 payload, scale)`
 
 这个 Linear 不会再单独执行一次 <code>npu_dynamic_quant</code>。
 
@@ -169,9 +135,7 @@ else:
 
 只有前者才存在独立 DynamicQuant Kernel 的成本。
 
----
-
-## 二、Decode 小 M：arch35 源码对照与 910C 的核对范围
+## 二、DynamicQuant 小 M：arch35 源码对照
 
 这一节读取的是 CANN **arch35** 分支，用来说明一种按行分配计算核的实现。本文尚未建立该分支与 910C 实际算子路径之间的对应关系，因此下面的 `coreNum` 公式不能直接当作 910C 的已确认行为。
 
@@ -205,11 +169,7 @@ coreNum =
     );
 ~~~
 
-对于普通二维 Dense 输入：
-
-~~~text
-X.shape = [M, K]
-~~~
+对于普通二维 Dense 输入：`X.shape = [M, K]`
 
 于是：
 
@@ -245,23 +205,11 @@ min(Vector Core 数, M)
 
 源码没有简单停在 <code>coreNum=M</code>。
 
-<code>CalculateTilingData()</code> 会计算一行在 UB 中需要的空间。如果一个 row 大到一个 UB 都放不下，而且满足：
+<code>CalculateTilingData()</code> 会计算一行在 UB 中需要的空间。如果一个 row 大到一个 UB 都放不下，而且满足：`rowNum <= vectorCoreNum / 2`
 
-~~~text
-rowNum <= vectorCoreNum / 2
-~~~
+以及：`calcSize >= 4 × maxUseUbSize`
 
-以及：
-
-~~~text
-calcSize >= 4 × maxUseUbSize
-~~~
-
-就可能进入：
-
-~~~text
-CalculateTilingForPertenLargeMulticore
-~~~
+就可能进入：`CalculateTilingForPertenLargeMulticore`
 
 把单行尾轴再拆给更多核。
 
@@ -275,7 +223,7 @@ CalculateTilingForPertenLargeMulticore
 
 DeepSeek-V4 的主要 W8A8 Dense K 值是 4096 或 1024，究竟在目标 CANN build 上走 full-load 还是特殊大-shape 路径，应读取实际 tiling log，而不是从模型 config 单独推断。
 
-### 为什么仍然不能写“DynamicQuant M=1 = X μs”
+### 从分块规则到实际耗时还缺什么
 
 源码能证明：
 
@@ -300,9 +248,7 @@ M=2 → 8.8 μs
 
 具体 launch + device duration 仍必须由 Ascend 910C profiler 给出。
 
----
-
-## 三、aclnnQuantMatmulWeightNz 的 M=1/2/4/8：源码存在 Small-M 逻辑，但不存在一张固定 bucket 表
+## 三、QuantMatmul 的小 M 分块与待测问题
 
 接下来检查小 M 的 MatMul 分块方式。
 
@@ -338,11 +284,7 @@ nCnt
 preSplitKBlockCnt
 ~~~
 
-然后决定是否进入：
-
-~~~text
-UpdateSmallMnStreamKBase()
-~~~
+然后决定是否进入：`UpdateSmallMnStreamKBase()`
 
 公开代码里明确存在 SmallMN / StreamK 逻辑。
 
@@ -425,11 +367,7 @@ K=4096
 N=1024
 ~~~
 
-只 sweep：
-
-~~~text
-M = 1, 2, 4, 8, 16, 32, 64
-~~~
+只 sweep：`M = 1, 2, 4, 8, 16, 32, 64`
 
 每个点记录：
 
@@ -445,9 +383,7 @@ StreamK status
 
 > **Ascend 910C + 当前 CANN build + 当前 DeepSeek-V4 shape 的小 M QuantMatmul 曲线。**
 
----
-
-## 四、FRACTAL_NZ：DeepSeek-V4 的主要 W8A8 Dense Shape 天然对齐，但“对齐”不等于“已证明快多少”
+## 四、FRACTAL_NZ 对齐与实际矩阵形状
 
 当前 SGLang 对 W8A8 Weight 会尝试：
 
@@ -505,13 +441,7 @@ moe_intermediate_size  = 2048
 | <code>wkv</code> | 4096 | 512 |
 | <code>wq_b</code> | 1024 | 32768 / <code>attn_tp_size</code> |
 
-以官方 TP16/DP16 DPA 配置为例：
-
-~~~text
-attn_tp_size = 1
-~~~
-
-所以：
+以官方 TP16/DP16 DPA 配置为例：`attn_tp_size = 1`
 
 ~~~text
 wq_b:
@@ -553,11 +483,7 @@ SGLang 会尝试 format cast
 成功后进入 WeightNz ACLNN 路径
 ~~~
 
-不能证明：
-
-~~~text
-WeightNz 比 ND 快固定 X%
-~~~
+不能证明：`WeightNz 比 ND 快固定 X%`
 
 收益仍然受 M、K/N、CANN tiling、cache、HBM、Prefill/Decode 等影响。
 
@@ -588,9 +514,7 @@ throughput
 
 需要注意：这个环境变量影响 Weight load，因此 A/B 需要分别重启服务，不能在一个已加载模型进程里动态切换。
 
----
-
-## 五、MoE 的 Expert-local M_e：CANN 确实有 128-token 调优阈值，但当前 SGLang 不能直接据此宣称有 128 cliff
+## 五、Expert Token 数与 Grouped MatMul
 
 DeepSeek-V4 MoE 一轮不是一个共享 Weight 的大 GEMM，而是：
 
@@ -601,11 +525,7 @@ Expert 1: M_1
 Expert E: M_e
 ~~~
 
-当前 SGLang Ascend Runner 把：
-
-~~~text
-expert_tokens
-~~~
+当前 SGLang Ascend Runner 把：`expert_tokens`
 
 作为：
 
@@ -615,7 +535,7 @@ group_list=expert_tokens
 
 传给 <code>npu_grouped_matmul</code>，所以 actual expert token distribution 是 GMM 的真实输入。
 
-### CANN 源码真的出现了 128
+### CANN 中的 128 阈值及其分支条件
 
 在当前公开 GroupedMatmul tiling 源码中有非常明确的注释：
 
@@ -638,13 +558,7 @@ has_sufficient_tuning =
     tuningConfig_ >= 128;
 ~~~
 
-源码还包含一个 A8W8 Fixed-Axis 优化，要求 expected token / expert 处于：
-
-~~~text
-128 ~ 512
-~~~
-
-这说明：
+源码还包含一个 A8W8 Fixed-Axis 优化，要求 expected token / expert 处于：`128 ~ 512`
 
 1. CANN 开发者明确把“预期每 Expert Token 数”作为性能调优维度；
 2. 128 在某些 A8W8 GroupedMatmul 优化策略中确实是一个有实测背景的阈值。
@@ -662,11 +576,7 @@ npu_grouped_matmul(
 
 而当前 SGLang 的 <code>GroupedMatmul.forward()</code> 调用没有传这个参数。
 
-op-plugin / CANN 未收到显式 tuning hint 时，对应：
-
-~~~text
-tuningConfig_ = 0
-~~~
+op-plugin / CANN 未收到显式 tuning hint 时，对应：`tuningConfig_ = 0`
 
 而不是 128、192 或其它预期每 Expert Token 数。
 
@@ -708,7 +618,7 @@ N = 4096
 
 > **即使都是 DeepSeek 系 MoE，也不能把针对另一代 K/N shape 调出来的 GMM 优化直接当成 DeepSeek-V4 的现状。**
 
-### 那 M_e 还重要吗？当然重要
+### 用 Expert-local M_e 描述负载
 
 没有显式 tuning hint，不代表 Expert Token 分布不重要。
 
@@ -747,9 +657,7 @@ expert_tokens histogram
 
 128 值得重点观察，因为 CANN 源码告诉我们它是一个调优阈值；但是否形成当前 SGLang 路径的真实 latency cliff，必须让 profiler 给答案。
 
----
-
-## 六、怎样测量 W8A8 的实际成本
+## 六、用四组实验测量实际成本
 
 经过这轮源码核验，第一版文章里的 M sweep 可以升级成一套真正可判因果的实验矩阵。
 
@@ -762,11 +670,7 @@ dtype = BF16 → INT8
 K = 1024 / 4096
 ~~~
 
-sweep：
-
-~~~text
-M = 1, 2, 4, 8, 16, 32, 64
-~~~
+sweep：`M = 1, 2, 4, 8, 16, 32, 64`
 
 记录：
 
@@ -801,11 +705,7 @@ wq_b:
 K=1024, N=32768 / attn_tp_size
 ~~~
 
-sweep：
-
-~~~text
-M = 1,2,4,8,16,32,64,128
-~~~
+sweep：`M = 1,2,4,8,16,32,64,128`
 
 每个点记录：
 
@@ -914,11 +814,9 @@ output throughput gate = 3100 token/s
 
 它不是严格的 BF16 vs W8A8 控制变量实验，因此不能从这个 CI 门槛推导“W8A8 快 X%”。
 
----
-
 ## 源码结论与待测问题
 
-| 问题 | 严格结论 |
+| 问题 | 源码支持的结论 |
 | --- | --- |
 | DynamicQuant 小 M | arch35 对照分支使用 <code>coreNum=min(vectorCoreNum,M)</code>；本文未确认该公式适用于 910C 的实际路径 |
 | DynamicQuant μs | **源码不能给出**，必须 profiler |
@@ -930,11 +828,7 @@ output throughput gate = 3100 token/s
 | 当前 SGLang 是否必在 128 cliff | **不能这样说**：当前 wrapper 没有显式传 tuning_config |
 | DSV4 是否命中 Fixed-Axis 特殊优化 | 当前 W13/W2 K/N 不匹配该源码分支的特定 shape |
 
-因此，“DeepSeek-V4 W8A8 为什么不一定更快”最准确的答案不是一句：
-
-~~~text
-因为 INT8 有量化开销
-~~~
+因此，“DeepSeek-V4 W8A8 为什么不一定更快”最准确的答案不是一句：`因为 INT8 有量化开销`
 
 而是：
 
@@ -968,8 +862,6 @@ CANN Tiling
 
 > **dtype 只是性能输入之一；shape、layout、tiling 和 workload ownership 才决定这份理论算力到底有没有机会被用出来。**
 
----
-
 ## 源码入口
 
 SGLang：
@@ -991,4 +883,4 @@ CANN：
 - [QuantBatchMatmulV3 StreamK tiling](https://github.com/hicann/ops-nn/blob/0026707d7ecb24d258e030d831c8121ac2d055bd/matmul/quant_batch_matmul_v3/op_host/op_tiling/arch35/qbmm_streamk_tiling.cpp)
 - [GroupedMatmul tiling](https://github.com/hicann/ops-transformer/blob/bbb4dafe296119266a0a64133f17bc42b6597ed3/gmm/grouped_matmul/op_host/op_tiling/grouped_matmul_tiling.cpp)
 
-下一步如果要把本文形成“Ascend 910C 实测结论”，最值得做的不是继续读更多代码，而是跑四组最小实验：DynamicQuant M sweep、WeightNz M sweep、NZ/ND A/B、Expert <code>M_e</code> sweep，然后把 tiling dump 与 profiler 时间线一一对上。
+要形成 Ascend 910C 的实测结论，可以从前文四组实验开始：DynamicQuant M sweep、WeightNz M sweep、NZ/ND A/B、Expert <code>M_e</code> sweep，然后把 tiling dump 与 profiler 时间线一一对上。

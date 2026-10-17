@@ -1,55 +1,11 @@
-# DeepSeek-V4 DSpark 到底怎么决定 Verify 多少 Token？从 Confidence Head、STS Calibration 到 SPS Cost Model 与 Ragged Verify
+# DSpark 自适应 Verify：怎样分配候选预算
 
-DSpark 最容易被简化成固定流程：
+同一 batch 中，有的请求后几枚 Draft 很可能被接受，有的请求可能很快遇到不匹配。如果 Verify 预算有限，把相同长度分给所有请求，未必能得到最多的有效输出。
 
-~~~text
-Draft 提出 gamma 个 Token
-        ↓
-Target 把 gamma+1 个位置全部 Verify
-        ↓
-Accept 最长前缀
-        ↓
-Commit
-~~~
+DSpark 的自适应调度用置信度估计前缀存活概率，再结合执行成本分配 `verify_lens`。本文先用预算分配解释它在优化什么，再区分训练目标、运行时校准与成本模型。最后回到执行路径：`cap-accept` 只限制接受范围，真正进入 compact 才会缩减逻辑输入行数；本文固定版本的 Ascend 910C 配方仍使用 static。
 
-这对固定窗口 DSpark 是成立的。并且截至本文核对的 SGLang 主线，DeepSeek-V4-Flash W8A8 在 Ascend 910C 的注册 Accuracy / Performance CI 仍显式使用：
-
-~~~bash
-SGLANG_RAGGED_VERIFY_MODE=static
-~~~
-
-但当前 SGLang 已经实现了更完整的自适应 Verify Scheduler：
-
-~~~text
-Draft Hidden
-   ↓
-Confidence Head
-   ↓
-STS Calibration
-   ↓
-Prefix Survival
-   ↓
-SPS Cost Model
-   ↓
-Global Verify Budget
-   ↓
-Top-Survival Allocation
-   ↓
-per-request verify_lens
-   ↓
-cap-accept / compact
-~~~
-
-真正优化的不是 Acceptance Rate 本身，而是：
-
-> **单位时间预计能够 Commit 多少有效 Token。**
-
-理解这套调度，需要先区分四件事：
-
-1. Confidence Head 的训练 target 与 STS 的运行时 calibration label 并不严格同构；
-2. <code>tau = B + sum(survival)</code> 在理想条件下对应期望 committed progress，但一般 Runtime 中只是 surrogate；
-3. 1D SPS 能保留显式 cost cliff，而 Additive SPS 的可分离拟合与线性插值可能在 Graph tier 边界抹平真实阶跃；
-4. Ascend 910C 当前继续固定 static 的核心限制之一，是 NPU DSV4 Target Verify backend 仍按固定 <code>draft_token_num</code> 构造 Query / Compressor metadata，并未实现 ragged metadata contract，也没有 opt-in ragged graph capability。
+<details markdown="1">
+<summary>版本与源码入口</summary>
 
 本文固定源码：
 
@@ -57,33 +13,21 @@ cap-accept / compact
 | --- | --- |
 | SGLang | <code>a9871012acb768dc94a43a6542cc32626c7b7b0b</code> |
 | DeepSeek DeepSpec | <code>005e03b81cec38b7da6399833d609ee89a2587f2</code> |
-| Review date | 2026-09-21 |
+| 核对日期 | 2026-09-21 |
 
 证据边界也先说明：DeepSpec 是 DeepSeek 官方公开的 DSpark 训练实现，可以确认公开 DSpark Confidence Head 的训练语义；但本文没有找到公开的 DeepSeek-V4-Flash 专用训练配置，可以证明实际 V4 checkpoint 完全按同一训练 recipe 产生。因此本文会区分“官方公开 DSpark 训练语义”和“V4 checkpoint 在 SGLang 中的运行时消费语义”。
 
----
+</details>
 
-## 一、Verify Scheduler 真正在优化什么
+## 一、用存活概率分配 Verify 预算
 
 假设当前有 B 个 Request。
 
-每个 Request 即使一个 Draft Token 都没被接受，Target Verify 仍会提供一个正确的 fallback / bonus Token。因此一轮至少有：
+每个 Request 即使一个 Draft Token 都没被接受，Target Verify 仍会提供一个正确的 fallback / bonus Token。因此一轮至少有：`baseline progress = B`
 
-~~~text
-baseline progress = B
-~~~
+如果额外 Verify 一个 Draft position，而该 position 能成为 accepted prefix 的概率是 s，那么它对期望 progress 的边际贡献就是：`+s`
 
-如果额外 Verify 一个 Draft position，而该 position 能成为 accepted prefix 的概率是 s，那么它对期望 progress 的边际贡献就是：
-
-~~~text
-+s
-~~~
-
-把所有候选位置的 survival probability 从高到低排序：
-
-~~~text
-s1 >= s2 >= s3 >= ...
-~~~
+把所有候选位置的 survival probability 从高到低排序：`s1 >= s2 >= s3 >= ...`
 
 给出 b 个额外 Verify budget 时，Planner 使用：
 
@@ -158,23 +102,13 @@ s3 = c1*c2*c3
 ...
 ~~~
 
-因为每个 c 都在 0 到 1 之间，所以同一 Request 内：
+因为每个 c 都在 0 到 1 之间，所以同一 Request 内：`s1 >= s2 >= s3 >= ...`
 
-~~~text
-s1 >= s2 >= s3 >= ...
-~~~
-
-前缀概率随位置不增，但仅靠这一点还不足以处理相等概率。固定实现对并列值优先选较早的位置，再按请求编号排序，才保证所选位置构成前缀。最终得到：
-
-~~~text
-verify_lens = [l1, l2, ..., lB]
-~~~
+前缀概率随位置不增，但仅靠这一点还不足以处理相等概率。固定实现对并列值优先选较早的位置，再按请求编号排序，才保证所选位置构成前缀。最终得到：`verify_lens = [l1, l2, ..., lB]`
 
 并通过 <code>SpecTpSyncSite.DSPARK_PLAN</code> 在相关 TP Group 内同步。
 
----
-
-## 二、Confidence Head 的训练 target 与 STS label 并不严格同构
+## 二、训练标签与运行时校准的区别
 
 这一区分决定了后面收益模型的含义。
 
@@ -307,11 +241,7 @@ calibrated cumulative survival
 
 ### STS 更像运行时语义桥
 
-STS fitter 对每个 position 选择 Temperature：
-
-~~~text
-T_i
-~~~
+STS fitter 对每个 position 选择 Temperature：`T_i`
 
 运行时：
 
@@ -344,9 +274,7 @@ S_k = product(i<=k) c_i
 
 > **当前 STS 把 Confidence cumulative survival 校准到 greedy Target-argmax prefix correctness；对其它 sampling policy 是否无偏，需要单独验证。**
 
----
-
-## 三、tau 什么时候真的是 expected committed progress
+## 三、tau 怎样对应期望输出推进
 
 Planner 的 tau 可以和实际 commit 计数对应起来。
 
@@ -356,8 +284,6 @@ DSpark Accept 最后进入 <code>FinalizeAcceptLens</code>：
 commit_lens =
     correct_len + 1
 ~~~
-
-也就是说：
 
 ~~~text
 correct_len
@@ -387,7 +313,7 @@ B + sum(accepted_drafts)
 
 这解释了 Planner 为什么从 B 开始。
 
-### 理想条件下，公式是严格成立的
+### 概率事件对齐时的期望推导
 
 对 Request r 定义：
 
@@ -485,9 +411,7 @@ current survival
 
 > **tau 是一个具有严格期望解释的 committed-progress surrogate；只有当 survival 与当前 acceptance event 对齐、状态时滞和二次调度修正都可忽略时，它才接近无偏的 expected committed progress。**
 
----
-
-## 四、1D SPS 与 Additive SPS：Graph tier cliff 是最容易被模型抹平的地方
+## 四、SPS 成本模型与 Graph Tier
 
 Confidence 解决收益，SPS 解决成本。
 
@@ -572,11 +496,7 @@ Verify-token-side 成本
 
 第一，它假设 B 与 M 的影响近似可加，不显式建模 B×M interaction。
 
-第二，Profiler fitting 当前默认：
-
-~~~text
-mbin_width = 64
-~~~
+第二，Profiler fitting 当前默认：`mbin_width = 64`
 
 把 M 做 64-token 分 bin。
 
@@ -596,25 +516,13 @@ M=65 → graph tier 96
 
 ### Off-diagonal profiler 知道 graph tier，但模型没有显式 graph-tier 变量
 
-Compact/off-diagonal profiling 会记录真实 graph tier，还会检查：
-
-~~~text
-graph_tier >= pinned M
-~~~
+Compact/off-diagonal profiling 会记录真实 graph tier，还会检查：`graph_tier >= pinned M`
 
 确保测量合法。
 
-但最终 fit 输入仍然是：
+但最终 fit 输入仍然是：`(B, M, measured step time)`
 
-~~~text
-(B, M, measured step time)
-~~~
-
-而不是：
-
-~~~text
-(B, M, graph_tier, step time)
-~~~
+而不是：`(B, M, graph_tier, step time)`
 
 所以 Graph tier cliff 最终只能被 theta(M) 间接吸收。
 
@@ -635,7 +543,7 @@ graph_tier >= pinned M
 
 > **更能表达 Request-count effect 的经验 cost approximation，而不是 graph-tier-aware 精确模型。**
 
-### 真正严谨的验证方式
+### 在 Graph Tier 两侧测量拟合误差
 
 在每个 captured tier 两侧密集采样：
 
@@ -669,9 +577,7 @@ actual throughput-optimal budget
 
 而不是单纯增加随机样本。
 
----
-
-## 五、static、cap-accept、compact：Schedule 决策和真正少算是两回事
+## 五、static、cap-accept 与 compact 的执行差异
 
 Planner 最终给出：
 
@@ -686,11 +592,7 @@ verify_lens =
 
 static 下不构建 Confidence Head，也没有 STS、SPS budget、per-request verify_lens。
 
-每个 Request 固定 Verify：
-
-~~~text
-gamma + 1
-~~~
+每个 Request 固定 Verify：`gamma + 1`
 
 当前 Ascend 910C DeepSeek-V4 官方注册 CI 就使用这个模式。
 
@@ -698,23 +600,11 @@ gamma + 1
 
 cap-accept 可以产生不同 verify_lens，但 Worker 仍走 <code>run_non_compact()</code>。
 
-Target 输入仍是固定：
+Target 输入仍是固定：`B * verify_num_draft_tokens`
 
-~~~text
-B * verify_num_draft_tokens
-~~~
+只是 Accept 阶段把：`correct_len`
 
-只是 Accept 阶段把：
-
-~~~text
-correct_len
-~~~
-
-裁到：
-
-~~~text
-verify_len - 1
-~~~
+裁到：`verify_len - 1`
 
 所以它主要改变 Accept Horizon，不直接节省 Target Verify FLOPs。
 
@@ -722,11 +612,7 @@ verify_len - 1
 
 compact 才会构造 <code>RaggedVerifyLayout</code>，真正压紧 Query rows。
 
-例如：
-
-~~~text
-verify_lens = [2,1,4]
-~~~
+例如：`verify_lens = [2,1,4]`
 
 Target 只需要处理：
 
@@ -742,19 +628,13 @@ C0 C1 C2 C3
 
 假设真实需要 37 个 row，但 Graph 只能 replay 64-token tier。
 
-不对齐时：
-
-~~~text
-37 real + 27 padding
-~~~
+不对齐时：`37 real + 27 padding`
 
 开启 graph-tier alignment 后，可以继续按 survival 填真实候选，直到接近 64 real rows。
 
 因为 64-token Graph 的成本已经支付，这相当于把 padding 变成可能产生 accepted progress 的有效工作。
 
----
-
-## 六、Ascend 910C 为什么当前仍固定 static
+## 六、Ascend 910C 的固定宽度限制
 
 当前 DeepSeek-V4-Flash W8A8 NPU Accuracy / Performance 注册测试都明确：
 
@@ -766,17 +646,9 @@ SGLANG_RAGGED_VERIFY_MODE=static
 
 ### NPU DSV4 使用的是另一套 backend
 
-在 NPU 上，<code>--attention-backend dsv4</code> 实际创建：
+在 NPU 上，<code>--attention-backend dsv4</code> 实际创建：`DeepseekV4AscendAttnBackend`
 
-~~~text
-DeepseekV4AscendAttnBackend
-~~~
-
-而不是 CUDA 侧的：
-
-~~~text
-DeepseekV4AttnBackend
-~~~
+而不是 CUDA 侧的：`DeepseekV4AttnBackend`
 
 CUDA DSV4 backend 明确声明：
 
@@ -810,19 +682,11 @@ actual_seq_lengths_q =
 [N, 2N, 3N, ..., B*N]
 ~~~
 
-并设置：
-
-~~~text
-max_seqlen_q = N
-~~~
+并设置：`max_seqlen_q = N`
 
 这等价于假设每个 Request 的 Query width 都是同一个 N。
 
-真正的 compact layout 例如：
-
-~~~text
-verify_lens = [2,1,4]
-~~~
+真正的 compact layout 例如：`verify_lens = [2,1,4]`
 
 需要的是：
 
@@ -844,17 +708,9 @@ RaggedVerifyLayout.qo_indptr
 
 ### C4 / C128 Compressor metadata 也依赖固定 width
 
-NPU DSV4 Verify compressor 路径同样使用：
+NPU DSV4 Verify compressor 路径同样使用：`live_seq_len + n_draft`
 
-~~~text
-live_seq_len + n_draft
-~~~
-
-Graph replay context 也维护固定：
-
-~~~text
-tokens_per_bs
-~~~
+Graph replay context 也维护固定：`tokens_per_bs`
 
 并基于它构造 compressor position、seqused、sparse metadata 和 kernel metadata。
 
@@ -939,9 +795,7 @@ C4/C128 state write
    static vs cap-accept vs compact
 ~~~
 
----
-
-## 七、如何验证调度收益
+## 七、测量预算分配是否带来收益
 
 ### A. Confidence 事件语义
 
@@ -972,11 +826,7 @@ actual_progress =
 sum(commit_lens)
 ~~~
 
-按 batch size、lag、sampling mode、graph tier 分桶，观察：
-
-~~~text
-E[actual_progress - predicted_tau]
-~~~
+按 batch size、lag、sampling mode、graph tier 分桶，观察：`E[actual_progress - predicted_tau]`
 
 ### C. Graph tier 两侧验证 SPS
 
@@ -1026,7 +876,7 @@ commit_lens/new_seq_lens
 
 ---
 
-### 最终证据表
+### 实现支持范围对照
 
 | 结论 | 当前证据 |
 | --- | --- |
@@ -1095,8 +945,6 @@ SGLANG_RAGGED_VERIFY_MODE=static
 下一步真正值得做的不是再调一个 Confidence threshold，而是：
 
 > **先让 DeepseekV4AscendAttnBackend 正确消费 RaggedVerifyLayout，把 Query / Compressor / Graph metadata 从 fixed-width 改成 per-request verify_lens，再逐层恢复 TP / DP / DeepEP 能力。**
-
----
 
 ## 源码阅读入口
 

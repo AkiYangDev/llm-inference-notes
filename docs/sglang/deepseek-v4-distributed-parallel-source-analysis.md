@@ -1,34 +1,12 @@
-# DeepSeek-V4 分布式推理源码解析：TP、EP、DP 三种并行如何共同驱动一次前向计算
+# DeepSeek-V4 分布式 Forward：Attention 与 MoE 怎样交换布局
 
-前几篇文章已经把一条 DeepSeek-V4 请求从 Scheduler、ModelRunner 一直追到 Attention、KV Cache 和 MoE。单卡视角下，一个 Decoder Layer 看起来仍然很简单：
+DeepSeek-V4 的一层从 Attention 进入 MoE 时，同一批 Rank 会改变分工：Attention 按请求组和 head 分片计算，MoE 按专家归属分发 Token。hidden states 必须在这两种布局之间转换，下一层才拿得到预期的输入。
 
-~~~text
-Attention
-    ↓
-MoE
-    ↓
-Next Layer
-~~~
-
-但一旦模型运行在多张 NPU 上，同一层马上变成一个数据布局不断切换的问题：谁拥有 Token，谁拥有 Tensor shard，谁拥有 Expert，什么时候 reduction，什么时候 token exchange，MoE 结束后结果又应该回到谁手里。
-
-很多文章会把问题概括成：
-
-~~~text
-Attention 用 TP
-MoE 用 EP
-请求用 DP
-~~~
-
-方向没错，但当前 SGLang 更值得理解的是：
-
-> **同一个 `tp_size` world，在 Attention 阶段按照 `attn_dp × attn_cp × attn_tp` 解释，在 MoE 阶段又按照 `moe_dp × moe_ep × moe_tp` 重新解释。**
-
-所以这篇文章不把 TP、DP、EP 当成三个孤立名词，而是沿一次真实 Decoder Layer forward，追踪 hidden states 怎样从 Attention 坐标系进入 MoE 坐标系，再恢复回来。
+本文用 `TP32 / DP16` 的 Target 布局展开这次转换。先算有效 Attention 宽度，再追踪局部输出归约、Token 行拆分、Expert Dispatch 和结果恢复。这里讨论的 TP 域不包含外层 Native DP 副本；DSpark 的额外限制会另行说明。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线聚焦 DeepSeek-V4 target model 的 TP、DP Attention 与 MoE EP 组合。本文会单独指出 DSpark speculative path 的额外限制，避免把 target model 能表达的拓扑误写成 DSpark 已经支持的拓扑。Ascend 通信以当前 torch.distributed / HCCL 路径为基础说明，同时标注 ZBAL / FuseEP 等专用 backend 的例外。
 
-## 一、先分清 `dp_size` 和 `attn_dp_size`：配置值不等于有效 Attention DP 宽度
+## 一、配置宽度怎样变成有效 Attention 布局
 
 当前 SGLang 的配置里有 `tp_size`、`dp_size`、`ep_size`，但真正进入模型执行后，还会派生出 `attn_dp_size`、`attn_tp_size`、`moe_dp_size`、`moe_ep_size`、`moe_tp_size`。
 
@@ -95,7 +73,7 @@ moe_tp_size = tp_size // moe_ep_size // moe_dp_size
 
 ~~~mermaid
 flowchart TD
-    W[TP world<br/>tp_size ranks]
+    W[TP world · tp_size ranks]
     W --> A[Attention coordinate system]
     A --> ADP[attn_dp_size]
     A --> ATP[attn_tp_size]
@@ -131,7 +109,7 @@ DP15 -> ranks 30,31
 
 每个 Attention DP replica 内部恰好是 2-way Attention TP。
 
-## 二、Attention TP 到底切了什么：DeepSeek-V4 Query 侧按 `attn_tp_size` 分片
+## 二、Query 分片与 Attention 输出归约
 
 DeepSeek-V4 的 Query 主干包含 `wq_b`。当前构造：
 
@@ -211,7 +189,7 @@ flowchart TD
 
 最后这一步“replicated post-attention hidden rows”正是下一节 Attention → MoE 数据布局转换的前提。
 
-## 三、MoE 换成另一套 ownership：Expert Parallel group 与 Attention TP group 不是一回事
+## 三、MoE 的专家归属和通信组
 
 MoE 关心的不是 Query head shard，而是 Expert 权重归属。
 
@@ -243,11 +221,7 @@ else:
 
 固定入口：[`_MOE_EP`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/distributed/parallel_state.py#L2835-L2865)。
 
-因此在 NPU 上，即使：
-
-~~~text
-moe_ep_size == tp_size
-~~~
+因此在 NPU 上，即使：`moe_ep_size == tp_size`
 
 MoE EP 仍然使用 standalone process group。
 
@@ -255,7 +229,7 @@ MoE EP 仍然使用 standalone process group。
 
 这个细节对排查跨机 collective mismatch、通信超时和 communicator 初始化非常重要。
 
-## 四、真正连接 Attention 与 MoE 的，是 `_run_moe_ffn_dp_sync()`
+## 四、Attention 与 MoE 之间的 Token 行转换
 
 DeepSeek-V4 最值得看的并行桥接函数是：[`_run_moe_ffn_dp_sync()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3748-L3915)。
 
@@ -345,8 +319,6 @@ hidden_states = (
 
 原因是 Attention 已经完成 TP reduction，同一个 attn-TP group 内 post-attention hidden rows 是 replicated 的。如果两个 Rank 都拿完整 Token rows 去做 EP dispatch，同一个 Token 会被 dispatch 多遍。
 
-所以：
-
 ~~~text
 Rank0: [A B C D]
 Rank1: [A B C D]
@@ -393,16 +365,16 @@ attn_tp_all_gather
 
 ~~~mermaid
 flowchart TD
-    A[Post-attention hidden rows<br/>replicated inside attn TP group]
-    A --> S[Token-row split<br/>by attn_tp_rank]
-    S --> M[MoE<br/>Router + EP + experts + combine]
+    A[Post-attention hidden rows · replicated inside attn TP group]
+    A --> S[Token-row split · by attn_tp_rank]
+    S --> M[MoE · Router + EP + experts + combine]
     M --> G[attn_tp_all_gather]
-    G --> N[Replicated rows<br/>for next layer]
+    G --> N[Replicated rows · for next layer]
 ~~~
 
 这张图是理解“TP 与 EP 如何真正接上”的核心。
 
-## 五、把 TP32 / DP16 真正代入源码：target path 能表达，但 DSpark 当前仍显式拒绝
+## 五、TP32 / DP16 示例与 DSpark 限制
 
 现在设：
 
@@ -439,17 +411,9 @@ return {"ep_size": view.tp_size}
 
 源码：[`_a2a_ep_size()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/arg_groups/overrides.py#L1630-L1673)。
 
-因此在 TP32 + A2A backend 下：
+因此在 TP32 + A2A backend 下：`resolved moe_ep_size = 32`
 
-~~~text
-resolved moe_ep_size = 32
-~~~
-
-若 `moe_dp_size=1`：
-
-~~~text
-moe_tp_size = 32 / 32 / 1 = 1
-~~~
+若 `moe_dp_size=1`：`moe_tp_size = 32 / 32 / 1 = 1`
 
 同一组 32 Rank 的两套坐标系于是是：
 
@@ -482,11 +446,7 @@ if (
 
 固定源码：[`DSparkWorkerV2`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L159-L175)。
 
-而 TP32 / DP16 恰好得到：
-
-~~~text
-attn_tp_size = 2
-~~~
+而 TP32 / DP16 恰好得到：`attn_tp_size = 2`
 
 所以这个 guard 会直接命中。
 
@@ -503,11 +463,7 @@ DSpark DeepSeek-V4 MoE draft:
 
 因此从“显式拒绝 TP32 / DP16”推进到“请求输出正确”，真正工作绝不是删除 `raise ValueError`。
 
-错误信息已经直接指出已知风险：
-
-~~~text
-attn_tp > 1 corrupts the MoE-under-DP all-reduce
-~~~
+错误信息已经直接指出已知风险：`attn_tp > 1 corrupts the MoE-under-DP all-reduce`
 
 至少需要重新验证：
 
@@ -526,7 +482,7 @@ graph / eager consistency
 
 > **主模型已经有某种并行布局转换能力，不代表 speculative draft path 自动继承了同样的 ownership 语义。**
 
-## 六、Ascend 上这些 collective 到底是不是 HCCL：默认是，但不能一刀切
+## 六、Ascend 通信后端的分工
 
 固定源码里的默认设备映射：
 
@@ -558,7 +514,7 @@ HCCL_BUFFSIZE
 
 设置 HCCL buffer。固定源码：[`get_torch_distributed_pg_options()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/distributed/parallel_state.py#L90-L105)。
 
-所以可以说：
+在这一默认配置下：
 
 > **Ascend 上标准 TP / DP / EP process-group collectives 通常由 HCCL 承担。**
 
@@ -572,7 +528,7 @@ HCCL_BUFFSIZE
 2. Ascend FuseEP 会把 dispatch、cross-rank exchange、Expert GEMM、combine 融进 `fused_deep_moe(...)`；
 3. 即使底层最终使用 HCCL transport，Python / profiler 也未必出现独立的 `all_reduce`、`all_gather`、`all_to_all` 窗口。
 
-因此本文统一使用两层语言：
+定位通信时，需要对应两层信息：
 
 ~~~text
 算法 / runtime 语义:
@@ -606,16 +562,16 @@ FuseEP / ZBAL 等专用路径:
 ~~~mermaid
 flowchart TD
     F[ForwardBatch]
-    F --> DP[Attention DP<br/>Token ownership]
-    DP --> TP[Attention TP<br/>Tensor-shard ownership]
+    F --> DP[Attention DP · Token ownership]
+    DP --> TP[Attention TP · Tensor-shard ownership]
     TP --> ATT[DeepSeek-V4 Attention]
     ATT --> RED[TP reduction]
-    RED --> B1[Attention → MoE layout bridge<br/>token-row split if needed]
+    RED --> B1[Attention → MoE layout bridge · token-row split if needed]
     B1 --> R[Router / HashTopK]
-    R --> EP[Expert Parallel<br/>Expert ownership]
+    R --> EP[Expert Parallel · Expert ownership]
     EP --> E[Expert-local compute]
     E --> C[EP combine]
-    C --> B2[MoE → Attention bridge<br/>attn-TP all-gather if needed]
+    C --> B2[MoE → Attention bridge · attn-TP all-gather if needed]
     B2 --> N[Next Decoder Layer]
 ~~~
 

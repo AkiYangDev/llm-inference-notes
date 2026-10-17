@@ -1,37 +1,21 @@
-# 为什么 Prefill 和 Decode 明明跑的是同一个模型，性能却完全不同？
+# Prefill 与 Decode 为什么性能不同：从计算形状到执行开销
 
-同一个 DeepSeek-V4，同一份模型权重，同样的 Attention、MoE、RMSNorm 和 Linear，甚至运行在同一组 Ascend 910C 上，Prefill 和 Decode 的性能表现却常常像两个完全不同的程序。
+Prefill 和 Decode 使用同一份模型权重，却把不同形状的工作交给设备。Prefill 一次处理较多新 Token；普通 Decode 中，每条请求一轮通常只提供一个新 Token，同时还要读取已有历史。
 
-最常见的总结是：Prefill 更偏 Compute Bound，Decode 更偏 Memory Bound。这个说法可以作为第一层直觉，但不能当成定律。更准确的说法是：
+这个差异会一路传到 Dense GEMM 的 M、每个 Expert 的 Token 数、权重复用程度和固定开销的摊薄方式。本文先用矩阵形状解释这些变化，再看 DeepSeek-V4-Flash 的滑窗、压缩历史和 Ascend 执行。这样才能把“计算受限”“带宽受限”落到具体工作负载上。
 
-> **模型结构没有变，但送给模型的 Workload Geometry 变了。**
-
-一次 Forward 处理多少新 Token、Dense GEMM 的 M 有多大、MoE 每个 Expert 实际收到多少 Token、Weight 能被复用多少次、Attention 要读取多少历史状态、一次 Launch 与通信开销能被多少 Token 摊薄，以及下一轮能否提前开始，这些都会随着 Prefill / Decode 切换而变化。
-
-~~~text
-Same Model
-≠
-Same Workload
-≠
-Same Hardware Behavior
-~~~
-
-这也是为什么现代 LLM Serving 会自然长出 KV Cache、Continuous Batching、Paged / Radix Cache、Chunked Prefill、Graph Replay、Quantization、Speculative Decoding 和 PD Disaggregation：它们并不是一堆互不相关的优化，而是在分别修复 Prefill 与 Decode 两片完全不同的工作负载空间。
-
-本文主要固定到 SGLang commit <code>b86a30afbae389eec8763f4bcf38f14904d2d00c</code>，模型以 DeepSeek-V4-Flash-0731 为具体案例，Review 日期为 2026-09-21。
+本文主要固定到 SGLang commit <code>b86a30afbae389eec8763f4bcf38f14904d2d00c</code>，模型以 DeepSeek-V4-Flash-0731 为具体案例，核对日期为 2026-09-21。
 
 为了把 Shape 对算术强度的影响单独讲清楚，部分 GEMM 示例会统一使用 BF16 bytes 做思想实验。官方 DeepSeek-V4-Flash checkpoint 实际包含 FP8 / FP4 等量化配置，不同 Ascend 部署也可能采用 W8A8 等路径；dtype 会改变数值系数，但不会改变“大 M 更容易复用 Weight、小 M 更难摊薄 Weight / Launch 成本”的基本结论。
 
----
-
-## 一、第一性原因：Prefill 一次处理很多 Query，Decode 每个 Request 通常只有一个
+## 一、新 Token 数怎样改变计算形状
 
 假设用户输入 2048 个 Prompt Token，然后让模型生成 512 个 Output Token。
 
 ~~~mermaid
 flowchart TD
-    A["Prompt<br/>2048 Tokens"]
-    B["Prefill<br/>一次处理很多新 Token"]
+    A["Prompt · 2048 Tokens"]
+    B["Prefill · 一次处理很多新 Token"]
     C["First Token"]
     D["Decode Step 1"]
     E["Decode Step 2"]
@@ -89,9 +73,7 @@ actual_seq_lengths_q_pa
 
 所以 Prefill / Decode 的性能差异不是后来做 Profiling 时才出现的现象，而是从 Scheduler、ForwardBatch 到 Attention Geometry 一开始就已经不同。
 
----
-
-## 二、把 DeepSeek-V4 的真实 Dense Shape 代进去，大 M / 小 M 的差异马上可见
+## 二、Dense GEMM：M 与权重复用
 
 Transformer 里的大量计算最终都会落成矩阵乘：
 
@@ -133,19 +115,9 @@ Y: [M,N]
 
 实际每 Rank 的 N 还会受 <code>attn_tp_size</code> 影响。这里要区分两个维度：M 主要由当前 workload phase 决定，而 K/N 由模型结构和并行布局共同决定。
 
-为了只观察 M 的影响，假设 <code>wq_a</code> 的 X / W / Y 都按 BF16 计算，每元素 2 Byte。计算量约为：
+为了只观察 M 的影响，假设 <code>wq_a</code> 的 X / W / Y 都按 BF16 计算，每元素 2 Byte。计算量约为：`FLOPs ≈ 2MKN`
 
-~~~text
-FLOPs ≈ 2MKN
-~~~
-
-最低限度的数据流量近似：
-
-~~~text
-Bytes ≈ 2 × (MK + KN + MN)
-~~~
-
-因此：
+最低限度的数据流量近似：`Bytes ≈ 2 × (MK + KN + MN)`
 
 ~~~text
 AI
@@ -167,11 +139,7 @@ AI
 
 这些不是 Ascend 910C 实测值，而是只保留输入、Weight、输出最低数据量的 Roofline-style 思想实验。它没有计入 Cache、Tiling、通信、量化 Scale 等成本，但核心物理直觉已经很清楚：M=1 时，大量 Weight 基本只服务一个 Row；M=2048 时，同一份 Weight 同时服务 2048 个 Row。
 
-当 M 远小于 K/N 时，Weight traffic 通常是主要项，于是可以近似：
-
-~~~text
-AI ≈ 2M / b_w
-~~~
+当 M 远小于 K/N 时，Weight traffic 通常是主要项，于是可以近似：`AI ≈ 2M / b_w`
 
 其中 <code>b_w</code> 是每个 Weight 元素的字节数。BF16 Weight 下大约有 AI≈M；INT8 Weight 下大约有 AI≈2M。
 
@@ -197,9 +165,7 @@ R_eff × b_w / 2
 
 但真实 crossover 还取决于 CANN Tiling、Weight Layout、Cache、Quantization、Kernel Occupancy、TP / DP 与通信。因此不能仅凭芯片规格宣布 Ascend 910C Decode 在 Batch=32 或 Batch=64 一定进入 Compute Bound，这个数字只能通过目标配置上的 batch sweep 得到。
 
----
-
-## 三、DeepSeek-V4 的 MoE 会把 Prefill / Decode 的 Shape 差异再放大一层
+## 三、MoE：总 Token 怎样分散到 Expert
 
 Dense Linear 的 M 还是这一轮的总 Token 数。MoE 真正决定 Expert GEMM Shape 的却是：
 
@@ -294,9 +260,7 @@ Expert 4: 13
 
 所以分析 DeepSeek-V4 Decode 时，只看 global batch size 远远不够。真正值得记录的是 Expert Token Histogram，以及 mean / median / p90 / max M_e 和 empty expert ratio。这也是 EPLB 与 MoE runtime 优化为什么会直接影响 Decode 性能。
 
----
-
-## 四、长 Context Decode 不能再写成“每轮扫描完整 KV”：DSV4 已经是 SWA + C4 + C128
+## 四、长上下文下的滑窗与压缩历史
 
 普通 MHA 的入门模型常常这样解释 Decode：
 
@@ -366,11 +330,7 @@ C4 Lightning Indexer 面对的 key history 规模大约是 ceil(L/4)。公开配
 130 Bytes
 ~~~
 
-于是 logical key payload 规模大约：
-
-~~~text
-ceil(L/4) × 130 Bytes
-~~~
+于是 logical key payload 规模大约：`ceil(L/4) × 130 Bytes`
 
 | Context L | C4 Index rows | Logical key payload |
 | ---: | ---: | ---: |
@@ -404,11 +364,7 @@ ceil(L/128) × 1 KiB
 
 它仍然随 Context 增长，但增长斜率已经从 1 row / original token 压缩成 1 row / 128 original tokens。
 
-DSV4 Compressor 还有第三类数据：单独的 FP32 state cache。源码中非-online state 的 last_dim 为：
-
-~~~text
-2 × (1 + overlap) × head_dim
-~~~
+DSV4 Compressor 还有第三类数据：单独的 FP32 state cache。源码中非-online state 的 last_dim 为：`2 × (1 + overlap) × head_dim`
 
 C4 的 overlap=True，因此一行大约是 2048 FP32，也就是约 8 KiB；C128 的 overlap=False，一行约 1024 FP32，也就是约 4 KiB。
 
@@ -436,9 +392,7 @@ metadata / page table / cache effects
 
 DeepSeek-V4 仍然会随着 Context 变长承受越来越重的历史状态成本，但增长发生在哪个子模块、以什么斜率增长，已经与标准 MHA 完全不同。
 
----
-
-## 五、Decode 还有一个与 HBM 无关、但同样致命的问题：跨 Token 串行与固定成本反复支付
+## 五、跨 Token 依赖与重复开销
 
 即使暂时忽略 KV / compressed history，Decode 仍然有一个无法逃避的问题：未来 Token 尚不存在。
 
@@ -484,9 +438,7 @@ small useful work / launch
 
 同样的逻辑也解释了 Chunked Prefill。一个巨大的 Prefill 往往硬件利用率很好，但如果它一次占设备太久，正在流式输出的 Decode Request 就只能等待。Chunked Prefill 的本质不是“Prefill 算不动”，而是不要让高吞吐的大 Prefill 长时间阻塞对尾延迟敏感的 Decode。
 
----
-
-## 六、理解这些 Shape 后，现代推理系统为什么长成这样就一目了然
+## 六、常见优化分别作用在哪里
 
 把前面的因果关系放到一起：
 
@@ -539,33 +491,21 @@ PD Disaggregation 则走到更彻底的一步：既然 Prefill 和 Decode 本来
 
 > **尽可能把 Prefill 与 Decode 各自的 Shape，重新组织到硬件更擅长的位置。**
 
----
+## 七、用 Profile 判断实际瓶颈
 
-## 七、Ascend 910C 到底是不是 Prefill 吃 Cube、Decode 吃 HBM？必须用 Profile 回答
-
-这里必须把“常见经验”与“已验证事实”分开。
-
-截至本文 Review，没有找到一份公开、可复现的 DeepSeek-V4 + Ascend 910C msprof trace，可以直接给出 Prefill / Decode 的 Cube、Vector、Memory 利用率百分比。因此不能写 Prefill Cube=85%、Decode HBM=90% 这种没有目标环境证据的数字。
+前面推导的是工作量形状与可能的瓶颈，本文没有给出目标配置下的实测利用率。要判断 Ascend 910C 上究竟哪一项限制性能，需要把算子耗时和硬件指标放回同一轮执行。
 
 但 Ascend 官方 Profiling 已经提供了验证这件事需要的指标。
 
-AI Core profiling 中最值得看的包括：
-
-~~~text
-mac_ratio
-~~~
+AI Core profiling 中最值得看的包括：`mac_ratio`
 
 Cube / Matrix instruction cycles 占比。
 
-~~~text
-vec_ratio
-~~~
+`vec_ratio`
 
 Vector instruction cycles 占比。
 
-~~~text
-mte2_ratio
-~~~
+`mte2_ratio`
 
 Memory-to-AI-Core 数据搬运相关 cycles 占比。
 
@@ -619,37 +559,7 @@ B:
 
 即使 Dense GEMM 已经进入更偏 Compute-heavy 的区域，如果 Attention、C4 Indexer、DeepEP 或 Host Gap 仍然占据 Critical Path，整个 Decode Step 依然不能简单称为 Compute Bound。
 
-所以本文不会写“Batch=32 或 64 就是 Ascend 910C crossover”。更严格的结论是：
-
-> **随着 Continuous Batch 增大，Decode 的 Dense / Expert GEMM arithmetic intensity 会提高，并可能跨过目标硬件的有效 Roofline ridge point；但 DeepSeek-V4 整个 Decode Step 的 crossover 由 Dense、MoE、Compressed Attention、Indexer、通信和 Runtime 共同决定，只能在目标 Ascend 910C 配置上通过 Batch × Context sweep 实测。**
-
-如果整篇只保留一个性能分析框架，可以记住：
-
-~~~text
-Phase
-  ↓
-Query Token Count
-  ↓
-Dense M
-+
-Expert M_e
-  ↓
-Weight Reuse
-+
-Kernel Occupancy
-  ↓
-Attention History Traffic
-+
-Compression / Indexer Traffic
-  ↓
-Launch / Communication Amortization
-  ↓
-真实硬件瓶颈
-~~~
-
-最终真正值得建立的直觉不是“Prefill 永远 Compute Bound、Decode 永远 Memory Bound”，而是：
-
-> **Prefill 和 Decode 是同一个模型落在两片完全不同的 Workload Shape 空间里；现代推理系统的绝大多数优化，都是在重新组织这两片 Shape 空间。**
+随着 Batch 增大，Dense 和 Expert GEMM 可以提高权重复用，单个算子也可能跨过有效 Roofline 的转折点。整轮 Decode 是否因此更快，还取决于 Attention 历史读取、Indexer、通信与 Host Gap。用 Batch × Context 的组合实验观察这些组成部分，才能找到目标配置的性能转折点。
 
 ### 源码与资料入口
 

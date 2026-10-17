@@ -6,19 +6,19 @@
 
 ## 入门桥梁
 
-- [第一次读 SGLang 源码，应该先看懂什么？用 DeepSeek-V4 一次 Decode 串起 Tensor、KV Cache、Attention、MoE 与 Sampling](../fundamentals/sglang-decode-source-reading-primer.md)：严格核清普通 Decode 的 L→L+1 时间语义、V4 mHC 的 [T,4,H]↔[T,H] 边界、Ascend 910C DSV4 的 SWA/C4/C128 ownership，以及 DP Attention / Vocab Parallel 下 Logits 与 Sampling 的 Group 边界。
+- [从一次 Decode 读懂 SGLang：Tensor、缓存与下一枚 Token](../fundamentals/sglang-decode-source-reading-primer.md)：严格核清普通 Decode 的 L→L+1 时间语义、V4 mHC 的 [T,4,H]↔[T,H] 边界、Ascend 910C DSV4 的 SWA/C4/C128 ownership，以及 DP Attention / Vocab Parallel 下 Logits 与 Sampling 的 Group 边界。
 
 ## 核心执行链
 
-- [SGLang 推理执行链路解析：一次 Chat Completion 请求是如何跑到 Ascend NPU 上的](sglang-ascend-request-lifecycle.md)：DeepSeek-V4、`dsv4` Ascend 后端与 DSpark 生成边界。
-- [SGLang Scheduler 源码解析：一个请求是如何被组批、调度并送进 ModelRunner 的](sglang-scheduler-source-analysis.md)：从 `Req` 到 `ScheduleBatch`、`ForwardBatch`，解释 admission、Prefix Cache、Prefill / Decode 调度与 ModelRunner 边界。
-- [SGLang ModelRunner 源码解析：ForwardBatch 如何驱动 DeepSeek 完成一次 Prefill / Decode](sglang-modelrunner-source-analysis.md)：解释 `ForwardBatch` 如何经过 Graph / Eager 分发进入 DeepSeek-V4，并从 packed hidden states 走到 logits 与 Sampling。
-- [DeepSeek-V4 Attention：Query 生成、缓存写入与历史寻址](deepseek-v4-attention-source-analysis.md)：从 `MQALayer` 追到 Query、SWA/C4/C128 缓存、page table 与 Ascend DSV4 Attention backend。
-- [DeepSeek-V4 MoE 推理源码解析：一个 Token 如何经过 Router、All-to-All 和 Expert Parallel 完成一次前向计算](deepseek-v4-moe-source-analysis.md)：解释 V4 Router / HashTopK、shared experts、EP token routing、DeepEP 与 Ascend FuseEP 的 runtime 边界。
+- [SGLang 请求生命周期：从 Chat Completion 到 Ascend NPU](sglang-ascend-request-lifecycle.md)：DeepSeek-V4、`dsv4` Ascend 后端与 DSpark 生成边界。
+- [SGLang Scheduler：请求怎样组批、执行和持续生成](sglang-scheduler-source-analysis.md)：从 `Req` 到 `ScheduleBatch`、`ForwardBatch`，解释 admission、Prefix Cache、Prefill / Decode 调度与 ModelRunner 边界。
+- [SGLang ModelRunner：九个输入 Token 怎样产生两行 Logits](sglang-modelrunner-source-analysis.md)：解释 `ForwardBatch` 如何经过 Graph / Eager 分发进入 DeepSeek-V4，并从 packed hidden states 走到 logits 与 Sampling。
+- [DeepSeek-V4 Attention：Query、缓存写入与历史寻址](deepseek-v4-attention-source-analysis.md)：从 `MQALayer` 追到 Query、SWA/C4/C128 缓存、page table 与 Ascend DSV4 Attention backend。
+- [DeepSeek-V4 MoE：Token 从路由到专家计算，再回到原位置](deepseek-v4-moe-source-analysis.md)：解释 V4 Router / HashTopK、shared experts、EP token routing、DeepEP 与 Ascend FuseEP 的 runtime 边界。
 
 ## 评测与故障排查
 
-- [GSM8K 精度未达标，应该怎样定位？一次从 200 题到全量评测的排查记录](gsm8k-accuracy-debugging-from-200-to-full-evaluation.md)：从固定 200 题的失败、DeepEP 配置对照与逐题输出，追到 1314 题全量评测，区分门禁覆盖、输出稳定性和代码回退。
+- [GSM8K 精度排查：从 200 题失败到全量与逐题对照](gsm8k-accuracy-debugging-from-200-to-full-evaluation.md)：从固定 200 题的失败、DeepEP 配置对照与逐题输出，追到 1314 题全量评测，区分门禁覆盖、输出稳定性和代码回退。
 
 ## 相关专题
 

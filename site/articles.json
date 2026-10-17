@@ -24,7 +24,7 @@
     "role": "advanced"
   },
   "docs/sglang/sglang-modelrunner-source-analysis.md": {
-    "summary": "从 ForwardBatch 出发，追踪模型前向、执行路径选择与输出处理，理解 ModelRunner 如何连接调度与 DeepSeek 模型。",
+    "summary": "用两条请求、九个输入 Token 的例子，追踪 ForwardBatch、模型前向与两行采样 Logits，再进入下一轮 Decode。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -191,7 +191,7 @@
     "role": "advanced"
   },
   "docs/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md": {
-    "summary": "从 Req、ScheduleBatch、ForwardBatch 与 FutureMap 追踪 Draft、Verify、Accept 状态机，重点解释 overlap 下的多时钟、publish fence、forward isolation 与 mixed-tail late binding。",
+    "summary": "区分 CPU 请求记录、设备执行进度和下一轮结果，解释 publish、字段隔离与 FutureMap 怎样支持投机调度重叠。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -203,7 +203,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
-    "summary": "区分 MTP、NextN 与 EAGLE 的语义，沿 Target hidden、Draft Extend 与多步候选生成理解 Draft 路径及 Ascend 实现边界。",
+    "summary": "沿 Draft Extend 和 NextN rollout 说明候选怎样逐步产生，区分候选数量、Forward 次数与 Target 验证窗口。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -215,7 +215,7 @@
     "role": "advanced"
   },
   "docs/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md": {
-    "summary": "从候选路径评分、树索引与 Tree Mask，到 Verify 和 KV Cache 整理，理解 EAGLE 多分支候选如何组织及其 Ascend 适用边界。",
+    "summary": "从候选池、父节点索引到 Verify Mask 与接受路径解释通用 EAGLE 树机制，并核对 DeepSeek-V4 的 topk=1 限制。",
     "category": "源码解析",
     "tags": [
       "SGLang",

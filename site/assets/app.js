@@ -67,10 +67,27 @@ async function copyText(text, button, success) { try { await navigator.clipboard
 $('.copy-link')?.addEventListener('click', event => copyText(location.href, event.currentTarget, '页面链接已复制'));
 for (const block of document.querySelectorAll('.prose pre:not(.mermaid)')) { const button = document.createElement('button'); button.className = 'copy-code'; button.textContent = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.addEventListener('click', () => copyText(block.querySelector('code')?.textContent || '', button, '代码已复制')); block.append(button); }
 for (const link of document.querySelectorAll('.mobile-toc a')) link.addEventListener('click', () => { const panel = link.closest('details'); panel.open = false; });
+// A directory or search link may point into an optional implementation section.
+function revealFragment(hash = location.hash) {
+  const target = document.getElementById(safeFragment(hash));
+  if (!target) return;
+  for (let node = target.parentElement; node; node = node.parentElement) {
+    if (node.tagName === 'DETAILS') node.open = true;
+  }
+  requestAnimationFrame(() => target.scrollIntoView({block:'start', behavior:'instant'}));
+}
+window.addEventListener('hashchange', () => revealFragment());
+document.addEventListener('click', event => {
+  const link = event.target.closest('a[href]');
+  if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const url = new URL(link.href, location.href);
+  if (url.origin === location.origin && url.pathname === location.pathname && url.hash) revealFragment(url.hash);
+});
+if (location.hash) revealFragment();
 if ($('.prose')) {
   const progress = $('.reading-progress'), headings = [...document.querySelectorAll('.prose h2, .prose h3')], links = [...document.querySelectorAll('.toc a')];
   let scheduled = false;
-  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (heading.getBoundingClientRect().top < $('.header').getBoundingClientRect().height + 110) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
+  const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (!heading.getClientRects().length) continue; if (heading.getBoundingClientRect().top < $('.header').getBoundingClientRect().height + 110) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
   window.addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, {passive:true}); window.addEventListener('resize', update); update();
   // Highlighting and diagrams load independently; failure of one does not delay the other.
   (async () => { try { const {default:hljs} = await import('https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js'); const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/styles/github-dark.min.css'; document.head.append(css); document.querySelectorAll('.prose pre code').forEach(c => hljs.highlightElement(c)); } catch {} })();

@@ -1,48 +1,14 @@
-# DeepSeek-V4 Speculative Decoding 性能解析：为什么 Speculative Decoding 不一定更快？从 Acceptance Rate、Draft Cost 到 KV Overhead
+# 投机解码的性能收支：接受长度、Verify 成本与并发
 
-前面的几篇文章已经把 DeepSeek-V4 Speculative Decoding 的 correctness 链路拆到了 Draft、Verify、Tree Attention、Accept 与 KV Commit。接下来真正值得问的是：
+投机解码用额外的 Draft 和 Verify 工作，换取更少的 Target 执行轮次。它是否划算，取决于每轮真正推进了多少有效输出，以及这一轮总共花了多久。
 
-> **为什么 Speculative Decoding 有时显著加速，有时却会让吞吐下降？**
-
-最容易产生的误解是：
-
-```text
-一轮可以输出多个 Token
-=
-一定更快
-```
-
-真实系统优化的并不是“每轮提议多少 Token”，而是：
-
-```text
-单位 wall-clock 时间
-真正提交多少有效 Token
-```
-
-SGLang 当前 DeepSeek-V4 cookbook 甚至明确区分三类 operating point：
-
-```text
-low-latency    → 更积极的 speculation
-balanced       → 更短的 speculative window
-high-throughput→ 直接关闭 MTP
-```
-
-原因很简单：系统进入饱和后，额外 Draft + Verify 的成本可能超过省掉的 Decode step。
+例如，同一批请求的平均接受长度增加了，但 Verify 行数、图填充或通信成本增长得更快，总吞吐仍可能下降。本文从固定 batch 的产出公式开始，依次解释接受指标、窗口大小、compact 执行和并发饱和，再把这些因素放回压测。
 
 > **源码基线**：本文基于 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。这个 commit 本身更新了 Ascend/NPU performance testing framework，并开始把 speculative acceptance 纳入性能 CI。
 
-## 实现范围与关键区别
+## 一、先计算每轮的有效产出
 
-| 核对问题 | 固定源码结论 |
-| --- | --- |
-| `accept_length / step_time` 是否只是低并发近似 | **不是只适用于低并发。** `bench_speculative.py` 在每个固定 `batch_size` 下都用它做配置排序。但它没有乘 batch size，更准确是“固定 operating point 下的 per-request progress proxy”，不能直接跨 batch size 当 aggregate throughput 比。 |
-| runtime strict `accept_rate` 与 Ascend CI `accept_rate` | 两者**不是同一个指标**。runtime 是 `correct_drafts / proposed_drafts`，严格不含 bonus；Ascend CI 当前变量名 `accept_rate` 实际是 `accept_length / speculative_num_draft_tokens`，只是 performance baseline proxy。 |
-| Block Size 增大后哪些成本可 amortize | 能 amortize 的主要是 fixed / latency-dominated 部分：launch、调度、部分同步延迟、权重读取与 GEMM 利用率。不会消失的是随真实 verify token 数增长的 Target compute、MoE routing/expert work、KV/state write 与通信字节。 |
-| Ragged Verify 是否破坏固定 `N+1` 模型 | **取决于执行模式。** `static` 和 `cap-accept` 仍执行固定宽度 `B*(gamma+1)`；`cap-accept` 只限制可接受的前缀。真正执行 compact 时，逻辑 Token 行数才是 `sum(verify_lens)`，Graph 还可能增加 padding。 |
-
----
-
-## 一、第一性公式：Speculative Decoding 到底靠什么赚钱？
+### 一轮成本与输出推进
 
 普通 autoregressive Decode 一步推进一个 Token。若 Target Decode step 的耗时为：
 
@@ -76,11 +42,7 @@ Speedup\approx\frac{A\cdot T_{decode}}{T_{spec}}
 
 这比“Acceptance Rate 高就会快”更接近第一性原理。
 
-因为真正进入分子的不是 Draft Model 有多聪明，而是：
-
-```text
-这一轮最终推进多少有效输出 Token
-```
+因为真正进入分子的不是 Draft Model 有多聪明，而是：`这一轮最终推进多少有效输出 Token`
 
 而分母是：
 
@@ -107,9 +69,7 @@ Distributed Sync
 
 > **Speculative Round 的 critical path。**
 
----
-
-## 二、`accept_length / step_time`：固定 operating point 的调参 proxy，而不是跨并发总吞吐公式
+### 固定 batch 与总吞吐
 
 SGLang 自己的：
 
@@ -134,7 +94,7 @@ speed=\frac{accept\_length}{step\_time}
 
 这里需要区分三个边界。
 
-### 1. 它不是 `bs=1` 专用
+#### 它不是 `bs=1` 专用
 
 脚本会遍历：
 
@@ -147,7 +107,7 @@ num_draft_tokens
 
 所以 `accept_length / step_time` 不是低并发专属。它会在每个固定 batch size 下用于比较不同 speculative config。
 
-### 2. 它不能直接跨 Batch Size 当服务器总吞吐
+#### 它不能直接跨 Batch Size 当服务器总吞吐
 
 脚本没有乘 `batch_size`。
 
@@ -174,7 +134,7 @@ R_{aggregate}\approx\frac{B\cdot A}{T_{step}}
 
 但不适合直接拿 `bs=1` 和 `bs=128` 的 speed 值比较“总吞吐”。
 
-### 3. 它不是严格的端到端 TPOT
+#### 它不是严格的端到端 TPOT
 
 `step_time` 来自 server-side `step_time_dict`，而且脚本刻意使用 20th percentile，而不是 P50/Mean。
 
@@ -211,9 +171,7 @@ steps_per_sec
 
 这已经说明：Step Time 必须和 request/token geometry 一起解释。
 
----
-
-## 三、Acceptance Rate、Acceptance Length、CI Acceptance Proxy：三个名字很像，含义不同
+## 二、读懂三个接受指标
 
 当前 SGLang runtime 在：
 
@@ -230,13 +188,7 @@ spec_accept_rate =
     num_correct_drafts / num_proposed_drafts
 ```
 
-源码注释：
-
-```text
-strict count, no bonus
-```
-
-因此：
+源码注释：`strict count, no bonus`
 
 \[
 \boxed{
@@ -254,13 +206,7 @@ spec_accept_length =
     completion_tokens / spec_verify_ct
 ```
 
-源码注释：
-
-```text
-includes bonus token
-```
-
-因此：
+源码注释：`includes bonus token`
 
 \[
 \boxed{
@@ -330,11 +276,7 @@ gamma = 6
 verify window = 7
 ```
 
-所以 CI baseline 的真实含义是：
-
-```text
-accept_length / 7 >= 0.5
-```
+所以 CI baseline 的真实含义是：`accept_length / 7 >= 0.5`
 
 即平均 Accept Length 至少约 3.5，而不是“strict draft acceptance ≥ 50%”。
 
@@ -351,17 +293,13 @@ CI Acceptance Proxy
 = accept_length / configured verify width
 ```
 
----
+## 三、窗口增大后，哪些成本会变化
 
-## 四、Block Size 增大：到底摊薄了什么？
+### 固定成本与新增 Token 工作
 
-“Verify 多个 Token 能把成本摊薄”方向没错，但一定要继续问：
+“Verify 多个 Token 能把成本摊薄”方向没错，但一定要继续问：`摊薄的到底是什么？`
 
-```text
-摊薄的到底是什么？
-```
-
-### 可以被 amortize 的部分
+#### 可以被 amortize 的部分
 
 随着一个 step 中 Token 数增加，下面这些固定或低斜率成本可能被摊薄：
 
@@ -376,7 +314,7 @@ Scheduler / Runtime overhead
 
 特别是低 batch、q_len=1 时，大模型 Decode 往往很难把硬件吃满。更宽的 Verify 能把“每 step 付一次”的成本分摊到更多 candidate。
 
-### 不会消失的 Token-Proportional Work
+#### 不会消失的 Token-Proportional Work
 
 但这些工作仍会随真实 Verify Token 数增长：
 
@@ -404,7 +342,7 @@ Cost per Verified Token
 
 而不是“Block 越大，Verify 成本越接近固定”。
 
-### SGLang 新 SPS Cost Model 已经把这件事写进代码
+#### SGLang 新 SPS Cost Model 已经把这件事写进代码
 
 当前 DSpark planner 支持 additive cost model，近似：
 
@@ -427,7 +365,7 @@ M = actual verify-token count
 
 > **相同 request 数量下，Verify Token 数仍然会改变 Step Time。**
 
-### MoE / DeepEP 更是硬证据
+#### MoE / DeepEP 更是硬证据
 
 DeepSeek-V4 cookbook 当前要求：
 
@@ -468,9 +406,56 @@ T_{token}(B,M)\uparrow
 
 这就是为什么收益最终会出现拐点。
 
----
+### 实际宽度与搜索上限
 
-## 五、Static DSpark 才是固定 `gamma+1` Verify；Ragged Verify 已经改变了模型
+Static 模式：
+
+```text
+gamma
+≈
+每个 request 实际的 speculative horizon
+```
+
+Ragged 模式：
+
+```text
+gamma
+=
+每个 request 最多允许向未来探索多远
+```
+
+实际这一轮 Verify 到哪里：
+
+```text
+confidence
++
+global token budget
++
+graph tier
+```
+
+共同决定。
+
+因此以后压测不能只记录：`gamma = 6`
+
+还需要同时记录：
+
+```text
+Configured Gamma
+Average Verify Len
+P50 / P99 Verify Len
+Total Verify Tokens / Step
+Graph Num Tokens / Step
+Accept Length
+Strict Accept Rate
+Block Accept Length
+```
+
+否则你甚至不知道机器真正算了多少 speculative token。
+
+## 四、自适应 Verify 怎样改变执行成本
+
+### static、cap-accept 与 compact
 
 DSpark runtime 仍然定义：
 
@@ -479,11 +464,7 @@ gamma = draft block size
 verify_num_draft_tokens = gamma + 1
 ```
 
-在：
-
-```text
-SGLANG_RAGGED_VERIFY_MODE=static
-```
+在：`SGLANG_RAGGED_VERIFY_MODE=static`
 
 下，可以近似认为：
 
@@ -521,11 +502,7 @@ verify_lens =
     )
 ```
 
-其中：
-
-```text
-max_len = gamma + 1
-```
+其中：`max_len = gamma + 1`
 
 所以同一个 batch 可以变成：
 
@@ -550,9 +527,7 @@ Worker 用 `should_run_compact(layout)` 决定是否调用 compact forward；配
 
 下面的 Graph tier 分析针对实际支持并启用 compact 的后端；不能据此认定 Ascend NPU 的 static 配置也减少了 Verify 行数。
 
----
-
-## 六、Ragged Verify 还必须区分“真实 Token Work”和“Graph Tier”
+### 逻辑行数与 Graph Tier
 
 `RaggedVerifyLayout` 同时维护：
 
@@ -574,8 +549,6 @@ total_verify_tokens
 graph_num_tokens
 ```
 
-因此：
-
 ```text
 Logical Real Work:
 total_verify_tokens
@@ -596,29 +569,19 @@ graph_num_tokens
 
 把真实 Verify Token 从 40 降到 37，不一定马上让 step time 下降，因为仍然落在同一个 graph bucket。
 
-SGLang 甚至提供：
-
-```text
---speculative-dspark-align-verify-tokens-to-graph-tier
-```
+SGLang 甚至提供：`--speculative-dspark-align-verify-tokens-to-graph-tier`
 
 其源码说明就是：
 
 > 把真实 Verify Token 填到已经付费的 graph tier，把 padding slot 转成高 confidence candidate verification，目标是在几乎相同 step time 下获取更多有效验证。
 
-所以 Ragged Verify 的优化目标不是：
-
-```text
-Verify Token 越少越好
-```
+所以 Ragged Verify 的优化目标不是：`Verify Token 越少越好`
 
 而是：
 
 > **在真实设备 cost curve 下，把有限 Verify Budget 分给最值得验证的 candidate。**
 
----
-
-## 七、Static 与 Compact：相同 Verify Token 数，也可能不是相同步时
+### 相同行数也可能有不同耗时
 
 这一步非常重要。
 
@@ -635,11 +598,7 @@ compact:
 读取更多 KV history
 ```
 
-所以 static profiling table 用来预测 compact 时：
-
-```text
-会略微高估 steps_per_sec
-```
+所以 static profiling table 用来预测 compact 时：`会略微高估 steps_per_sec`
 
 这说明性能模型甚至不能只写：
 
@@ -662,23 +621,13 @@ ParallelTopology
 }
 \]
 
-因为同样 128 个 Verify Token：
+因为同样 128 个 Verify Token：`16 requests × 8 tokens/request`
 
-```text
-16 requests × 8 tokens/request
-```
-
-和：
-
-```text
-64 requests × 2 tokens/request
-```
+和：`64 requests × 2 tokens/request`
 
 会读取完全不同数量、不同长度的 prefix KV，也会产生不同 metadata 与并行布局。
 
----
-
-## 八、DSpark Budget Planner 已经在优化“Expected Progress / Predicted Step Time”
+### Planner 的收益成本估计
 
 这是整篇最重要的源码结论。
 
@@ -686,19 +635,11 @@ ParallelTopology
 
 [`compute_verify_token_budget()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_planner.py)
 
-会拿到：
-
-```text
-history_survival_probs
-```
+会拿到：`history_survival_probs`
 
 把每一个额外 candidate 的“仍然有机会被接受”的概率排序。
 
-随后构造一个预期 useful progress：
-
-```text
-tau_star
-```
+随后构造一个预期 useful progress：`tau_star`
 
 再结合 SPS / additive cost table 预测 Step Time。
 
@@ -725,84 +666,17 @@ PredictedStepTime(B,M)
 
 这和本文开头的第一性模型完全同构。
 
-所以成熟的 speculative tuning 不是：
+所以成熟的 speculative tuning 不是：`maximize acceptance`
 
-```text
-maximize acceptance
-```
-
-甚至也不是：
-
-```text
-minimize verify work
-```
+甚至也不是：`minimize verify work`
 
 而是：
 
 > **让 Expected Useful Progress / Step Cost 最大。**
 
----
+## 五、并发变化怎样改变盈亏平衡
 
-## 九、重新理解 Gamma：Static 中是实际宽度，Ragged 中更像最大搜索半径
-
-Static 模式：
-
-```text
-gamma
-≈
-每个 request 实际的 speculative horizon
-```
-
-Ragged 模式：
-
-```text
-gamma
-=
-每个 request 最多允许向未来探索多远
-```
-
-实际这一轮 Verify 到哪里：
-
-```text
-confidence
-+
-global token budget
-+
-graph tier
-```
-
-共同决定。
-
-因此以后压测不能只记录：
-
-```text
-gamma = 6
-```
-
-还需要同时记录：
-
-```text
-Configured Gamma
-Average Verify Len
-P50 / P99 Verify Len
-Total Verify Tokens / Step
-Graph Num Tokens / Step
-Accept Length
-Strict Accept Rate
-Block Accept Length
-```
-
-否则你甚至不知道机器真正算了多少 speculative token。
-
----
-
-## 十、为什么低并发更容易赚钱，高并发更容易到 Break-even？
-
-低并发时：
-
-```text
-Request Parallelism 不够
-```
+低并发时：`Request Parallelism 不够`
 
 普通 Decode 往往处于：
 
@@ -813,17 +687,9 @@ launch latency 占比高
 communication latency 占比高
 ```
 
-Speculative 把：
+Speculative 把：`B 小, Q=1`
 
-```text
-B 小, Q=1
-```
-
-变成：
-
-```text
-B 小, Q>1
-```
+变成：`B 小, Q>1`
 
 本质是在沿 Token 维人为制造并行度。
 
@@ -861,21 +727,17 @@ high-throughput:
 MTP disabled
 ```
 
-Speculative Decoding 更像：
-
-```text
-Latency / Low-to-Mid Concurrency Optimization
-```
+Speculative Decoding 更像：`Latency / Low-to-Mid Concurrency Optimization`
 
 而不是所有 workload 都无条件提高 aggregate throughput。
 
----
+## 六、设计可比较的压测
 
-## 十一、实际压测应该怎么做？
+### 参数与记录字段
 
 至少做四维 Sweep。
 
-### Concurrency
+#### Concurrency
 
 ```text
 1
@@ -889,7 +751,7 @@ Latency / Low-to-Mid Concurrency Optimization
 ...
 ```
 
-### Gamma / Block Size
+#### Gamma / Block Size
 
 ```text
 1
@@ -901,7 +763,7 @@ Latency / Low-to-Mid Concurrency Optimization
 ...
 ```
 
-### Ragged Mode
+#### Ragged Mode
 
 ```text
 static
@@ -909,7 +771,7 @@ cap-accept
 compact
 ```
 
-### Workload Geometry
+#### Workload Geometry
 
 ```text
 short prompt / long decode
@@ -938,23 +800,13 @@ thinking / non-thinking
 
 > **不要只看 Acceptance。**
 
-一个配置完全可能：
+一个配置完全可能：`Accept Length ↑`
 
-```text
-Accept Length ↑
-```
-
-但同时：
-
-```text
-Step Time ↑↑
-```
+但同时：`Step Time ↑↑`
 
 最终更慢。
 
----
-
-## 十二、最终性能模型：从固定窗口升级成 Runtime Cost Surface
+### 汇总性能模型
 
 初步可以写：
 
@@ -1019,66 +871,7 @@ Predicted Critical Path Cost
 
 这正是当前 DSpark Ragged Verify planner 开始在做的事情。
 
----
-
-## 结语
-
-现在再回答标题：
-
-> **为什么 Speculative Decoding 不一定更快？**
-
-因为它从来不是：
-
-```text
-免费得到多个 Token
-```
-
-而是：
-
-```text
-先花额外成本探索多个未来
-        ↓
-Target Verify
-        ↓
-只保留其中真正有用的部分
-```
-
-真正决定收益的不是 Acceptance Rate 最大，也不是 Verify Token 最少，而是：
-
-\[
-\boxed{
-\frac{
-Expected Useful Progress
-}{
-Actual Speculative Critical Path
-}
-}
-\]
-
-最大。
-
-前面的分析对应四条工程结论：
-
-1. **`accept_length / step_time` 不是低并发专属，但只能在固定 workload geometry 下作为配置 proxy；跨 batch size 比 aggregate throughput 必须把 request count 算进去。**
-2. **runtime `spec_accept_rate` 与 Ascend CI 当前名为 `accept_rate` 的 proxy 不是同一个指标。**
-3. **Block Size 增大后，被 amortize 的是 fixed / latency-dominated overhead；Target Compute、MoE Token Work、KV/State 与通信字节不会消失，只可能 per-token 更高效。**
-4. **实际执行 compact 时，逻辑 Verify 行数为 `sum(verify_lens)`；`cap-accept` 仍按固定宽度执行。耗时还取决于 Graph padding、KV history geometry 和实际后端。**
-
-所以未来真正成熟的 DSpark 调优会越来越接近：
-
-```text
-Candidate Survival Probability
-        +
-Device Cost Curve
-        +
-Current Batch Geometry
-        ↓
-Dynamic Verify Budget
-```
-
-这也是 Speculative Decoding 从“模型算法技巧”进入“推理调度问题”的真正分界线。
-
-## 源码阅读入口
+### 固定源码入口
 
 | 目标 | 固定版本源码 |
 | --- | --- |

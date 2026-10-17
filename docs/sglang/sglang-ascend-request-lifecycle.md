@@ -1,12 +1,12 @@
-# SGLang 推理执行链路解析：一次 Chat Completion 请求是如何跑到 Ascend NPU 上的
+# SGLang 请求生命周期：从 Chat Completion 到 Ascend NPU
 
-客户端发送一句“中国的首都是哪里？”，服务端过了一会儿开始返回文字。对调用 API 的人来说，这是一次 HTTP 请求；对推理服务来说，它会经历协议转换、分词、排队、缓存匹配、批处理、模型计算和流式输出。生成没有结束时，同一条请求还会反复进入设备执行流程。
+客户端发送一句“中国的首都是哪里？”，服务端随后开始返回文字。中间经历了协议转换、分词、排队、缓存匹配、批处理和模型计算；只要生成尚未结束，同一条请求就会继续进入设备执行。
 
-这条链路中，请求的表示形式不断变化：聊天消息被转换成 token ID，独立请求被组织成 batch，batch 中的输入与缓存信息再交给模型执行。NPU 每完成一轮计算，结果就回到调度器，成为继续生成或结束请求的依据。
+本文跟随这条请求的表示变化：聊天消息变成 Token ID，独立请求进入 batch，模型输入与缓存位置交给 NPU，结果再回到 Scheduler 决定继续还是结束。先把这条链走通，再把 DeepSeek-V4 的后端细节放到相应环节。
 
 > **源码与适用范围**：基于 `sgl-project/sglang @ dd83b54611897a5f80f4df59e69756bd2fb4b8ab`，核对日期为 2026-09-20。模型案例采用公开源码中的 DeepSeek-V4 文本模型与 NPU `dsv4` 后端，以合设服务、普通自回归和直接执行为主线，展开非 A5 的 BF16 缓存路径，最后说明 DSPARK 如何改变生成循环。Tensor 示例观察一个参与计算的 Rank；多机通信、量化与图回放不逐项展开。本文分析到源码中的算子入口，具体 Flash/Pro 权重尺寸与部署镜像行为需对应配置和源码确认。
 
-## 一、先看请求会经过哪些进程
+## 一、请求经过哪些进程
 
 一次生成请求可能持续数秒，设备上的一个 batch 却只承担其中一轮计算。等待结果的 HTTP 请求始终存在，参与本轮计算的请求集合则不断变化：有的刚开始处理 prompt，有的已经在生成下一个 token，还有的已经结束。
 
@@ -43,7 +43,7 @@ Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManage
 
 输入与输出形成两条相连的路径：输入侧把聊天消息变成可调度请求；输出侧把生成结果送回仍在等待的 HTTP 请求。这些职责分别落在 [HTTP 路由](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/http_server.py)、[TokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py) 和 [DetokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py) 等实现中。
 
-## 二、一段聊天消息，怎样变成 Scheduler 能处理的请求
+## 二、聊天消息怎样变成可调度请求
 
 假设客户端发送下面这段请求体。其中 `model` 应填写服务实际暴露的模型名称，这里只展示协议结构。
 
@@ -96,7 +96,7 @@ Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManage
 
 当 Scheduler 收到输入后，请求拥有了可持续更新的运行状态。后面每生成一批结果，系统都要更新它的输出、长度和结束条件。至此，聊天协议已经转化成一个等待计算资源的推理任务。
 
-## 三、Scheduler 决定本轮处理谁，以及处理多少 token
+## 三、本轮处理哪些请求与 Token
 
 聊天请求进入 Scheduler 后，要和其他请求共享计算与缓存资源。刚到达的请求需要处理 prompt，已经开始生成的请求需要继续向后推进。一次 HTTP 请求会持续等待，但设备每轮处理的 batch 可以变化。
 
@@ -163,7 +163,7 @@ flowchart TD
 
 这一轮选中的请求及其输入安排进入 `ScheduleBatch`。一轮结束后，完成的请求退出，新请求可以加入，仍需生成的请求继续运行。这就是 Continuous Batching 在请求生命周期中的作用。
 
-## 四、输入怎样落到 NPU，DeepSeek-V4 又怎样保存历史
+## 四、输入与缓存怎样准备给 NPU
 
 六个 token ID 还不是模型向量。调度侧先整理本轮 ID、长度与缓存位置，执行侧再把它们组织成模型所需的 Tensor。
 
@@ -194,6 +194,11 @@ flowchart TD
 ```
 
 `positions` 和 `out_cache_loc` 是两套坐标。前者表示 token 在序列中的先后，后者表示系统分配的缓存落点。DeepSeek-V4 的 NPU 后端还会把完整槽位映射到滑窗缓存槽位，不能直接拿序列位置当显存地址。`store_cache()` 通过 `get_swa_out_cache_loc()` 获得对应位置，再写入 SWA 缓存池；已有元数据可提供这组位置，否则由池执行映射转换。[源码：滑窗位置转换与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2192-L2224)
+
+DeepSeek-V4 按层使用滑窗历史和相应的压缩历史。请求长度、当前写入位置和历史页表，分别负责进度、存储和寻址；这些职责先分清，后面读模型层就能知道各字段的用途。下面展开该后端的缓存形式。
+
+<details markdown="1">
+<summary>深入：V4 的 SWA、C4/C128 与 NPU 缓存布局</summary>
 
 这里的 SWA 是 Sliding Window Attention，即滑窗 Attention。它保留近期内容的细粒度表示，而压缩缓存以另一种形式保留更长历史。该版本的 V4 后端支持按层配置三种压缩比例：
 
@@ -228,7 +233,9 @@ flowchart TD
 
 回到六 token 主例，新增输入始终是 A 到 F，逻辑位置始终是 0 到 5；不同层根据自己的压缩比例更新相应缓存。序列长度 6 表示请求处理进度，不表示每一层都存着六份完整、多头、彼此独立的 K 和 V。
 
-## 五、沿 DeepSeek-V4 的一层，走到 Ascend 算子
+</details>
+
+## 五、DeepSeek-V4 一层怎样进入 Ascend 算子
 
 设备输入准备完成后，直接执行路径通过 ModelRunner 和 `EagerRunner` 调用模型。`DeepseekV4ForCausalLM.forward()` 进入内部 `DeepseekV4Model`，后者执行 Embedding、Decoder layers 和末端处理，再由 logits processor 结合 LM Head 产生输出分数。[源码：EagerRunner](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L378)、[DeepSeek-V4 生成入口](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155)
 
@@ -309,7 +316,7 @@ Attention 输出随后经过相应位置变换及输出投影，回到层内 mHC
 
 至此，“再生成一步”已经落实为确定的设备工作：构造当前查询，更新该层所需状态，按窗口及压缩映射读取历史，计算输出。Python 负责组织调用，`torch_npu` 与 Ascend 执行栈承接设备算子。采用图回放时可以复用已捕获的执行安排，数据依赖仍然存在，但每轮不必重走相同的 Python 调用序列。
 
-## 六、结果怎样回到客户端，DSPARK 又改变了什么
+## 六、结果返回与持续生成
 
 普通自回归主线中，Prefill 结束就可以采样得到 y1。下一轮消费 y1，计算它对应的模型状态并预测 y2；再下一轮消费 y2，预测 y3。
 

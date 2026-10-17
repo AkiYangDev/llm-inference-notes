@@ -1,44 +1,12 @@
-# 第一次读 SGLang 源码，应该先看懂什么？用 DeepSeek-V4 一次 Decode 串起 Tensor、KV Cache、Attention、MoE 与 Sampling
+# 从一次 Decode 读懂 SGLang：Tensor、缓存与下一枚 Token
 
-第一次打开 SGLang 源码，很容易被类名淹没：Scheduler、Req、ScheduleBatch、ForwardBatch、ModelRunner、ReqToTokenPool、TokenToKVPool、LogitsProcessor、Sampler……如果按文件树从上到下读，很快就会失去方向。
+读 SGLang 的 Decode 路径，可以先跟住一枚刚采样出来的 Token：下一轮它成为模型输入，写入自己的 KV，读取请求历史，再经过 MoE 和 LM Head，产生下一枚 Token。
 
-更有效的办法不是先背类名，而是只跟踪一个普通 Decode Step：
+下面用三条请求组成的小 batch 走完这个过程。先看序列长度和输入输出怎样变化，再沿途认识 `ScheduleBatch`、`ForwardBatch` 和缓存映射；DeepSeek-V4-Flash 的 mHC 与 MoE 放到它们实际参与计算的位置解释。
 
-> **上一轮刚采样出的 Token，这一轮怎样进入模型；它的 KV 写到哪里；Query 怎样找到自己的历史；Attention 和 MoE 怎样改变 Tensor；最后 hidden state 又怎样变成下一枚 Token？**
+本文讨论普通、非投机 Target Decode，固定到 SGLang commit <code>0f6761b54facebb47f2068f87ecccd8f14da3a0e</code>，核对日期为 2026-09-21。模型使用 DeepSeek-V4，正文只保留理解执行链真正需要的 V4 特性：mHC、DSV4 Attention、MoE 和 Vocab Parallel LM Head。
 
-只要这条主线走通：
-
-~~~text
-sampled token
-    ↓
-ScheduleBatch
-    ↓
-ForwardBatch
-    ↓
-Embedding
-    ↓
-mHC working hidden
-    ↓
-Attention + KV Cache
-    ↓
-MoE
-    ↓
-LM Head / LogitsProcessor
-    ↓
-Sampler
-    ↓
-next_token_ids
-    ↓
-下一轮 Decode
-~~~
-
-Continuous Batching、Paged / Radix Cache、TP / DP / EP、DeepEP、NPU Graph、投机解码与 PD 分离，就会变成这条主链不同边界上的优化，而不是互不相关的术语。
-
-本文讨论普通、非投机 Target Decode，固定到 SGLang commit <code>0f6761b54facebb47f2068f87ecccd8f14da3a0e</code>，Review 日期为 2026-09-21。模型使用 DeepSeek-V4，正文只保留理解执行链真正需要的 V4 特性：mHC、DSV4 Attention、MoE 和 Vocab Parallel LM Head。
-
----
-
-## 一、先把一个 Decode Step 的时间语义钉死
+## 一、上一轮的输出怎样成为本轮输入
 
 这是第一次读 SGLang 最值得先弄清的地方。假设某个 Request 在这一轮开始前已经有 L 个位置的历史 KV：
 
@@ -53,12 +21,12 @@ logical position:
 
 ~~~mermaid
 flowchart TD
-    A["已有 KV<br/>position 0 ... L-1"]
-    B["上一轮采样 y_L<br/>本轮 input_id"]
-    C["alloc_for_decode<br/>给 position L 分配 KV 槽"]
-    D["req_to_token[req,L]<br/>写入新 slot 映射"]
+    A["已有 KV · position 0 ... L-1"]
+    B["上一轮采样 y_L · 本轮 input_id"]
+    C["alloc_for_decode · 给 position L 分配 KV 槽"]
+    D["req_to_token[req,L] · 写入新 slot 映射"]
     E["seq_lens: L → L+1"]
-    F["ForwardBatch<br/>seq_lens=L+1<br/>position=L"]
+    F["ForwardBatch · seq_lens=L+1 · position=L"]
     G["模型计算 y_L 的 Q/K/V"]
     H["新 KV 写入 out_cache_loc"]
     I["Attention 读取可见历史"]
@@ -99,17 +67,9 @@ new_slot
 
 所以 allocation 阶段是在为当前 input token 所属的新逻辑位置 L 准备状态空间。
 
-等到 <code>ForwardBatch.init_new()</code> 构造时，<code>seq_lens</code> 已经是 L+1。普通 Decode 的 Position 默认由：
+等到 <code>ForwardBatch.init_new()</code> 构造时，<code>seq_lens</code> 已经是 L+1。普通 Decode 的 Position 默认由：`positions = clamp(seq_lens - 1, min=0)`
 
-~~~text
-positions = clamp(seq_lens - 1, min=0)
-~~~
-
-得到，因此：
-
-~~~text
-positions = L
-~~~
+得到，因此：`positions = L`
 
 把几个字段放在一张表里最清楚：
 
@@ -128,9 +88,7 @@ positions = L
 
 这条关系不要机械套到 Draft / Verify 等投机模式，它们有自己的长度语义。
 
----
-
-## 二、ScheduleBatch 到 ForwardBatch：先区分调度状态和模型输入快照
+## 二、把三条请求组织为 ForwardBatch
 
 SGLang 源码自己给出了很好的边界：
 
@@ -192,11 +150,7 @@ seq_lens
 
 <code>req_pool_indices[i]</code> 不是 KV 地址，而是第 i 个 Batch lane 属于 ReqToTokenPool 的哪条 Request 逻辑行。<code>seq_lens[i]</code> 则给后面的 Attention / page-table builder 提供当前 kernel-facing 长度。
 
-第三组是当前 Token 的新状态写入坐标：
-
-~~~text
-out_cache_loc
-~~~
+第三组是当前 Token 的新状态写入坐标：`out_cache_loc`
 
 这里还有一个更底层的边界。<code>ForwardBatch.init_new()</code> 会调用：
 
@@ -222,9 +176,9 @@ kernel-facing
 
 ~~~mermaid
 flowchart TD
-    R["Req<br/>请求生命周期"]
-    SB["ScheduleBatch<br/>调度状态"]
-    FB["ForwardBatch<br/>一次 Forward 快照"]
+    R["Req · 请求生命周期"]
+    SB["ScheduleBatch · 调度状态"]
+    FB["ForwardBatch · 一次 Forward 快照"]
     MR["ModelRunner"]
     M["DeepSeek-V4"]
 
@@ -233,15 +187,9 @@ flowchart TD
 
 从 <code>ForwardBatch</code> 开始，阅读方式也应该改变：少想 HTTP 和队列，多问 Tensor shape、状态 ownership 和物理地址。
 
----
+## 三、Embedding 与 mHC 的形状变化
 
-## 三、Embedding 与 mHC：为什么 V4 的 hidden state 会在 [T,4,H] 和 [T,H] 之间变化？
-
-假设普通 Decode 当前：
-
-~~~text
-T = B = 3
-~~~
+假设普通 Decode 当前：`T = B = 3`
 
 那么：
 
@@ -264,17 +212,9 @@ hidden_states = self.embed_tokens(input_ids)
 [3,4096]
 ~~~
 
-随后当前 V4 会把它扩成：
+随后当前 V4 会把它扩成：`[T,4,H]`
 
-~~~text
-[T,4,H]
-~~~
-
-因为：
-
-~~~text
-hc_mult = 4
-~~~
+因为：`hc_mult = 4`
 
 第一次看到这里，很容易误以为 Attention 和 MoE 都直接处理四路 hidden state。严格来说不是。
 
@@ -296,17 +236,17 @@ Working Hidden
 
 ~~~mermaid
 flowchart TD
-    P["持久 mHC State<br/>[T,4,H]"]
+    P["持久 mHC State · [T,4,H]"]
     PRE["hc_pre / combine"]
-    W1["Working Hidden<br/>[T,H]"]
+    W1["Working Hidden · [T,H]"]
     ATT["Attention"]
-    W2["Working Hidden<br/>[T,H]"]
+    W2["Working Hidden · [T,H]"]
     MID["hc_post + hc_pre / combine"]
-    W3["Working Hidden<br/>[T,H]"]
+    W3["Working Hidden · [T,H]"]
     MOE["MoE"]
-    W4["Working Hidden<br/>[T,H]"]
+    W4["Working Hidden · [T,H]"]
     POST["hc_post"]
-    P2["持久 mHC State<br/>[T,4,H]"]
+    P2["持久 mHC State · [T,4,H]"]
 
     P --> PRE --> W1 --> ATT --> W2 --> MID --> W3 --> MOE --> W4 --> POST --> P2
 ~~~
@@ -319,15 +259,9 @@ flowchart TD
 
 Sinkhorn、post、comb 的具体数学可以等主链读通以后再补。
 
----
+## 四、当前 Token 写入缓存并读取历史
 
-## 四、Attention 与 KV Cache：关键是 Request 的逻辑位置怎样落到 910C 的物理 Pool
-
-现在 Working Hidden 是：
-
-~~~text
-[T,4096]
-~~~
+现在 Working Hidden 是：`[T,4096]`
 
 DeepSeek-V4 Attention 会从中构造 Query，并为当前 Token 产生新的 KV 状态。Q 路径可以先概念化成：
 
@@ -342,6 +276,11 @@ q [T, local_heads, 512]
 真正容易迷路的是 Cache ownership。
 
 先把“写路径”和“读路径”分开。
+
+先记住两个方向：本轮新状态按 `out_cache_loc` 写入，请求历史按请求映射和页表读取。逻辑位置描述序列进度，物理槽位由缓存分配器决定。下面保留 DSV4 的具体映射，首次阅读可以先接着看 MoE。
+
+<details markdown="1">
+<summary>深入：Ascend DSV4 的写入、页表和压缩状态</summary>
 
 ### 写路径：当前 Token 的新状态写到哪？
 
@@ -387,11 +326,7 @@ canonical full-side allocation
 
 ### 读路径：req_pool_indices 首先只是 Request row
 
-<code>req_pool_indices</code> 不直接指向 KV Tensor。它先选择：
-
-~~~text
-ReqToTokenPool.req_to_token
-~~~
+<code>req_pool_indices</code> 不直接指向 KV Tensor。它先选择：`ReqToTokenPool.req_to_token`
 
 的一行：
 
@@ -422,7 +357,7 @@ Physical cache pages
 
 ~~~mermaid
 flowchart TD
-    R["req_pool_indices<br/>选择 Request row"]
+    R["req_pool_indices · 选择 Request row"]
     RT["req_to_token[req, logical_pos]"]
     FULL["Canonical Full-side token slots"]
 
@@ -434,7 +369,7 @@ flowchart TD
     C4T["c4_page_table"]
     C4P["C4 physical pool"]
 
-    SIDE["req_to_c128_sidecar<br/>Request-scoped sidecar"]
+    SIDE["req_to_c128_sidecar · Request-scoped sidecar"]
     C128T["c128_page_table"]
     C128P["独立 C128 physical pool"]
 
@@ -474,15 +409,11 @@ page table
 
 这也是为什么第一次读 Attention 源码，应该先搞懂 Request → Logical Position → Physical Page，而不是一上来记 CANN Operator 的所有参数。
 
----
+</details>
 
-## 五、MoE：为什么 Attention 后突然出现 Router、A2A 和 Expert Parallel？
+## 五、MoE 怎样分发并合并 Token
 
-Attention 完成以后，经过 mHC / Norm 边界，Working Hidden 又是：
-
-~~~text
-[T,4096]
-~~~
+Attention 完成以后，经过 mHC / Norm 边界，Working Hidden 又是：`[T,4096]`
 
 然后进入 V4 的 MoE。
 
@@ -497,8 +428,6 @@ topk_output = self.topk(
     ...
 )
 ~~~
-
-因此：
 
 ~~~text
 hidden_states
@@ -522,13 +451,13 @@ Router 回答的是：
 
 ~~~mermaid
 flowchart TD
-    T["Token hidden rows<br/>Token order"]
+    T["Token hidden rows · Token order"]
     R["Router / TopK"]
     D["Dispatch / A2A"]
-    E["Expert-local rows<br/>M_e × H"]
+    E["Expert-local rows · M_e × H"]
     G["Expert GEMM"]
     C["Combine"]
-    O["恢复 Token order<br/>[T,H]"]
+    O["恢复 Token order · [T,H]"]
 
     T --> R --> D --> E --> G --> C --> O
 ~~~
@@ -550,9 +479,7 @@ Expert 算完：
 
 第一次读到这里，先理解 Dispatch 是 Token→Expert ownership 转换、Combine 是 Expert→Token ownership 恢复，就足够继续往下走。
 
----
-
-## 六、LM Head 与 Sampling：完整 [B,V] Logits 到底在什么时候存在？
+## 六、从 hidden states 到下一枚 Token
 
 所有 Transformer Layer 结束后，模型拥有的仍然只是 hidden state。
 
@@ -584,12 +511,12 @@ Expert 算完：
 
 ~~~mermaid
 flowchart TD
-    L["本 DP rank hidden rows<br/>[B_local,H]"]
-    DG["DP-Attention row gather<br/>形成 global rows"]
-    LM["各 TP rank 本地 LM Head<br/>[B_global,V_shard]"]
-    VG["TP gather vocab shards<br/>[B_global,V]"]
-    DS["DP row scatter<br/>恢复本地 Request rows"]
-    O["Sampler 输入<br/>[B_local,V]"]
+    L["本 DP rank hidden rows · [B_local,H]"]
+    DG["DP-Attention row gather · 形成 global rows"]
+    LM["各 TP rank 本地 LM Head · [B_global,V_shard]"]
+    VG["TP gather vocab shards · [B_global,V]"]
+    DS["DP row scatter · 恢复本地 Request rows"]
+    O["Sampler 输入 · [B_local,V]"]
 
     L --> DG --> LM --> VG --> DS --> O
 ~~~
@@ -660,17 +587,9 @@ attn_tp_group
 
 但为了性能，SGLang 默认不会每轮再同步最终 token id。它依赖最后的 collective、LM Head MatMul 和 Sampling Kernel 在相关 Rank 上保持确定性。
 
-只有：
+只有：`SYNC_TOKEN_IDS_ACROSS_TP=1`
 
-~~~text
-SYNC_TOKEN_IDS_ACROSS_TP=1
-~~~
-
-或者当前 Batch 使用 Grammar 时，才执行：
-
-~~~text
-MIN all_reduce(next_token_ids)
-~~~
+或者当前 Batch 使用 Grammar 时，才执行：`MIN all_reduce(next_token_ids)`
 
 Group 是 <code>tp_sync_group</code>。因此 DP Attention 下这里是 <code>attn_tp_group</code>，不是整个全局 TP World。
 
@@ -678,12 +597,12 @@ Group 是 <code>tp_sync_group</code>。因此 DP Attention 下这里是 <code>at
 
 ~~~mermaid
 flowchart TD
-    H["hidden<br/>[B_local,H]"]
+    H["hidden · [B_local,H]"]
     LM["Vocab-sharded LM Head"]
     G["Logits gather / row restore"]
-    L["full logits<br/>[B_local,V]"]
+    L["full logits · [B_local,V]"]
     S["Sampler"]
-    N["next_token_ids<br/>[B_local]"]
+    N["next_token_ids · [B_local]"]
     R["Scheduler relay"]
     I["下一轮 input_ids"]
 
@@ -692,9 +611,7 @@ flowchart TD
 
 下一轮 Decode 再从第一章的 L → L+1 时间线开始。
 
----
-
-## 七、第一次真正读 SGLang，按这条路线就够了
+## 七、按这个例子读源码
 
 第一站读 Decode 状态与 KV Allocation：
 
@@ -796,8 +713,6 @@ Sample 出来的 Token 怎样成为下一轮 input？
 > **这个 Token 现在处在哪个时间点、哪个 Tensor、哪个 ownership 空间；下一步为什么必须发生这次状态或布局转换？**
 
 当开始这样读源码时，SGLang 就会从一大片类名，变成一条可以持续追踪的数据流。
-
----
 
 ## 源码阅读入口
 

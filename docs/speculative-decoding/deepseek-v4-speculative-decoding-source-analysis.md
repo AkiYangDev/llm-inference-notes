@@ -1,32 +1,12 @@
-# DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject 如何驱动一次投机解码
+# DeepSeek-V4 DSpark：一轮 Draft、Verify、Accept 与 Commit
 
-前面的 DSpark 文章重点分析了一个分布式边界：为什么 DeepSeek-V4 MoE draft 在 DP Attention 下仍然拒绝 `attn_tp_size > 1`。但那篇文章默认读者已经接受了一个更基础的事实：DSpark 一轮 Decode 并不是一次普通 `model.forward()`，而是一套 Draft、Verify、Accept、Commit 连续状态机。
+假设当前已确认的边界 Token 是 R，Draft 提出 A、B、C，Target 接受 A、B，却在下一位置生成 X。这一轮就能追加 A、B、X 三枚输出，同时丢弃候选 C 对后续状态的影响。
 
-这篇文章把并行问题暂时放到背景里，只追一轮完整的 speculative decoding：
-
-~~~text
-当前已确认状态
-      ↓
-Draft Proposal
-      ↓
-Verify Planning
-      ↓
-Target Verify
-      ↓
-Accept / Reject
-      ↓
-Commit accepted state
-      ↓
-下一轮 Draft
-~~~
-
-真正要回答的是：
-
-> **Draft 为什么可以一次提出多枚候选 Token？Target 为什么可以一次验证一条候选链？错误候选为什么不会污染下一轮状态？**
+DSpark 把这个过程组织为 Draft、Verify Planning、Target Verify、Accept 和 Commit。本文跟随这个小例子走完一轮：候选怎样组成块，Target 怎样一次验证，接受结果又怎样更新缓存与下一轮 Draft 输入。并行布局和更复杂的树式候选放到对应专题。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线使用 DSpark V2、DeepSeek-V4 target / draft、普通链式 speculative decoding。源码同时支持 greedy、sampling、static verify、compact/ragged verify、folded proposal / verify epilogue 等优化；正文先解释共同语义，再标注优化路径。本文不宣称 speculative decoding 在任意负载下必然提速：实际收益取决于 acceptance、Draft 成本、Target Verify 成本、batch、graph 与通信开销。
 
-## 一、普通 Decode 为什么需要 speculative：减少的不是数学步骤，而是昂贵 Target Forward 的轮数
+## 一、一轮多枚输出怎样减少 Target 轮数
 
 普通自回归 Decode 的控制流非常直接：
 
@@ -82,7 +62,7 @@ flowchart TD
 
 这个顺序对应 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L729-L979)。
 
-## 二、Draft 阶段：不是连续跑 gamma 次小模型，而是先构造一个 Draft Block
+## 二、Draft 怎样构造候选块
 
 DSpark 的 Draft 主入口是：
 
@@ -102,8 +82,6 @@ self.query_token_num = (
     else self.gamma + 1
 )
 ~~~
-
-所以：
 
 - `gamma` 是最终要提出的 Draft Token 数；
 - Draft model forward 实际输入的 query rows 数可能是 `gamma`，也可能是 `gamma + 1`，取决于 `sample_from_anchor`。
@@ -128,11 +106,7 @@ draft_block_ids[:, 0].copy_(
 
 源码：[`DraftBlockProposer._run_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L369-L473)。
 
-可以把一条请求的 Draft 输入想成：
-
-~~~text
-[bonus, MASK, MASK, MASK, ...]
-~~~
+可以把一条请求的 Draft 输入想成：`[bonus, MASK, MASK, MASK, ...]`
 
 再配上 Verify Window 预先准备的：
 
@@ -194,11 +168,7 @@ temperatures       [B]
 
 固定源码：[`sample_draft_block()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L130-L200)。
 
-因此更准确的理解不是：
-
-~~~text
-Draft Model 连续 autoregressive forward gamma 次
-~~~
+因此更准确的理解不是：`Draft Model 连续 autoregressive forward gamma 次`
 
 而是：
 
@@ -221,7 +191,7 @@ Sampling 路径同样在显式 site 上同步。
 
 因此 Draft proposal 不只是模型计算，还包含 speculative decision synchronization。这个边界在上一篇 TP/DP/EP Layout 文章中已经详细展开。
 
-## 三、Verify Planner：不是所有请求都一定验证同样多的候选
+## 三、Planner 决定本轮验证范围
 
 Draft 得到候选以后，`DSparkWorkerV2` 会先解析 confidence：
 
@@ -241,11 +211,7 @@ verify_token_budget = (
 layout = self._verify_planner.schedule_layout(...)
 ~~~
 
-所以 Target Verify 之前还有一层独立的：
-
-~~~text
-Verify Planning
-~~~
+所以 Target Verify 之前还有一层独立的：`Verify Planning`
 
 ### Static Verify：每请求使用固定 verify width
 
@@ -256,11 +222,7 @@ gamma = 4
 verify_num_draft_tokens = 5
 ~~~
 
-那么每个请求的 candidate chain 可以理解成：
-
-~~~text
-[anchor, draft1, draft2, draft3, draft4]
-~~~
+那么每个请求的 candidate chain 可以理解成：`[anchor, draft1, draft2, draft3, draft4]`
 
 其中 anchor 来自当前 `draft_block_ids[:, :1]`。
 
@@ -287,11 +249,7 @@ R3 verify_len = 3
 
 然后只把需要验证的 rows compact 到实际 Target Verify 输入中。
 
-`schedule_layout()` 会生成 `RaggedVerifyLayout`，而 `BuildRaggedVerifyWindow` / `compact_verify_ids()` 把：
-
-~~~text
-anchor + selected draft prefix
-~~~
+`schedule_layout()` 会生成 `RaggedVerifyLayout`，而 `BuildRaggedVerifyWindow` / `compact_verify_ids()` 把：`anchor + selected draft prefix`
 
 重新打包成 compact verify rows。
 
@@ -303,7 +261,7 @@ Target forward 结束后，再通过 `ScatterCompactToStrided` 把 logits 和 hi
 
 Planner 里的某些 DP-tier / graph-tier 优化有额外 topology 条件；这些限制应按具体路径理解，不能泛化为 DSpark 整体限制。
 
-## 四、Target Verify：一次 forward 验证一条候选链，而不是逐 Token 再跑一遍 Target
+## 四、Target 一次验证候选链
 
 进入 Verify 时，DSpark 会先分配一个 Verify Window：
 
@@ -344,11 +302,7 @@ self.target_worker.forward_batch_generation(
 
 ### Verify 输出为什么还要求 hidden states
 
-普通生成最关心：
-
-~~~text
-logits → next token
-~~~
+普通生成最关心：`logits → next token`
 
 DSpark Verify 则显式要求：
 
@@ -369,7 +323,7 @@ if hidden is None:
 
 原因在于：被 Target 确认的 hidden state 后面要注入 Draft 的持久状态，让下一轮 Draft 从 Target 已确认的上下文继续，而不是从错误 proposal 继续。
 
-## 五、Accept / Reject：Greedy 是前缀匹配，Sampling 不能简化成“相等就接受”
+## 五、Greedy 与 Sampling 怎样接受候选
 
 Target Verify 得到 logits 后进入：
 
@@ -460,17 +414,9 @@ new_seq_lens = prefix_lens + commit_lens
 
 为什么总是 `+1`？
 
-因为一次 successful verify 不只是提交：
+因为一次 successful verify 不只是提交：`accepted Draft prefix`
 
-~~~text
-accepted Draft prefix
-~~~
-
-还会提交：
-
-~~~text
-Target bonus token
-~~~
+还会提交：`Target bonus token`
 
 例如：
 
@@ -486,11 +432,7 @@ bonus       = X
 commit_lens = 3
 ~~~
 
-最终有效输出前缀是：
-
-~~~text
-A B X
-~~~
+最终有效输出前缀是：`A B X`
 
 `BuildOutTokens` 的实现也是先复制 Draft Tokens，再把 `bonus` scatter 到 `correct_len` 对应位置：
 
@@ -539,7 +481,7 @@ bonus token
 
 都会立即分叉。
 
-## 六、Commit：真正保留的是接受前缀，Rejected candidate 不能成为下一轮 Draft 历史
+## 六、提交有效状态并开始下一轮
 
 Accept 完成后，DSpark 先得到：
 
@@ -590,17 +532,12 @@ self.kv_injector.inject_target_hidden(
 
 某些 backend / graph 路径支持 folded commit：Accept 和 hidden injection 可以直接在 Verify epilogue 内完成；Python 控制流会缩短，但语义仍然是同一个 accepted-prefix commit。
 
-### Mamba / KDA 类状态还有独立 commit
+<details markdown="1">
+<summary>补充：通用 Worker 中的 recurrent state 提交</summary>
 
-`_forward_decode()` 还会调用：
+通用 `_forward_decode()` 还包含 `_commit_target_mamba_states_after_verify(...)`，按 `commit_lens` 选择对应验证步的状态。这面向具有 recurrent / state-space 状态的模型，不能据此把这些状态当作 DeepSeek-V4 本身的缓存组成。
 
-~~~python
-self._commit_target_mamba_states_after_verify(...)
-~~~
-
-根据 `commit_lens` 选择最后一个被接受 verify step 对应的状态。
-
-这提醒我们：speculative commit 不只是一份 KV Tensor 的生命周期问题。模型如果还有 recurrent / state-space 辅助状态，也必须和 accepted prefix 同步推进。
+</details>
 
 ### 下一轮从新的 bonus token 和 new_seq_lens 开始
 
@@ -642,49 +579,11 @@ flowchart TD
     N --> S2[Next speculative round]
 ~~~
 
-到这里，就能重新回答标题里的三个动作。
+一轮结束时，输出和持久状态已经分别推进，新的 bonus 留作下一轮输入。调试时可以把 `correct_len`、`commit_lens`、新序列长度与实际选中的 Verify 行并排记录，检查候选生成、接受和状态注入是否对应同一段序列。
 
-**Draft** 做的不是让小模型永久接管生成，而是提出一条 candidate chain。
+### 补充源码入口
 
-**Verify** 不是逐 Token 重跑普通 Target Decode，而是让 Target 用一次 verify forward 对候选链计算 logits / hidden states。
-
-**Accept/Reject** 也不只是决定哪些 Token 输出给用户，它同时决定：
-
-~~~text
-本轮 sequence 前进多少
-哪些 Target hidden 可以成为下一轮 Draft 状态
-下一轮 bonus token 是谁
-哪些 speculative rows 从有效状态中被排除
-~~~
-
-所以 speculative decoding 真正优化的不是一个 sampling 函数，而是把：
-
-~~~text
-Draft proposal
-Target validation
-State commit
-~~~
-
-组合成一个能够一次推进多 Token、同时保持 Target 语义正确的状态机。
-
-这也解释了为什么上一篇 TP≠DP 问题会复杂：一旦 distributed layout 变化，需要保持一致的不只是 Draft hidden states，而是整套 Draft、Verify、Accept、Commit 状态。
-
-### 源码阅读入口
-
-| 目标 | 固定版本入口 |
-| --- | --- |
-| DSpark 总入口 | [`forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L555-L578) |
-| 一轮 speculative decode 主链 | [`_forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L729-L979) |
-| Draft proposer | [`DraftBlockProposer.propose()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L242-L344) |
-| Draft ForwardBatch | [`_run_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L369-L473) |
-| Draft block sampling | [`sample_draft_block()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L130-L200) |
-| Verify Planner | [`DSparkVerifyPlanner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_planner.py) |
-| Non-compact Target Verify | [`run_non_compact()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L277-L352) |
-| Compact Target Verify | [`run_compact()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L436-L504) |
-| Accept / Finalize | [`accept_and_finalize()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L138-L206) |
-| Greedy Accept | [`AcceptGreedy`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L560-L718) |
-| Sampling Accept | [`AcceptSampling`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py) |
-| `commit_lens = correct_len + 1` | [`FinalizeAcceptLens`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L720-L780) |
-| 输出 Token 构造 | [`BuildOutTokens`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_verify_window.py#L802-L911) |
-| Target hidden → Draft state commit | [`commit_hidden()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L354-L396) |
-| Speculative TP decision sync | [`SpecTpSync`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_tp_sync.py) |
+- [Verify window 分配与布局](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_verify_window.py#L802-L911)
+- [Planner 决策与宽度选择](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_planner.py)
+- [Target hidden 提交](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L436-L504)
+- [跨 TP 决策同步](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_tp_sync.py)

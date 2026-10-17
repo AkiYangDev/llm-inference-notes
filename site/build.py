@@ -129,7 +129,7 @@ def related_articles(article, articles):
 
 def render_document(path, routes):
     source = path.read_text(encoding="utf-8")
-    md = markdown.Markdown(extensions=['fenced_code', 'tables', 'toc', 'sane_lists', MathBlocksExtension()], extension_configs={'toc': {'permalink': False}})
+    md = markdown.Markdown(extensions=['fenced_code', 'tables', 'toc', 'sane_lists', 'md_in_html', MathBlocksExtension()], extension_configs={'toc': {'permalink': False}})
     rendered = md.convert(re.sub(r'^# .+\n', '', source, count=1))
     rendered = re.sub(r'<pre><code class="language-mermaid">([\s\S]*?)</code></pre>', r'<div class="diagram"><pre class="mermaid">\1</pre></div>', rendered)
     rendered = re.sub(r'(<table>[\s\S]*?</table>)', r'<div class="table-scroll" tabindex="0" role="region" aria-label="可横向滚动的表格">\1</div>', rendered)

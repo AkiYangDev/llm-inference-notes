@@ -1,16 +1,12 @@
-# DeepSeek-V4 MoE 推理源码解析：一个 Token 如何经过 Router、All-to-All 和 Expert Parallel 完成一次前向计算
+# DeepSeek-V4 MoE：Token 从路由到专家计算，再回到原位置
 
-上一篇《[DeepSeek-V4 Attention：Query 生成、缓存写入与历史寻址](deepseek-v4-attention-source-analysis.md)》把 Decoder Layer 的 Attention 主线追到了输出。DeepSeek-V4 的一层还没有结束：Attention 之后，hidden states 会继续进入 MoE。
+Attention 输出一行 hidden states 后，MoE 要先决定这行数据交给哪些专家，再把它送到持有专家权重的 Rank，最后把多个专家的结果合并回原 Token。
 
-这篇文章真正要追的是：
-
-> `hidden_states → Router / TopK → Expert ownership → EP dispatch → Expert compute → combine → hidden_states`
-
-标题里的 All-to-All 指的是 EP 中多 Rank 之间按 Expert ownership 重分发 Token 的逻辑通信模式。DeepEP 这类模块化 backend 会比较直接地暴露 dispatch / combine；Ascend `ascend_fuseep` 则会把 dispatch、跨 Rank 数据交换、Expert GEMM 和 combine 进一步融合，因此 Python 层不保证出现一个独立可见的 `all_to_all` 调用。
+本文用四个 Rank、八个 Expert 的教学例子走过 Router、Dispatch、专家计算和 Combine，再对照 DeepSeek-V4 的实现。DeepEP 暴露这些阶段的独立接口，Ascend FuseEP 则会把其中多项工作融合到同一执行路径。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线分析 DeepSeek-V4 target model 的普通 MoE forward。具体 checkpoint 可以覆盖配置类默认值；文中的 4 Rank / 8 Expert 例子只用于解释通信，不代表 DeepSeek-V4 的真实规模。
 
-## 一、DeepSeek-V4 为什么进入 DeepseekV2MoE
+## 一、DeepSeek-V4 复用的 MoE 实现
 
 `DeepseekV4DecoderLayer.forward()` 在 Attention 和 post-attention mHC / norm 之后调用：
 
@@ -125,7 +121,7 @@ router_logits → 对这些 expert 计算 routing weights
 
 另外，默认 `num_experts_per_tok = 6` 描述的是 routed experts 数量；如果 shared-expert fusion 开启，内部 MoE layout 还可能额外包含 shared slot。看到内部宽度 7，不代表 routed Top-K 从 6 变成了 7。
 
-## 三、Expert Parallel：Router 决定选谁，EP 决定去哪里算
+## 三、从专家编号找到持有权重的 Rank
 
 `FusedMoE` 记录 `moe_ep_size / moe_ep_rank`，并按 EP storage size 计算每 Rank 的 routed expert 数：
 
@@ -162,7 +158,7 @@ E5 weight=0.3
 
 当 EP group 中每个 Rank 都可能向其他 Rank 的 Expert 发送 Token 时，形成典型的多源到多目的数据交换，所以通常称为 All-to-All。但这里的 All-to-All 是**通信语义**，不是对具体 backend kernel 名的承诺。
 
-## 四、SGLang 的 Dispatch → MoE Core → Combine
+## 四、Dispatch、专家计算与 Combine
 
 通用 `FusedMoE.forward_impl()` 很清楚：
 
@@ -183,6 +179,8 @@ final_hidden_states = self.dispatcher.combine(
 源码：[FusedMoE.forward_impl](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/fused_moe_triton/layer.py#L1562-L1599)。
 
 Dispatch 负责按目的 Rank / Expert 重排 Token；MoE Core 在 expert-local layout 上做 Expert compute；Combine 把结果送回 Token owner 并恢复顺序与 routing weight。
+
+继续前面的 Token A 示例：它以 0.7、0.3 的路由权重选择 E1、E5，两个专家分属 Rank0、Rank2。忽略 shared expert，教学表达式为 `y_A = 0.7 × E1(x_A) + 0.3 × E5(x_A)`。Combine 需要把这两份贡献合到 A 的输出行，而不是把两份结果当成两个新 Token 追加出去。具体 backend 可以提前或融合应用权重，这个式子描述最终语义。
 
 Expert 的模型语义仍是：
 
@@ -218,7 +216,7 @@ return self.dispatcher.combine(combine_input)
 
 源码：[DeepEPMoE](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/ep_moe/layer.py#L252-L329)。
 
-## 五、Ascend FuseEP：逻辑上仍是 EP 数据交换，但 Python 调用栈被融合
+## 五、Ascend FuseEP 怎样融合执行阶段
 
 选择 `--moe-a2a-backend ascend_fuseep` 时，`FusedMoE.forward()` 直接进入：
 
@@ -247,26 +245,17 @@ hidden_states, _ = buf.fused_deep_moe(
 
 所以 Ascend Python 视角是：
 
-~~~mermaid
-flowchart TD
-    H[hidden_states] --> R[Router / TopK]
-    R --> F[fused_deep_moe]
-    F --> O[MoE output]
+`fused_deep_moe` 对上层暴露一次调用，内部承担多个阶段的职责：
 
-    subgraph S[logical responsibilities inside fused backend]
-        D[expert dispatch / cross-rank exchange]
-        G1[Expert GEMM 1]
-        A[SwiGLU]
-        G2[Expert GEMM 2]
-        C[result combine]
-    end
-~~~
+| 内部职责 | 数据变化 |
+| --- | --- |
+| Dispatch 与跨 Rank 交换 | 将 Token 送到持有目标 Expert 的位置 |
+| Expert 计算 | 经两次 GEMM 与中间激活得到专家输出 |
+| Combine | 将贡献送回并合并到原 Token 行 |
 
-图中 S 是语义拆解，不代表 profiler 中一定出现五个独立算子。
+这是语义拆解，Profiler 中未必出现对应数量的独立算子或 All-to-All 窗口。沿融合入口分析性能时，应使用该后端实际暴露的事件与指标。
 
-因此最严格的表述是：**FuseEP 实现跨 EP Rank 的 expert dispatch / combine 数据交换语义，但通信和 Expert compute 被融合，不能仅凭逻辑图断言存在一个独立可见的 All-to-All collective。**
-
-## 六、ep_size = tp_size 是当前 backend 约束，不是 MoE 定律
+## 六、EP 宽度与后端约束
 
 固定 commit 的参数解析器定义了一组 `_A2A_EP_SPANNING_BACKENDS`：
 

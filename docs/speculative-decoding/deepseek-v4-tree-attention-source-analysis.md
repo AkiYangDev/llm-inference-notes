@@ -1,117 +1,20 @@
-# DeepSeek-V4 Speculative Decoding 源码解析：Verify 为什么需要 Tree Attention？Tree Mask、Position 与 Candidate Layout 如何协同
+# EAGLE Tree Attention：候选布局、位置与可见性
 
-上一篇我们已经把 Speculative Decoding 的 KV 生命周期追到了：
+把一棵候选树按 `[root, A, B, C, D]` 排进 Tensor，不代表它们就构成一条时间序列。假设 C 是 A 的子节点、D 是 B 的子节点，C 应该读取 root 和 A，却不该读取另一条分支上的 B。
 
-~~~text
-Draft
-  ↓
-Target Verify
-  ↓
-Accept
-  ↓
-KV Commit / Compact
-  ↓
-下一轮
-~~~
-
-但这里还有一个更基础的问题没有真正展开：
-
-> **Target Model 一次 Verify 多个 speculative candidate 时，每个 candidate 到底应该看见哪些历史 KV？**
-
-如果 Draft 只有一条链：
-
-~~~text
-root
- ↓
- A
- ↓
- B
- ↓
- C
-~~~
-
-普通 causal attention 就够了。
-
-但 EAGLE 一旦进入真正的多分支候选：
-
-~~~text
-               root
-             /      \
-            A        B
-            |        |
-            C        D
-~~~
-
-如果只是把：
-
-~~~text
-[root, A, B, C, D]
-~~~
-
-按物理 row 顺序塞进普通 causal attention，B 会错误看到 A，C 会错误看到 B，D 更会看到另一条 branch 上的 A/C。
-
-此时问题已经不是性能，而是 correctness：
-
-~~~text
-Target logits
-不再对应
-某一条真实 root-to-node path
-~~~
-
-于是后面的 Accept 即使 tree traversal 完全正确，也是在验证一批已经被 sibling branch 污染的 logits。
-
-Tree Attention 真正解决的，就是：
-
-> **怎样在一次 Target Forward 里，同时计算多条互斥的未来，又让每个 candidate 只生活在属于自己的那条 causal history 中。**
-
-本文沿下面这条源码链展开：
-
-~~~text
-Draft Expansion
-      ↓
-Candidate Selection
-      ↓
-Compact Verify Rows
-      ↓
-Parent Topology
-      ↓
-Tree Position
-      ↓
-Attention Visibility
-      ↓
-Target Logits
-      ↓
-Tree Traversal / Accept
-~~~
+Tree Attention 要在一次 forward 中保持这种祖先关系。本文用同一棵小树串起 Verify 行布局、位置编号和可见性，再比较不同后端怎样消费这些信息。当前 DeepSeek-V4 的 EAGLE 配置仍限定 `topk=1`，多分支实现作为通用 EAGLE 机制讨论。
 
 > **源码基线**：本文基于 `sgl-project/sglang @ 791c7850d0960fd768102f71e7d999b036bb75ba`，核对日期为 2026-09-20。重点覆盖 EAGLE Spec V2 的 tree builder、VerifyMask、Triton / FlashAttention target-verify，以及 DeepSeek-V4 DSV4 的当前 capability gate。
 >
 > **DeepSeek-V4 当前边界**：固定版本中，DeepSeek-V4 的 EAGLE 配置仍要求 `speculative_eagle_topk == 1`；CUDA/HIP DSV4 Attention backend 还会独立 assert `topk in [0, 1]`。因此本文的 multi-branch Tree Attention 是对 **SGLang 通用 EAGLE Tree Verify 机制，以及 DeepSeek-V4 若未来放开 topk>1 所必须满足的 correctness contract** 的源码解析，而不是声称当前 DeepSeek-V4 生产路径已经在跑多分支 Tree Attention。
 
-## 实现范围与关键区别
+## 一、把候选树放进 Verify Tensor
 
-这次发布前重点复核了四个容易写错的点。
-
-| 核对问题 | 固定源码结论 |
-| --- | --- |
-| `FULL_MASK / QLEN_ONLY` 的 prefix 语义 | 对**支持 EAGLE tree verify 的 backend**，逻辑语义是一致的：candidate 可看完整 KV-ready prefix，再加自己的 ancestor path。`FULL_MASK / QLEN_ONLY` 是不同物化方式，不是跨 backend 的统一 kernel ABI；而且有的 backend 根本不读取 mask buffer。 |
-| root / bonus 的 Position 与 KV-ready boundary | 上一轮 terminal bonus 在下一轮成为 root。它虽然已经作为 token 输出，但其 KV 尚未进入 `[0, seq_len)`；下一轮 tree builder 将它放在 `position = seq_len`，Target Verify 才真正为它写 KV。当前轮新 terminal bonus 再次留在新的 KV-ready boundary 外。 |
-| FlashAttention cascade 能否称为 Tree Attention | **可以称为 Tree Attention 的一种 factorized implementation**：common prefix attention + per-query ancestor suffix attention + LSE-aware merge。但它不是“一个 Tree Attention kernel”；SWA 层还明确不走这条 cascade。 |
-| DeepSeek-V4 `topk=1` guard 限在哪一层 | 它是**端到端 capability gate**。模型配置层先全局禁止 DeepSeek-V4 EAGLE topk>1；同时 CUDA/HIP `DeepseekV4AttnBackend` 自身也明确不支持 topk>1。因此不能只归因于配置 guard，也不能只归因于 Attention；Attention 是已确认的阻塞点之一，完整 DSV4 compressed-KV / state pipeline 仍需整体证明。 |
-
-下面逐层展开。
-
----
-
-## 一、Tree Attention 的本质：一次 Forward 中模拟多条互斥的 Causal History
+### 祖先关系与可见历史
 
 先看最简单的例子。
 
-假设 prefix 已经确定：
-
-~~~text
-P0 P1 P2 ... Pn
-~~~
+假设 prefix 已经确定：`P0 P1 P2 ... Pn`
 
 Draft Model 提出：
 
@@ -155,7 +58,7 @@ root → B → D
 
 > **物理上把候选打包在一个 batch / token block 中，逻辑上仍然把它们视为多条不同 sequence。**
 
-### 普通 causal mask 为什么会错
+#### 普通 causal mask 为什么会错
 
 如果 Verify row 顺序是：
 
@@ -239,7 +142,7 @@ Tree Attention：
 “属于我的历史”
 ~~~
 
-### 为什么这直接决定 Accept correctness
+#### 为什么这直接决定 Accept correctness
 
 Target Verify 最终希望满足：
 
@@ -275,9 +178,7 @@ verify_tree_greedy
 
 > **Tree Attention 是 Tree Accept 成立之前的 correctness 前提。**
 
----
-
-## 二、Candidate Layout：Draft Expansion Pool 怎样被压成 Target Verify Row
+### 候选池到 Verify 行
 
 Tree Mask 不是凭空生成的。
 
@@ -375,13 +276,9 @@ Compact Verify Rows
 row0 row1 row2 row3 ...
 ~~~
 
-Tree Attention 工作的对象，是最后这套：
+Tree Attention 工作的对象，是最后这套：`Compact Verify Row`
 
-~~~text
-Compact Verify Row
-~~~
-
-### Verify root 不是普通 draft candidate
+#### Verify root 不是普通 draft candidate
 
 进入：
 
@@ -399,35 +296,19 @@ draft_tokens = torch.cat(
 ).flatten()
 ~~~
 
-所以 Target Verify 实际输入是：
+所以 Target Verify 实际输入是：`[上一轮 bonus/root, selected draft candidates...]`
 
-~~~text
-[上一轮 bonus/root, selected draft candidates...]
-~~~
-
-而不是单纯：
-
-~~~text
-[draft1, draft2, draft3...]
-~~~
+而不是单纯：`[draft1, draft2, draft3...]`
 
 这个 root/bonus 的跨轮语义，后面单独展开。
 
----
+## 二、位置编号与跨轮 KV 边界
 
-## 三、Tree Position：Sibling 为什么必须拥有相同的时间坐标
+### 同深度节点共享时间坐标
 
-Tree Visibility 只解决：
+Tree Visibility 只解决：`“我可以看谁？”`
 
-~~~text
-“我可以看谁？”
-~~~
-
-但模型还需要知道：
-
-~~~text
-“我处在第几个 token position？”
-~~~
+但模型还需要知道：`“我处在第几个 token position？”`
 
 考虑：
 
@@ -439,11 +320,7 @@ root
    └─ D
 ~~~
 
-假设当前 KV-ready prefix 长度是：
-
-~~~text
-P
-~~~
+假设当前 KV-ready prefix 长度是：`P`
 
 正确 Position 必须是：
 
@@ -467,11 +344,7 @@ C    → P+3
 D    → P+4
 ~~~
 
-因为：
-
-~~~text
-A / B
-~~~
+因为：`A / B`
 
 不是“先发生 A，再发生 B”。
 
@@ -479,15 +352,13 @@ A / B
 
 > **同一个未来时间步的两个备选世界。**
 
-因此：
-
 ~~~text
 same tree depth
 =
 same logical position
 ~~~
 
-### 源码确实按 depth 算 Position
+#### 源码确实按 depth 算 Position
 
 Tree kernel 在 root 位置写：
 
@@ -554,25 +425,13 @@ retrieve_next_sibling =
           row7 pos9
 ~~~
 
-### Mask 正确而 Position 错，仍然会错
+#### Mask 正确而 Position 错，仍然会错
 
-假设 B 的 mask 已经保证它只看：
+假设 B 的 mask 已经保证它只看：`prefix + root + B`
 
-~~~text
-prefix + root + B
-~~~
+但误把 B 的 position 编成：`P + 2`
 
-但误把 B 的 position 编成：
-
-~~~text
-P + 2
-~~~
-
-而不是：
-
-~~~text
-P + 1
-~~~
+而不是：`P + 1`
 
 对于 RoPE 模型，Q/K rotation 已经变了。
 
@@ -592,8 +451,6 @@ Target logits 错
 Accept 错
 ~~~
 
-所以：
-
 ~~~text
 Tree Mask
 回答：
@@ -606,9 +463,7 @@ Tree Position
 
 两者缺一不可。
 
----
-
-## 四、Root / Bonus 与 KV-ready Boundary：跨轮时其实存在一枚 Token 的 Frontier Gap
+### 旧 root 与新 bonus
 
 这决定了后面 mask 与位置映射必须同时满足的约束。
 
@@ -622,7 +477,7 @@ Tree Position
 
 但 EAGLE 的流水线不是这样。
 
-### `batch.seq_lens` 在这里更接近 KV-ready boundary
+#### `batch.seq_lens` 在这里更接近 KV-ready boundary
 
 `prepare_for_draft()` 对 paged tree layout 有一段非常直接的源码注释：
 
@@ -639,39 +494,19 @@ not part of [0:seq_lens])
 
 这句话非常关键。
 
-假设当前：
+假设当前：`batch.seq_lens = P`
 
-~~~text
-batch.seq_lens = P
-~~~
-
-表示：
-
-~~~text
-positions [0, P)
-~~~
+表示：`positions [0, P)`
 
 已经是 KV-ready prefix。
 
-上一轮产生的 terminal bonus：
-
-~~~text
-R
-~~~
+上一轮产生的 terminal bonus：`R`
 
 虽然已经是下一枚逻辑 token，但它的 KV 还没有进入这个 prefix。
 
-所以下一轮：
+所以下一轮：`R`
 
-~~~text
-R
-~~~
-
-会成为 Verify Tree 的 root：
-
-~~~text
-position(R) = P
-~~~
+会成为 Verify Tree 的 root：`position(R) = P`
 
 同时 `eagle_prepare_for_verify()` 从：
 
@@ -684,8 +519,6 @@ start_offset=batch.seq_lens
 固定源码：
 
 [`eagle_prepare_for_verify()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py)
-
-也就是说：
 
 ~~~text
 上一轮 terminal bonus
@@ -702,21 +535,13 @@ start_offset=batch.seq_lens
 此时才真正生成 root KV
 ~~~
 
-### 为什么 `accept_lens` 同时能推进 KV-ready boundary
+#### 为什么 `accept_lens` 同时能推进 KV-ready boundary
 
 用一个完整例子。
 
-当前 KV-ready prefix：
+当前 KV-ready prefix：`[0, P)`
 
-~~~text
-[0, P)
-~~~
-
-上一轮 terminal bonus：
-
-~~~text
-R
-~~~
+上一轮 terminal bonus：`R`
 
 本轮 Draft 在 R 后提出：
 
@@ -760,21 +585,11 @@ num_correct_drafts = 3
 accept_lens = 4
 ~~~
 
-用户侧本轮 accepted outputs 是：
+用户侧本轮 accepted outputs 是：`D1 D2 D3 B`
 
-~~~text
-D1 D2 D3 B
-~~~
-
-但是本轮真正算出、可以进入 KV-ready prefix 的 Verify input rows 是：
-
-~~~text
-R D1 D2 D3
-~~~
+但是本轮真正算出、可以进入 KV-ready prefix 的 Verify input rows 是：`R D1 D2 D3`
 
 同样正好 4 个。
-
-所以：
 
 ~~~python
 new_seq_lens =
@@ -789,23 +604,11 @@ new KV-ready boundary
 P + 4
 ~~~
 
-它已经覆盖：
+它已经覆盖：`R D1 D2 D3`
 
-~~~text
-R D1 D2 D3
-~~~
+但**没有**覆盖新 terminal bonus：`B`
 
-但**没有**覆盖新 terminal bonus：
-
-~~~text
-B
-~~~
-
-B 再次停在新的 KV-ready boundary 上：
-
-~~~text
-position(B) = P + 4
-~~~
+B 再次停在新的 KV-ready boundary 上：`position(B) = P + 4`
 
 等待下一轮作为 root 被真正 Forward。
 
@@ -839,9 +642,9 @@ KV-ready prefix
 
 > **当前轮 terminal bonus，就是下一轮 Tree root。**
 
-### 这也解释了上一篇中的一个看似奇怪现象
+#### 将位置编号与候选行对应起来
 
-上一篇我们看到：
+候选池裁剪后：
 
 ~~~text
 accept_lens
@@ -863,19 +666,13 @@ D1 D2 D3 B
 R  D1 D2 D3
 ~~~
 
-两边长度都等于：
-
-~~~text
-4
-~~~
+两边长度都等于：`4`
 
 但 token identity 向前错了一格。
 
 这个 one-token shift 是整个 EAGLE pipeline 最值得记住的 invariant 之一。
 
----
-
-## 五、FULL_MASK 与 QLEN_ONLY：语义一致，不代表所有 Backend 都读同一种 Mask
+## 三、FULL_MASK 与 QLEN_ONLY 怎样表达可见性
 
 现在可以回到本节开头的问题。
 
@@ -914,8 +711,6 @@ class TreeMaskMode(IntEnum):
 └───────┴────────────────────────┴─────────────────────────┘
 ~~~
 
-也就是说：
-
 ~~~text
 Prefix:
 所有 candidate 都可见
@@ -924,27 +719,15 @@ Candidate block:
 只允许 self + ancestors
 ~~~
 
-FULL_MASK 的 size 大致是：
-
-~~~text
-B × N × (L + N)
-~~~
+FULL_MASK 的 size 大致是：`B × N × (L + N)`
 
 所以长上下文下很贵。
 
-`verify_mask.py` 直接写道：
-
-~~~text
-FULL_MASK reaches 100s of MB at long context
-~~~
+`verify_mask.py` 直接写道：`FULL_MASK reaches 100s of MB at long context`
 
 ### QLEN_ONLY：只物化 Candidate × Candidate Tree Block
 
-QLEN_ONLY 只保留：
-
-~~~text
-[N, N]
-~~~
+QLEN_ONLY 只保留：`[N, N]`
 
 例如：
 
@@ -960,17 +743,9 @@ QLEN_ONLY 只保留：
 
 Prefix 不在这块 Tensor 中显式展开。
 
-因此它把 mask storage 从：
+因此它把 mask storage 从：`O(B × N × (L + N))`
 
-~~~text
-O(B × N × (L + N))
-~~~
-
-降成：
-
-~~~text
-O(B × N²)
-~~~
+降成：`O(B × N²)`
 
 ### 各后端如何消费 FULL 与 QLEN
 
@@ -996,11 +771,7 @@ is_read
 
 > **tree builder 可能需要一个 buffer 来统一产生 tree-layout 副产物，但目标 Attention backend 不一定真的读取这块 mask。**
 
-例如当前 CUDA `DeepseekV4AttnBackend`：
-
-~~~text
-Verify metadata never extracts the mask.
-~~~
+例如当前 CUDA `DeepseekV4AttnBackend`：`Verify metadata never extracts the mask.`
 
 然后：
 
@@ -1015,17 +786,9 @@ maybe_create_verify_mask(
 
 [`DeepseekV4AttnBackend.init_cuda_graph_state()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/deepseek_v4_backend.py)
 
-因为 `is_read=False`，`maybe_create_verify_mask()` 会选择更小的：
+因为 `is_read=False`，`maybe_create_verify_mask()` 会选择更小的：`QLEN_ONLY`
 
-~~~text
-QLEN_ONLY
-~~~
-
-但这里不能反过来说：
-
-~~~text
-“DSV4 正在用 QLEN_ONLY mask 做 multi-branch Tree Attention”
-~~~
+但这里不能反过来说：`“DSV4 正在用 QLEN_ONLY mask 做 multi-branch Tree Attention”`
 
 当前 DSV4 本来就禁止 `topk>1`，而且这块 mask 根本不被 Verify metadata 提取。
 
@@ -1079,17 +842,13 @@ retrieve_parent_token
 
 说明某些 state-space / linear 路径更适合直接消费 topology metadata。
 
-因此：
-
 ~~~text
 Tree Attention semantics
 ≠
 必须存在一张 bool Tree Mask
 ~~~
 
----
-
-## 六、FlashAttention Cascade：可以叫 Tree Attention，但必须说清它是怎样实现的
+## 四、FlashAttention Cascade 怎样合并结果
 
 这里还要看具体后端的消费方式。
 
@@ -1107,21 +866,13 @@ and not is_swa_layer
 use_cascade_attn = True
 ~~~
 
-源码注释直接写：
-
-~~~text
-We do cascade attention for Target Verify with topk > 1
-~~~
+源码注释直接写：`We do cascade attention for Target Verify with topk > 1`
 
 固定源码：
 
 [`flashattention_backend.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/layers/attention/flashattention_backend.py)
 
-但这里并没有一个名叫：
-
-~~~text
-tree_attention(...)
-~~~
+但这里并没有一个名叫：`tree_attention(...)`
 
 的单一 kernel。
 
@@ -1129,17 +880,9 @@ tree_attention(...)
 
 ### 第一部分：所有 Query 共享的 Common Prefix
 
-对于 topk>1，第一份 metadata：
+对于 topk>1，第一份 metadata：`target_verify_metadata_topk_normal`
 
-~~~text
-target_verify_metadata_topk_normal
-~~~
-
-只让 query attend：
-
-~~~text
-committed prefix
-~~~
+只让 query attend：`committed prefix`
 
 这里所有 tree node 的 prefix context 都完全相同，所以不需要为每个 branch 重复存整份 mask。
 
@@ -1157,21 +900,13 @@ mask =
     )
 ~~~
 
-然后把：
-
-~~~text
-mask == True
-~~~
+然后把：`mask == True`
 
 的 candidate physical slots 排到每个 query 自己的 suffix page table 前面。
 
 源码中的注释例子非常直观。
 
-原始 candidate slots：
-
-~~~text
-[8, 9, 10]
-~~~
+原始 candidate slots：`[8, 9, 10]`
 
 Tree mask：
 
@@ -1217,17 +952,9 @@ Per-query Ancestor KV List
 
 ### Prefix 与 Suffix 不能直接相加
 
-第一段 Attention 得到：
+第一段 Attention 得到：`(O_prefix, LSE_prefix)`
 
-~~~text
-(O_prefix, LSE_prefix)
-~~~
-
-第二段得到：
-
-~~~text
-(O_tree, LSE_tree)
-~~~
+第二段得到：`(O_tree, LSE_tree)`
 
 最终用：
 
@@ -1239,11 +966,7 @@ merge_state_v2_wrapper(...)
 
 因为两个 KV subset 的 softmax normalization 必须在同一个 partition function 下恢复。
 
-所以不能写成：
-
-~~~text
-O = O_prefix + O_tree
-~~~
+所以不能写成：`O = O_prefix + O_tree`
 
 而必须结合 LSE。
 
@@ -1270,11 +993,7 @@ Attention(
 
 ### SWA 是一个重要例外
 
-源码还明确：
-
-~~~text
-We don't use cascade attention for Sliding Window Attention
-~~~
+源码还明确：`We don't use cascade attention for Sliding Window Attention`
 
 原因包括：
 
@@ -1285,7 +1004,7 @@ We don't use cascade attention for Sliding Window Attention
 
 所以 SWA 层不走这条 common-prefix cascade，而使用展开后的 spec metadata。
 
-因此文章应该说：
+两种路径分别是：
 
 ~~~text
 FlashAttention 非-SWA topk>1 Target Verify
@@ -1297,11 +1016,9 @@ FlashAttention SWA topk>1
 
 而不能把整个 FlashAttention backend 全部概括成 cascade。
 
----
+## 五、DeepSeek-V4 的模型与后端限制
 
-## 七、DeepSeek-V4 为什么仍然卡在 `topk=1`：不是一个 Assert，也不是单一 Attention 问题
-
-最后回到这篇标题里的 DeepSeek-V4。
+再看 DeepSeek-V4 在固定版本中的支持范围。
 
 当前模型级 hook：
 
@@ -1314,17 +1031,13 @@ if cfg.speculative_algorithm == "EAGLE":
     assert cfg.speculative_eagle_topk == 1
 ~~~
 
-表面看起来：
-
-~~~text
-删掉 assert
-~~~
+表面看起来：`删掉 assert`
 
 似乎就能尝试 `topk>1`。
 
 仅有这个理解，还无法解释后端的实际执行。
 
-### 第一层：模型配置层已经把能力整体封死
+### 模型配置层的 topk=1 约束
 
 这个 guard 在 runtime 真正进入 EAGLE Tree Verify 前就拒绝。
 
@@ -1358,7 +1071,7 @@ HIP radix backend 也有同样限制。
 
 不是只有上层 guard 没放开而已。
 
-### 但也不能反过来说“把 Attention 支持补上就全部解决”
+### 多分支支持还依赖哪些组件
 
 DeepSeek-V4 的 Target Attention 不只是普通 full KV。
 
@@ -1374,11 +1087,7 @@ paged KV ownership
 speculative KV commit
 ~~~
 
-如果未来真正允许：
-
-~~~text
-topk > 1
-~~~
+如果未来真正允许：`topk > 1`
 
 每个 candidate node 都必须保证：
 
@@ -1413,47 +1122,29 @@ speculative_eagle_topk = 1
 
 固定下来。
 
-而 DSpark Worker 当前也明确依赖：
-
-~~~text
-Chain layout only
-~~~
+而 DSpark Worker 当前也明确依赖：`Chain layout only`
 
 这属于 DSpark 算法/runtime layout 自己的 chain contract。
 
-所以不要把：
+所以不要把：`DeepSeek-V4 EAGLE topk=1`
 
-~~~text
-DeepSeek-V4 EAGLE topk=1
-~~~
-
-和：
-
-~~~text
-DSpark topk=1
-~~~
+和：`DSpark topk=1`
 
 当成同一个 guard。
 
 两者最终都表现为 chain-only，但约束来源不同。
 
----
-
-## 八、真正应该建立的是 Tree Verify 的五个 Correctness Invariant
+## 六、检查 Tree Verify 的五项一致性
 
 到这里，Tree Attention 可以不再被理解成“一张特殊 mask”，而应该被理解成一组必须同时成立的 invariant。
 
-### 1. Candidate Identity
+### Candidate Identity
 
-对于 Verify row `i`：
-
-~~~text
-draft_token[i]
-~~~
+对于 Verify row `i`：`draft_token[i]`
 
 必须就是这个 row 所代表的 candidate node。
 
-### 2. Position Identity
+### Position Identity
 
 对于 node `v`：
 
@@ -1470,7 +1161,7 @@ same depth
 → same position
 ~~~
 
-### 3. Visibility Identity
+### Visibility Identity
 
 对于 node `v`：
 
@@ -1484,17 +1175,13 @@ ancestors(v)
 {v}
 ~~~
 
-这里具体指的是：
-
-~~~text
-KV-ready prefix
-~~~
+这里具体指的是：`KV-ready prefix`
 
 而不是把当前 terminal bonus 误算进 prefix。
 
 因为当前 bonus 是下一轮 root。
 
-### 4. Traversal Identity
+### Traversal Identity
 
 ~~~text
 retrieve_next_token
@@ -1514,7 +1201,7 @@ Accept 按 Tree B 遍历
 
 这种最难发现的 silent correctness bug。
 
-### 5. KV / Row Identity
+### KV / Row Identity
 
 同一个 Verify row `i` 的：
 
@@ -1589,121 +1276,7 @@ KV Identity
 
 > **同一棵 speculative future tree 在不同子系统中的五种投影。**
 
----
-
-## 结语
-
-现在可以重新回答标题中的问题：
-
-> **Verify 为什么需要 Tree Attention？**
-
-因为 Draft Tree 中的 sibling candidate：
-
-~~~text
-物理上
-被打包进同一次 Target Forward
-~~~
-
-但：
-
-~~~text
-逻辑上
-属于彼此互斥的未来
-~~~
-
-普通 causal attention 只理解：
-
-~~~text
-“谁排在我前面”
-~~~
-
-Tree Attention 必须表达：
-
-~~~text
-“谁属于我的 causal ancestry”
-~~~
-
-因此真正的 Tree Attention correctness 不是一张 mask，而是：
-
-~~~text
-Candidate Layout
-        +
-Parent Topology
-        +
-Tree Position
-        +
-Ancestor Visibility
-        +
-Accept Traversal
-        +
-KV Mapping
-~~~
-
-共同保持一致。
-
-结合不同后端的实现，还需要补充：
-
-> **Tree Verify 每一轮都围绕一个 KV-ready boundary 运转：上一轮 terminal bonus 位于这个 boundary 上，下一轮成为 root 并 materialize KV；新的 terminal bonus 又成为下一个 frontier。Tree Position 与 Tree Attention 都必须以这个 KV-ready boundary，而不是“用户已经看见了多少 token”，作为真正的坐标原点。**
-
-这也是为什么 DeepSeek-V4 当前的：
-
-~~~text
-topk = 1
-~~~
-
-远不只是“少开几个 branch”。
-
-它把：
-
-~~~text
-Tree
-~~~
-
-退化成：
-
-~~~text
-Chain
-~~~
-
-于是很多难题同时退化：
-
-~~~text
-ancestor visibility
-→ ordinary causal visibility
-
-tree depth position
-→ linear position
-
-accepted tree path
-→ contiguous prefix
-
-branch-local KV
-→ linear KV
-
-tree compaction
-→ identity
-~~~
-
-未来如果真正要把 DeepSeek-V4 EAGLE 扩展到：
-
-~~~text
-topk > 1
-~~~
-
-验收标准不应该只是：
-
-~~~text
-server 能启动
-请求能返回
-~~~
-
-而应该是：
-
-> **从 candidate selection、Position、SWA/C4/C128 visibility、Target logits、Accept traversal 到 KV Commit，所有子系统都能证明自己看到的是同一棵 Tree。**
-
-这才是 DeepSeek-V4 multi-branch speculative decoding 真正的 correctness boundary。
-
-## 源码阅读入口
+### 固定源码入口
 
 | 目标 | 固定版本源码 |
 | --- | --- |

@@ -4,9 +4,9 @@
 
 ## 入门与总导航
 
-- [AI 推理基础设施工作名词表：SGLang、DeepSeek 与 Ascend 910C 从 Token 到 NPU Kernel](ai-infra-working-glossary.md)：建立 Token、KV Cache、Scheduler、TP / DP / EP、DeepEP、DSpark、ModelSlim、CANN、Tiling 与 NPU Kernel 的全局坐标。
-- [为什么 Prefill 和 Decode 明明跑的是同一个模型，性能却完全不同？](prefill-vs-decode-performance.md)：从真实 Dense / MoE shape、Weight reuse、DSV4 SWA/C4/C128 历史读取与 Ascend 910C Profiling 指标建立第一套性能直觉。
-- [第一次读 SGLang 源码，应该先看懂什么？用 DeepSeek-V4 一次 Decode 串起 Tensor、KV Cache、Attention、MoE 与 Sampling](sglang-decode-source-reading-primer.md)：用一个普通 Decode Step 串起 ScheduleBatch、ForwardBatch、mHC、KV ownership、MoE、Vocab Parallel Logits 与 Sampling，建立源码阅读坐标。
+- [AI 推理基础设施名词表：从 Token 到 Ascend Kernel](ai-infra-working-glossary.md)：建立 Token、KV Cache、Scheduler、TP / DP / EP、DeepEP、DSpark、ModelSlim、CANN、Tiling 与 NPU Kernel 的全局坐标。
+- [Prefill 与 Decode 为什么性能不同：从计算形状到执行开销](prefill-vs-decode-performance.md)：从真实 Dense / MoE shape、Weight reuse、DSV4 SWA/C4/C128 历史读取与 Ascend 910C Profiling 指标建立第一套性能直觉。
+- [从一次 Decode 读懂 SGLang：Tensor、缓存与下一枚 Token](sglang-decode-source-reading-primer.md)：用一个普通 Decode Step 串起 ScheduleBatch、ForwardBatch、mHC、KV ownership、MoE、Vocab Parallel Logits 与 Sampling，建立源码阅读坐标。
 
 ## 建议阅读顺序
 

@@ -1,46 +1,12 @@
-# DeepSeek-V4 Speculative Decoding 在 Ascend 910C 上的性能源码解析：NPU Graph、Multi-Stream 与 Communication Overlap
+# Ascend 910C 投机解码：Graph、多流与通信的执行依赖
 
-前面的文章已经把 DeepSeek-V4 Speculative Decoding 的 correctness 链路拆到了 Draft、MTP / NextN、EAGLE Tree、Target Verify、Accept、KV Commit，以及多卡一致性。
+在 Ascend 910C 上，一轮投机解码会经过 Draft、Verify、Accept 和状态提交。Graph Replay 可以减少重复提交开销，多流可以重叠独立工作，但候选依赖、缓存准备和通信等待仍会约束下一步何时开始。
 
-继续往性能层深入，真正需要回答的已经不是：
-
-> **一轮 Speculative Decoding 能接受几个 Token？**
-
-而是：
-
-> **一次 speculative iteration 在 Ascend 910C 上，哪些工作真正落在 wall-clock critical path 上？NPU Graph、Plan Stream、Attention Multi-Stream 和 DeepEP async communication 分别能够隐藏什么，又有哪些依赖无论怎么换 Stream 都绕不过去？**
-
-最简单的性能模型常写成：
-
-```text
-T_spec
-=
-T_draft
-+
-T_verify
-+
-T_accept
-+
-T_commit
-+
-T_comm
-```
-
-但真实 Runtime 并不是单线程顺序执行。当前 SGLang + Ascend 路径同时存在 NPU Graph、Plan Stream、Attention Multi-Stream、DeepEP communication stream、DP / TP collectives 和 Graph bucket padding。
-
-真正决定一轮延迟的，因此是依赖图里最长的一条路径：
-
-```text
-T_round = CriticalPath(G_round)
-```
-
-而不是所有 kernel duration 的机械求和。
+本文沿 DeepSeek-V4 的 EAGLE/NextN 路径标出这些依赖：图里捕获了哪些 forward，Plan Stream 能与谁重叠，DeepEP 的等待点在哪里。源码可以确定执行关系；哪一段成为实际关键路径，还要把设备时间线与这些关系对齐。
 
 > **源码基线**：本文固定基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-21。主线讨论 DeepSeek-V4 + EAGLE / NextN + Ascend 910C + `dsv4` backend。正文中的 timeline 是根据源码中的 Stream / Event / Wait / Graph dependency 推导出的执行关系，不是 910C Profiler 实测值，因此不会虚构任何毫秒数或加速百分比。
 
----
-
-## 一、六处关键执行边界：Graph、Stream 与通信依赖
+## 一、Graph、Stream 与通信各自负责什么
 
 这篇文章最容易写错的地方，不是某个 Kernel 名字，而是把“异步”“Graph”“Multi-Stream”直接等同于“并行”。
 
@@ -86,15 +52,9 @@ Draft Extend Forward / Graph
 
 > **每一个 Fork 最后在哪里 Join？哪条 branch 最长？哪些 communication / planning 已经被其他工作覆盖，哪些仍然暴露在 Critical Path 上？**
 
----
+## 二、Draft Graph 捕获哪些 NextN Forward
 
-## 二、Draft NPU Graph 到底捕获什么：`num_steps=2` 不是两次 NextN Forward
-
-DeepSeek-V4 的 EAGLE Draft 在 NPU 上有专门 Runner：
-
-```text
-EAGLEDraftNpuGraphRunner
-```
+DeepSeek-V4 的 EAGLE Draft 在 NPU 上有专门 Runner：`EAGLEDraftNpuGraphRunner`
 
 固定源码：
 
@@ -122,7 +82,7 @@ def run_once():
 
 [`EAGLEDraftCudaGraphRunner.capture_one_shape()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py)
 
-### `draft_forward()` 中真正有几次 NextN Forward
+### `draft_forward()` 的 NextN Forward 次数
 
 主循环：
 
@@ -211,11 +171,7 @@ resolve_num_tokens_per_req(
 )
 ```
 
-解析为：
-
-```text
-speculative_eagle_topk
-```
+解析为：`speculative_eagle_topk`
 
 固定源码：
 
@@ -262,9 +218,7 @@ collective 调用次序可能失去一致性。
 
 > **Graph/Eager route 本身也可能属于 speculative control plane，必须在协作 Rank 间收敛。**
 
----
-
-## 三、Target Verify Graph 的真实 Bucket：普通 EAGLE 按 Request Bucket Capture，每个 Request 固定 Verify Width
+## 三、Verify Graph 的 Batch Bucket 与 Token 宽度
 
 Draft 完成以后，Target Verify 会进入通用 `DecodeCudaGraphRunner / NPUGraphRunner`。
 
@@ -414,37 +368,19 @@ Capture Bucket
 
 ### `--cuda-graph-bs-decode` 在这里是 Request Bucket，不是 EAGLE Verify Token Bucket
 
-固定 DeepSeek-V4 Ascend best-practice 中可以看到：
+固定 DeepSeek-V4 Ascend best-practice 中可以看到：`--cuda-graph-bs-decode 1 2 4 8`
 
-```text
---cuda-graph-bs-decode 1 2 4 8
-```
-
-或：
-
-```text
-1 2 4 8 10
-```
+或：`1 2 4 8 10`
 
 在当前普通 EAGLE 路径里，这些 key 首先表示 captured request slots。
 
-若 `num_draft_tokens=3`，Target Verify 对应的 token rows 才是：
-
-```text
-bucket_bs × 3
-```
+若 `num_draft_tokens=3`，Target Verify 对应的 token rows 才是：`bucket_bs × 3`
 
 而 DSpark Ragged Verify 的 `graph_num_tokens tier` 是另一套机制，不能混进当前 EAGLE 性能模型。
 
----
+## 四、Plan Stream 与计算的依赖关系
 
-## 四、Plan Stream 的真实作用并不对称：Verify Planning 不 overlap Draft，Draft-Extend Planning 才存在跨阶段设备并发
-
-环境变量：
-
-```text
-SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1
-```
+环境变量：`SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1`
 
 会创建：
 
@@ -592,11 +528,7 @@ Main Stream
              ███████████
 ```
 
-所以不能笼统写：
-
-```text
-Plan Stream = Verify Planning 与 Draft 并行
-```
+所以不能笼统写：`Plan Stream = Verify Planning 与 Draft 并行`
 
 更准确的是：
 
@@ -615,15 +547,9 @@ Join
 Draft Extend Compute
 ```
 
----
+## 五、Target 与 Draft 的多流路径
 
-## 五、NPU Multi-Stream 的实际可达性：Target DECODE / TARGET_VERIFY 可用，NextN Draft 实际不可达
-
-另一套容易和 Plan Stream 混淆的机制是：
-
-```text
-SGLANG_NPU_USE_MULTI_STREAM=1
-```
+另一套容易和 Plan Stream 混淆的机制是：`SGLANG_NPU_USE_MULTI_STREAM=1`
 
 它不是 speculative phase planner，而是深入 DeepSeek-V4 **单个模型 Layer 内部**的局部并行。
 
@@ -654,17 +580,9 @@ and not forward_batch.forward_mode
 
 `ForwardMode.is_extend()` 确实把 `TARGET_VERIFY` 看成 extend-family。
 
-但 Multi-Stream 条件调用的不是 `is_extend()`，而是：
+但 Multi-Stream 条件调用的不是 `is_extend()`，而是：`is_extend_or_draft_extend_or_mixed()`
 
-```text
-is_extend_or_draft_extend_or_mixed()
-```
-
-这个 helper 的默认参数：
-
-```text
-include_draft_extend_v2 = False
-```
+这个 helper 的默认参数：`include_draft_extend_v2 = False`
 
 所以默认只排除：
 
@@ -721,7 +639,7 @@ self.decoder = DeepseekV4DecoderLayer(
 | EAGLE Draft Extend | `DRAFT_EXTEND_V2` | NextN | **不可达**，同上 |
 | 普通 Prefill | `EXTEND` | Target | 该 NPU Attention Multi-Stream path 被 mode 条件排除 |
 
-### Target Multi-Stream 内到底并行什么
+### Target 多流中的独立计算分支
 
 真正进入 `_forward_prepare_multi_stream_npu()` 后：
 
@@ -769,9 +687,7 @@ max(
 
 另外固定源码中非 Blackwell 的 Multi-Stream row limit 是 64。这里判断的是当前 Layer 的 `x.shape[0]`，不是服务器的 `max_running_requests`。
 
----
-
-## 六、DeepEP `async_finish / recv_hook` 到底能隐藏哪段通信：隐藏的是 Wait 前的独立工作，不是 Expert 的数据依赖
+## 六、DeepEP 从异步 Launch 到等待结果
 
 DeepSeek-V4 Target Verify 还会进入 MoE。
 
@@ -985,23 +901,13 @@ max(
 )
 ```
 
-如果 async launch 后立刻 Wait：
+如果 async launch 后立刻 Wait：`T_independent = 0`
 
-```text
-T_independent = 0
-```
-
-那么：
-
-```text
-T_exposed_comm ≈ T_comm
-```
+那么：`T_exposed_comm ≈ T_comm`
 
 所以“async”并不自动带来性能收益。
 
----
-
-## 七、官方 DeepSeek-V4 配置为什么有时“关闭 Draft-Extend Graph”：先区分设计动机和文档变量名漂移
+## 七、Draft-Extend Graph 的配置与版本差异
 
 固定版本 Ascend DeepSeek-V4 best-practice 中，部分 workload 可以看到：
 
@@ -1024,13 +930,9 @@ export SGLANG_NPU_USE_MULTI_STREAM=1
 
 实际调用路径还需要进一步区分。
 
-### Runtime 真正读取的是另一个变量名
+### Runtime 读取的环境变量名
 
-固定 `environ.py` 注册的是：
-
-```text
-SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH
-```
+固定 `environ.py` 注册的是：`SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH`
 
 其源码注释：
 
@@ -1052,21 +954,13 @@ not envs
 
 [`EagleDraftWorker._capture_cuda_graphs()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py)
 
-但固定版本 best-practice 页面写的是：
-
-```text
-SGLANG_DISABLE_DRAFT_EXTEND_GRAPH
-```
+但固定版本 best-practice 页面写的是：`SGLANG_DISABLE_DRAFT_EXTEND_GRAPH`
 
 少了 `_CUDA_`。
 
 在这个 commit 的仓库里没有找到旧名字对应的 `EnvBoolWithAlias`、consumer 或 translation。
 
-因此这条文档配置存在明显的：
-
-```text
-doc / runtime env-name drift
-```
+因此这条文档配置存在明显的：`doc / runtime env-name drift`
 
 除非外部启动包装层另做转换——固定仓库中没有证据——否则不能仅根据这行文档断言 Draft-Extend Graph 在该 workload 中真的被关闭。
 
@@ -1140,11 +1034,7 @@ resolve_num_tokens_per_req(
 )
 ```
 
-也就是：
-
-```text
-speculative_num_draft_tokens
-```
+也就是：`speculative_num_draft_tokens`
 
 固定源码：
 
@@ -1154,69 +1044,28 @@ speculative_num_draft_tokens
 
 这也是为什么 Draft-Extend Graph 的 Memory Footprint 和 Launch Savings 需要单独评估，而不能因为“NextN 很轻”就默认 Graph 一定更赚。
 
----
+## 八、将执行依赖与实测时间线对齐
 
-## 把所有机制放回一轮 Ascend 910C Timeline
+下图只表达阶段依赖，不按长度表示耗时。实际重叠范围需要与 Profiler 时间线对照。
 
-现在可以画出比“Draft + Verify + Accept”更接近真实 Runtime 的时间线：
-
-```text
-Time ─────────────────────────────────────────────────────────────→
-
-MAIN COMPUTE
-│
-│ [ Draft NPU Graph ]
-│   num_steps-1 × NextN forward
-│ █████████████████
-│                  │
-│                  │ Draft result dependency
-│                  ▼
-│                       [ Target Verify NPU Graph ]
-│                       ████████████████████████████
-│                                             [Accept]
-│                                               ███
-│                                                   │
-│                                                   │ wait plan
-│                                                   ▼
-│                                             [Draft Extend]
-│                                             ███████████
-│
-├───────────────────────────────────────────────────────────────
-
-PLAN STREAM
-│
-│                  [Verify Plan]
-│                  ███████
-│                  ↑ 必须等待 Draft
-│
-│                                      [Draft-Extend Plan]
-│                                      ██████████
-│                                      ↑ 可与 main-stream verify/accept tail overlap
-│
-├───────────────────────────────────────────────────────────────
-
-TARGET ATTENTION LAYER
-│
-│ current:   [Indexer / Compressor────────────]
-│ q-stream:  [Q projection / norm / RoPE─────]
-│ kv-stream: [KV / norm / RoPE / cache──────]
-│                                       │
-│                                       └──── Join → Attention
-│
-├───────────────────────────────────────────────────────────────
-
-TARGET MoE
-│
-│ routed path:
-│ Router → Dispatch(comm) → wait → Experts → Combine(comm) → wait
-│
-│ shared side stream:
-│          [ Shared Expert ─────────────────── ]
-│
-│ 真正可隐藏的是被 independent compute 覆盖的 communication tail
-│
-└───────────────────────────────────────────────────────────────
+```mermaid
+flowchart TD
+    D["Draft 完成"] --> VP["Verify Plan"]
+    VP --> V["Host 提交 Verify 与 Accept"]
+    V --> A["Main Stream 执行验证与接受"]
+    V --> EP["Plan Stream 准备 Draft Extend"]
+    A --> J["所需结果与 Plan 就绪"]
+    EP --> J
+    J --> E["Draft Extend"]
 ```
+
+| 层内分支 | 独立工作 | 汇合依赖 |
+| --- | --- | --- |
+| Target Attention | Q、KV、Indexer / Compressor 的对应分支 | Attention 消费前等待所需结果 |
+| Routed MoE | Dispatch、Expert GEMM、Combine | GEMM 等待收到 Token；后续消费等待 Combine |
+| Shared Expert | 可独立执行的专家计算 | 与 routed 输出合并前完成 |
+
+Plan Stream 是否形成跨阶段重叠，取决于调用与等待位置。Target 的多流实现也不能直接套用到没有接入这些 alt streams 的 NextN Draft。
 
 拿 Ascend Profiler 分析一轮 speculative decode 时，可以按这个顺序看：
 
@@ -1232,73 +1081,9 @@ TARGET MoE
 | Rank control | 是否因为某 Rank Graph fallback 导致整个 TP group 一起 eager？ |
 | Draft Extend | Graph 还是 eager？Capture memory / workspace 是否值得？ |
 
-最终性能公式可以重新写成：
+把一轮时间线对齐以后，再用有效输出量衡量收益：同一批次条件下，每个输出 Token 的平均成本约为本轮关键路径耗时除以有效推进长度。Graph 减少启动与控制开销，多流利用独立工作，异步通信将等待推迟到消费边界；这些机制能否缩短周期，要看最终汇合点仍在等待谁。
 
-```text
-Speedup
-≈
-AcceptedProgress × BaselineDecodeCost
-────────────────────────────────────
-CriticalPath(
-  DraftGraph,
-  VerifyPlan,
-  TargetVerify,
-  LayerMultiStream,
-  MoECommunication,
-  Accept,
-  DraftExtendPlan,
-  DraftExtend
-)
-```
-
-Graph 优化的是固定 Launch / Control Overhead。
-
-Plan Stream 优化的是可安全异步化的 Phase Planning，其中只有部分 seam 真正形成跨阶段设备 overlap。
-
-NPU Multi-Stream 优化的是 **Target DeepSeek-V4 Layer** 内部的局部 Compute Fork；当前 NextN Draft 本身并没有接上这套 alt streams。
-
-DeepEP async / recv-hook 优化的是 Wait Point，让 independent work 有机会覆盖 Communication Tail。
-
-而下面这些真实依赖仍然无法消失：
-
-```text
-Draft tree ready
-→ Verify topology / metadata
-
-received Expert tokens ready
-→ Routed Expert GEMM
-
-Q / KV / Indexer ready
-→ Attention
-
-Accept decision ready
-→ committed seq_len / next-round state
-
-Draft-Extend plan ready
-→ Draft Extend Forward
-```
-
-所以生产级 Speculative Decoding 性能优化，最终不是“把 Acceptance Rate 调高”这么简单。
-
-它已经变成：
-
-```text
-Algorithm
-    ↓
-Work Geometry
-    ↓
-Graph Bucket
-    ↓
-Stream Dependency
-    ↓
-Communication Event
-    ↓
-Join Point
-    ↓
-Critical Path
-```
-
-这才是从源码走向 Ascend 910C Profiler 时最重要的分析框架。
+记录实验时，将候选宽度、图档位、接受长度与依赖等待一起保留。只看 acceptance rate，或者把各 Stream 的耗时直接相加，都会遗漏影响端到端性能的部分。
 
 ### 源码阅读入口
 

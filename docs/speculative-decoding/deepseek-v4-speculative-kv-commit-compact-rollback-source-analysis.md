@@ -1,43 +1,12 @@
-# DeepSeek-V4 Speculative Decoding 源码解析：Draft Tree 如何落到 KV Cache，Accept 后缓存如何 Commit、Compact 与 Rollback？
+# 投机解码 KV 管理：接受路径怎样提交、整理与回收
 
-前面的文章已经把 DeepSeek-V4 speculative decoding 拆到了 Draft、MTP/NextN、EAGLE Tree、多卡一致性与 Target Verify。再往下一层，真正决定一轮 speculative decoding 能不能正确进入下一轮的，不再只是“接受了几个 Token”，而是：
+Target 验证过一批候选后，候选 KV 已经写进缓存，但只有接受路径可以成为后续请求的历史。系统需要把这条路径对应的 Verify 行映射到正式序列位置，再决定多余的预留空间何时复用或释放。
 
-> **Target Verify 期间产生的候选 KV，怎样从 speculative layout 收敛成正式 sequence state？Reject 的候选什么时候失去逻辑所有权，什么时候又真的归还物理显存？**
-
-这件事看起来像一个 KV Cache 问题，实际上同时跨过了四层状态：
-
-~~~text
-token / accepted output
-        ↓
-tree / verify-row index
-        ↓
-logical sequence position
-        ↓
-physical KV slot
-~~~
-
-如果把这些索引空间混在一起，就很容易把 `accept_index` 当成 KV 地址、把新 bonus 的输出误当成它的 KV 已经提交，或者把 reject 想成“立刻 free 那几块 KV”。
-
-本文把这条链一次追到底。
+本文用旧 root R、接受的 A/C 和新 bonus X 说明三个动作：Commit 确认有效历史，Compact 整理布局，Rollback 撤销候选对后续状态的影响。输出追加 A/C/X 时，已经物化的输入 KV 对应 R/A/C；这个错位关系贯穿后面的地址映射。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 6880a4795533640f41ebb3db9e4ae0af5a371a1f`，核对日期为 2026-09-20。主线覆盖 Spec V2 的 EAGLE accepted-path KV compaction、经典 rejection sampling、Target-only sampling，以及 Ascend DeepSeek-V4 的 C4/C128 KV/state 生命周期。当前 DeepSeek-V4 + DSpark 仍是 `topk=1` 的 linear chain；因此文中的 tree-specific `accept_index` compaction 主要解释通用 EAGLE Spec V2，DSpark 部分会单独标出。
 
-## Review 结论先行
-
-先区分四个直接影响缓存提交的概念。
-
-| 核对问题 | 固定源码结论 |
-| --- | --- |
-| `move_kv_cache()` 的 src/dst 方向 | API 是 `move_kv_cache(tgt_loc, src_loc)`，实际语义是 **`dst <- src`**。EAGLE commit 时 `accept_out_cache_loc` 是 source candidate KV，`tgt_cache_loc` 是 destination committed KV。 |
-| `accept_index` 是否包含 bonus | **有效前缀长度等于 `accept_lens`，最后一个有效 index 承载 bonus。** 但 bonus 不是额外创建一个 tree node；它写入“最后一个 accepted verify row”的 `predict` 槽位。 |
-| Spec V2 overshoot 什么时候真正 free | 正常 reject 后**不会每轮立即 free**。allocated-but-uncommitted tail 通常留作 reserve/reuse；真正回收发生在 request release/finish/abort、decode retract/preempt，以及 StreamingSession 的 trim/rewind 等生命周期点。 |
-| Ascend DSV4 C4/C128 cleanup | 必须区分 **KV page 回收** 与 **compressor state 清理**。`clear_unaccepted_c128_draft_states()` 清的是 C128 state ring，不是释放 C128 KV pages；pre-A5 的 C4 state 跟随 SWA physical pages；A5 的 CYCLE state 则按请求索引，须分别处理。 |
-
-这四个结论会贯穿全文。
-
----
-
-## 一、先把四个地址空间分开：Token、Tree Row、Logical Position、Physical KV Slot
+## 一、Token、Verify 行、逻辑位置与物理槽位
 
 普通 Decode 很容易形成一个过度简化的心智模型：
 
@@ -49,23 +18,15 @@ KV Cache 第 4096 行
 
 真实 SGLang 并不是这样。
 
-### 1. Logical Sequence Position
+### Logical Sequence Position
 
-假设当前请求已经提交：
+假设当前请求已经提交：`seq_len = 4096`
 
-~~~text
-seq_len = 4096
-~~~
-
-那么下一段正式 continuation 的逻辑位置是：
-
-~~~text
-4096, 4097, 4098, ...
-~~~
+那么下一段正式 continuation 的逻辑位置是：`4096, 4097, 4098, ...`
 
 这是 request 语义上的 sequence position。
 
-### 2. `req_to_token`：Logical Position → Physical KV Slot
+### `req_to_token`：Logical Position → Physical KV Slot
 
 SGLang 用 request-to-token table 把逻辑位置映射到真实 KV pool slot：
 
@@ -80,8 +41,6 @@ logical pos     physical KV slot
 4097        ->  42081
 4098        ->  42082
 ~~~
-
-因此：
 
 ~~~python
 req_to_token[req_pool_idx, logical_position]
@@ -99,7 +58,7 @@ physical memory 连续
 
 的基础。
 
-### 3. `out_cache_loc`：这次 Forward 的 K/V 应该写到哪里
+### `out_cache_loc`：这次 Forward 的 K/V 应该写到哪里
 
 Target Verify 一次会处理多个 speculative candidate。模型 Forward 产生新的 K/V 后，需要知道每一行应该写到哪个 physical slot。
 
@@ -146,7 +105,7 @@ Target Model
 
 候选是否最终被接受，是 Forward **之后** 才决定的。
 
-### 4. `accept_index`：不是 KV slot，而是 accepted verify-row path
+### `accept_index`：不是 KV slot，而是 accepted verify-row path
 
 当 `topk > 1` 时，candidate 是 tree：
 
@@ -158,11 +117,7 @@ Target Model
           C     D    E     F
 ~~~
 
-如果最终 accepted path 是：
-
-~~~text
-root → B → E
-~~~
+如果最终 accepted path 是：`root → B → E`
 
 不能简单地“保留 candidate buffer 前 3 行”，因为 tree row 未必连续。
 
@@ -174,11 +129,7 @@ tree / verify-row space
 accepted path
 ~~~
 
-而不是：
-
-~~~text
-physical KV address
-~~~
+而不是：`physical KV address`
 
 真正的链路是：
 
@@ -216,11 +167,9 @@ destination physical KV slot
 - [`eagle_prepare_for_verify()`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/speculative/eagle_utils.py)
 - [`move_accept_tokens_to_target_kvcache()`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/speculative/spec_utils.py)
 
----
+## 二、接受结果怎样索引输出
 
-## 二、Accept 的真实语义：`accept_index` 最后一格为什么是 bonus，但又不是一个新的 Tree Node
-
-这是本次 Review 最值得讲清楚的地方。
+这里先固定接受索引与预测行的对应关系。
 
 很多文章会把 accepted output 画成：
 
@@ -241,13 +190,9 @@ accept_index
 
 这个说法不够准确。
 
-### 1. Greedy Tree Verify 的真实写法
+### Greedy Tree Verify 的真实写法
 
-`verify_tree_greedy_kernel_triton()` 一开始会把 root 对应的 retrieve index 写到：
-
-~~~text
-accept_index[0]
-~~~
+`verify_tree_greedy_kernel_triton()` 一开始会把 root 对应的 retrieve index 写到：`accept_index[0]`
 
 然后每接受一个 draft child：
 
@@ -269,17 +214,9 @@ for accepted_draft in path:
 predicts[last_row] = bonus
 ~~~
 
-因此如果正确 draft 是：
+因此如果正确 draft 是：`d1, d2, d3`
 
-~~~text
-d1, d2, d3
-~~~
-
-最终不是：
-
-~~~text
-accept_index = [d1_node, d2_node, d3_node, bonus_node]
-~~~
+最终不是：`accept_index = [d1_node, d2_node, d3_node, bonus_node]`
 
 而更准确是：
 
@@ -301,7 +238,7 @@ predict[accept_index[:4]]
 
 > **bonus 占据 accepted output 的最后一格，但它复用了“最后一个 accepted verify row”作为承载位置，并没有额外创造一个 bonus tree node。**
 
-### 2. `accept_lens` 为什么等于 correct drafts + 1
+### `accept_lens` 为什么等于 correct drafts + 1
 
 `eagle_sample()` 返回前明确保持：
 
@@ -314,8 +251,6 @@ num_correct_drafts
 ~~~python
 return predict, num_correct_drafts + 1, accept_index
 ~~~
-
-所以：
 
 ~~~text
 accept_lens
@@ -341,13 +276,9 @@ accept_len
 
 > **`accept_index` 的有效前缀长度就是 `accept_lens`，最后一个有效位置对应的 `predict` 值就是 bonus。**
 
-### 3. Rejection Sampling 也保持相同契约
+### Rejection Sampling 也保持相同契约
 
-经典 rejection sampling 的 Triton kernel 同样：
-
-~~~text
-accept_index[0] = root_row
-~~~
+经典 rejection sampling 的 Triton kernel 同样：`accept_index[0] = root_row`
 
 每接受一个 draft：
 
@@ -370,7 +301,7 @@ predict[accept_index[:accept_lens]]
 accepted drafts + terminal token
 ~~~
 
-### 4. Simulated accept 也遵循同一个布局
+### Simulated accept 也遵循同一个布局
 
 `generate_simulated_accept_index()` 会：
 
@@ -388,23 +319,15 @@ predict[bonus_node_indices] = target_predict[...]
 
 所以 simulated path 没有另外定义一套语义。
 
-### 5. NPU 分支的证据边界
+### NPU 分支的证据边界
 
-非 Greedy NPU path 会从：
-
-~~~text
-sgl_kernel_npu.sample
-~~~
+非 Greedy NPU path 会从：`sgl_kernel_npu.sample`
 
 导入 `tree_speculative_sampling_target_only` / `chain_speculative_sampling_triton`。
 
 固定 SGLang 仓库中可以直接审计它的调用 contract 与 downstream invariants，但 `sgl_kernel_npu` 的具体 kernel 实现在这一仓库之外。
 
-因此本文不做超出证据范围的表述，例如：
-
-~~~text
-“NPU 内核内部一定逐行执行了与 CUDA 完全相同的语句”
-~~~
+因此本文不做超出证据范围的表述，例如：`“NPU 内核内部一定逐行执行了与 CUDA 完全相同的语句”`
 
 能确认的是：
 
@@ -421,9 +344,7 @@ sgl_kernel_npu.sample
 - [`fill_bonus_tokens`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/kernels/ops/speculative/eagle.py)
 - [`generate_simulated_accept_index()`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/speculative/spec_utils.py)
 
----
-
-## 三、KV Commit：`move_kv_cache(tgt, src)` 到底谁搬到谁，以及输出与缓存为什么相差一位
+## 三、把接受路径映射到正式 KV
 
 Target Verify 得到：
 
@@ -444,7 +365,7 @@ move_accept_tokens_to_target_kvcache(
 
 这里有两个非常容易误读的点。
 
-### 1. 输出增加多少 Token，和哪些 Token 已经有 KV，是两件事
+### 输出增加多少 Token，和哪些 Token 已经有 KV，是两件事
 
 `move_accept_tokens_to_target_kvcache()` 的第三个参数是 `num_correct_drafts`，因此调用方传入 `accept_lens - 1`；函数内部再按 `num_correct_drafts + 1` 创建目标区间。这个 `+1` 对应本轮作为输入的旧 root，而本轮新采样出的 terminal bonus 要等下一次 forward 才有自己的 KV。
 
@@ -460,7 +381,7 @@ move_accept_tokens_to_target_kvcache(
 
 因此，`accept_lens - 1` 是参数计数的转换；它并不说明 X 的 KV 已经产生。X 还未经过 Target forward，不能在本轮提交一份尚不存在的 KV。
 
-### 2. `move_kv_cache()` 的参数方向已经从实现确认
+### `move_kv_cache()` 的参数方向已经从实现确认
 
 `move_accept_tokens_to_target_kvcache()` 会先得到两组位置。
 
@@ -470,11 +391,7 @@ move_accept_tokens_to_target_kvcache(
 tgt_cache_loc
 ~~~
 
-它来自正式 sequence continuation：
-
-~~~text
-[seq_len, seq_len + accept_lens)
-~~~
+它来自正式 sequence continuation：`[seq_len, seq_len + accept_lens)`
 
 对应的 `req_to_token` physical slots。
 
@@ -509,11 +426,7 @@ move_kv_cache(
 move_kv_cache(tgt_loc, src_loc)
 ~~~
 
-实际赋值也是：
-
-~~~text
-KV[tgt] = KV[src]
-~~~
+实际赋值也是：`KV[tgt] = KV[src]`
 
 例如 paged KV implementation 的核心操作是：
 
@@ -555,19 +468,11 @@ committed KV
 - [`move_accept_tokens_to_target_kvcache()`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/speculative/spec_utils.py)
 - [`KVCache.move_kv_cache()` implementations](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/mem_cache/memory_pool.py)
 
-### 3. 为什么 Tree Path 还要 Compact `predict / hidden_states`
+### 为什么 Tree Path 还要 Compact `predict / hidden_states`
 
-KV 搬完以后，tree node layout 仍然可能是：
+KV 搬完以后，tree node layout 仍然可能是：`[root, A, B, C, D, E, F]`
 
-~~~text
-[root, A, B, C, D, E, F]
-~~~
-
-但 accepted path 是：
-
-~~~text
-[root, B, E]
-~~~
+但 accepted path 是：`[root, B, E]`
 
 下一轮 Draft Extend 希望消费的却是一个 linear chain。
 
@@ -597,7 +502,7 @@ logits_output.hidden_states =
 
 这三件事不能统称成一个“KV compact”。
 
-### 4. 当前 DeepSeek-V4 + DSpark 为什么不走这套 Tree Compact
+### 当前 DeepSeek-V4 + DSpark 为什么不走这套 Tree Compact
 
 当前 `_handle_dspark()` 会把：
 
@@ -606,11 +511,7 @@ speculative_num_steps = 1
 speculative_eagle_topk = 1
 ~~~
 
-而真正 candidate window 由 `gamma` 控制：
-
-~~~text
-verify_window = gamma + 1
-~~~
+而真正 candidate window 由 `gamma` 控制：`verify_window = gamma + 1`
 
 `dspark_worker_v2.py` 也明确写着：
 
@@ -628,9 +529,7 @@ would need the accept-index mapping
 
 不能把 EAGLE tree compaction 机械套到 DSpark 当前实现上。
 
----
-
-## 四、Reject 不是立即 Free：Spec V2 Overshoot 的真实生命周期
+## 四、被拒绝候选与预留空间的生命周期
 
 如果只看算法，reject 好像意味着：
 
@@ -642,7 +541,7 @@ candidate 被拒绝
 
 但 Spec V2 的内存管理不是这么工作的。
 
-### 1. `kv_committed_len` 与 `kv_allocated_len` 是两条不同的线
+### `kv_committed_len` 与 `kv_allocated_len` 是两条不同的线
 
 每个 request 至少维护：
 
@@ -666,15 +565,11 @@ kv_allocated_len
 
 `allocated` 表示这个 request 当前持有到哪里的物理 capacity。
 
-两者之间：
-
-~~~text
-[kv_committed_len, kv_allocated_len)
-~~~
+两者之间：`[kv_committed_len, kv_allocated_len)`
 
 就是 speculative reserve / overshoot 的典型来源。
 
-### 2. 正常下一轮 Decode 不会因为 reject 自动缩小 allocated tail
+### 正常下一轮 Decode 不会因为 reject 自动缩小 allocated tail
 
 `page_aligned_decode_alloc_lens()` 的核心是：
 
@@ -687,11 +582,7 @@ nxt = max(
 )
 ~~~
 
-注意：
-
-~~~text
-nxt >= cur
-~~~
+注意：`nxt >= cur`
 
 所以正常 speculative iteration 的 allocation path 是“够了就复用，不够再扩”，而不是：
 
@@ -725,7 +616,7 @@ physical slots 仍可能保持 allocated
 
 这不是 memory leak，而是 Spec V2 的 reserve 策略。
 
-### 3. 那 Overshoot 到底什么时候真的 free？
+### Overshoot 的实际释放时机
 
 严格看当前 lifecycle，至少有下面几类明确 free 点。
 
@@ -748,29 +639,17 @@ physical slots 仍可能保持 allocated
 
 > **普通 iteration 内 reject 不触发逐候选 free；真正 reclaim 由 request/session 生命周期的 ownership 转换触发。**
 
-### 4. `page_size > 1` 时为什么还不能从任意 token 边界 free
+### `page_size > 1` 时为什么还不能从任意 token 边界 free
 
 Paged allocator 释放的是整页。
 
-因此：
-
-~~~text
-committed boundary
-~~~
+因此：`committed boundary`
 
 如果落在一个 page 中间，不能直接把包含 live committed token 的整页释放。
 
-`_release_overallocated_kv_indices()` 和 StreamingSession 的 `_free_kv_aligned()` 都会把 free start 向上对齐：
+`_release_overallocated_kv_indices()` 和 StreamingSession 的 `_free_kv_aligned()` 都会把 free start 向上对齐：`ceil_align(boundary, page_size)`
 
-~~~text
-ceil_align(boundary, page_size)
-~~~
-
-这意味着：
-
-~~~text
-boundary 到下一个 page 边界之间
-~~~
+这意味着：`boundary 到下一个 page 边界之间`
 
 即使逻辑上已经属于 overshoot，也可能暂时继续挂在 request/session 上，直到整页可以安全回收。
 
@@ -785,9 +664,7 @@ boundary 到下一个 page 边界之间
 - [`release_req()`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/managers/schedule_batch.py)
 - [`StreamingSession._trim_overshoot()` / `_free_tail()`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/session/streaming_session.py)
 
----
-
-## 五、Ascend DeepSeek-V4：C4/C128 不是“一份 KV”，Cleanup 至少要拆成三类
+## 五、Ascend 的 KV 页与压缩状态清理
 
 DeepSeek-V4 让“Reject 后清理什么”变得更复杂，因为它不只有 full KV。
 
@@ -805,7 +682,7 @@ C128 compressor state
 
 而它们的地址与 ownership 不是一套规则。
 
-### 1. C4 state 的 ownership 还取决于 NPU 架构
+### C4 state 的 ownership 还取决于 NPU 架构
 
 固定版本的 `dsv4_memory_pool.py` 区分两条路径：
 
@@ -816,7 +693,7 @@ C128 compressor state
 
 C128 state 使用请求与绝对位置管理的 ring。讨论 rollback 时，既要区分 compressed KV 与 compressor state，也要确认架构分支。不能把 pre-A5 的 C4 页绑定规则推广到全部 Ascend NPU。
 
-### 2. `clear_unaccepted_c128_draft_states()` 清的是 state，不是 C128 KV pages
+### `clear_unaccepted_c128_draft_states()` 清的是 state，不是 C128 KV pages
 
 共享 DeepSeek-V4 pool 中存在：
 
@@ -849,11 +726,7 @@ state first half  -> 0
 state second half -> -inf
 ~~~
 
-这属于：
-
-~~~text
-stale-state sanitation
-~~~
+这属于：`stale-state sanitation`
 
 目的不是把显存页归还 allocator，而是避免以后碰到 compression boundary 时读到 rejected draft 留下的 state。
 
@@ -865,21 +738,13 @@ C128 rejected state cleanup
 C128 KV page free
 ~~~
 
-### 3. 为什么 C4 没有同样的 rejected-state clear
+### 为什么 C4 没有同样的 rejected-state clear
 
-固定源码给出的理由很明确：
-
-~~~text
-C4 overwrites its draft slots before reading them.
-~~~
+固定源码给出的理由很明确：`C4 overwrites its draft slots before reading them.`
 
 所以它不需要照抄 C128 的逐 rejected-offset clear。
 
-这不是说：
-
-~~~text
-“C4 永远不需要生命周期管理”
-~~~
+这不是说：`“C4 永远不需要生命周期管理”`
 
 而是说：
 
@@ -887,13 +752,9 @@ C4 overwrites its draft slots before reading them.
 
 另外，pre-A5 的 C4 state 跟随 SWA physical pages；A5 的 CYCLE 路径采用独立请求状态。是否需要清理，要结合各自的寻址和覆盖顺序判断。
 
-### 4. C128 KV page 真正怎样释放
+### C128 KV 页的引用计数与释放
 
-Ascend NPU 的 C128 KV 有独立 allocator 和：
-
-~~~text
-req_to_c128_sidecar
-~~~
+Ascend NPU 的 C128 KV 有独立 allocator 和：`req_to_c128_sidecar`
 
 用来记录 request 当前引用的 C128 physical pages。
 
@@ -934,13 +795,9 @@ sidecar reference lifecycle
 page refcount
 ~~~
 
-而不是：
+而不是：`accept_lens 直接决定 free 哪几页`
 
-~~~text
-accept_lens 直接决定 free 哪几页
-~~~
-
-### 5. `free(free_index)` 为什么不能顺便把 C128 全部 free
+### `free(free_index)` 为什么不能顺便把 C128 全部 free
 
 DSV4 allocator 自己把 free API 分成两种：
 
@@ -966,7 +823,7 @@ tree_cache.free_kv_row(...)
 
 会过度概括。
 
-### 6. Ascend 还有一个重要例外：ONLINE_C128 根本不是当前 NPU 路径
+### Ascend 还有一个重要例外：ONLINE_C128 根本不是当前 NPU 路径
 
 NPU DSV4 pool 初始化时直接 assert：
 
@@ -995,7 +852,7 @@ if ONLINE_C128:
 
 在本文固定版本里，Ascend NPU 不走 ONLINE_C128。
 
-### 7. 最后一个必须保留的证据边界：EAGLE 有显式 C128 rejected-state cleanup，DSpark 不能直接照搬这个结论
+### 最后一个必须保留的证据边界：EAGLE 有显式 C128 rejected-state cleanup，DSpark 不能直接照搬这个结论
 
 当前仓库中：
 
@@ -1003,13 +860,9 @@ if ONLINE_C128:
 clear_unaccepted_c128_draft_states(...)
 ~~~
 
-的显式 verify 调用点位于共享 EAGLE verify 流程：
+的显式 verify 调用点位于共享 EAGLE verify 流程：`run_eagle_verify()`
 
-~~~text
-run_eagle_verify()
-~~~
-
-本次 Review 没有在 DSpark Worker / Verify 路径找到同名 cleanup 的直接调用。
+该固定版本的 DSpark Worker / Verify 路径中未找到同名 cleanup 的直接调用。
 
 因此不能写：
 
@@ -1032,9 +885,7 @@ DSpark 的 `commit_lens` gate、Target hidden → Draft state injection 解决�
 - [`dsv4_allocator.py`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_allocator.py)
 - [`dsv4_req_to_token_pool.py`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_req_to_token_pool.py)
 
----
-
-## 六、把 Commit、Compact、Rollback 重新画成一台状态机
+## 六、串起 Commit、Compact 与 Rollback
 
 到这里，可以把整轮 speculative KV 生命周期画成下面这样：
 
@@ -1073,11 +924,7 @@ flowchart TD
 
 这里的 “Rollback” 已经可以重新定义。
 
-它不是：
-
-~~~text
-restore an old snapshot
-~~~
+它不是：`restore an old snapshot`
 
 而是几类不同机制的组合：
 
@@ -1156,11 +1003,9 @@ cleanup 是为了防 stale read，还是为了把 physical page 还给 allocator
 
 只要这三问没有先回答清楚，就不应该笼统地说“清 KV”。
 
----
+## 七、源码入口与计数对照
 
-## 七、源码阅读顺序与最终结论
-
-如果想自己复现这次 Review，推荐按下面顺序读，不要从 DeepSeek-V4 backend 的几千行文件开始乱搜。
+下面按输入构造、接受路径、物理搬移与回收顺序列出源码入口。
 
 | 目标 | 固定版本源码 |
 | --- | --- |
@@ -1179,12 +1024,4 @@ cleanup 是为了防 stale read，还是为了把 physical page 还给 allocator
 | Ascend C4/C128 state ownership | [`dsv4_memory_pool.py`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py) |
 | Rejected C128 state sanitation | [`c128_cleanup.py`](https://github.com/sgl-project/sglang/blob/6880a4795533640f41ebb3db9e4ae0af5a371a1f/python/sglang/kernels/ops/attention/dsv4/c128_cleanup.py) |
 
-最终可以把整篇压成一句话：
-
-> **Speculative Decoding 的 Accept 不是“挑几个 Token 输出”，而是把 verify-row space 中暂时存在的未来，重新收敛到一个线性的 committed sequence boundary；KV relocation、tree compaction、overshoot reclaim 与 DSV4 state cleanup，只是这次状态收敛在不同子系统中的具体表现。**
-
-理解这一层以后，再看下一篇 Tree Attention 就会容易很多。
-
-因为 Tree Attention 真正解决的，是 Commit 发生**之前**的另一个问题：
-
-> **当未来还没有收敛成一条线时，一棵 speculative tree 中的每个 candidate，到底允许看到哪些 ancestor KV？**
+核对计数时，要分别记录有效输出长度、已物化输入 KV 的提交边界和预留空间上界。它们相互关联，却不总是指向同一枚 Token 或同一个物理位置。前面的 `R,A,C → A,C,X` 示例可以作为检查索引、搬移与回收的最小对照。

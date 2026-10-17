@@ -1,78 +1,24 @@
-# SGLang EAGLE Draft Tree：候选搜索、树构建与 DeepSeek-V4 能力边界
+# EAGLE 候选树：从候选池到 Verify 与接受路径
 
-上一篇把 DeepSeek-V4 的 MTP / NextN Draft 拆开以后，我们看到的是最简单的一条 speculative chain：
+链式 Draft 把预算放在同一条候选路径上，中途预测错误后，后续候选便无法继续接受。通用 EAGLE Runtime 还可以保留多个分支，把有限的候选预算分给几条较有希望的路径，再交给 Target 一次验证。
 
-~~~text
-Target confirmed state
-        ↓
-Draft Extend
-        ↓
-candidate 1
-        ↓
-NextN
-        ↓
-candidate 2
-        ↓
-NextN
-        ↓
-candidate 3
-        ↓
-Target Verify
-~~~
-
-这里默认 `topk=1`，所以所有 Draft Budget 都押在同一条未来上。一旦中间某一步猜错，后面的 candidate 即使已经算出来，也不再属于 Target 真正会走的上下文。
-
-EAGLE Runtime 还支持另一种更一般的情况：
-
-~~~text
-topk > 1
-~~~
-
-Draft 可以暂时保留多条未来，再让 Target 一次验证。
-
-但“Draft Tree”很容易被理解成一棵完整 k 叉树：
-
-~~~text
-             A
-          /     \
-         B       C
-        / \     / \
-       D   E   F   G
-~~~
-
-当前 SGLang 实际做的并不是无限展开。它维护的是一个**受 speculative token budget 约束的稀疏候选树**：每一层只保留有限宽度的 frontier，结束后再从整个搜索过程中筛出最值得进入 Target Verify 的节点。
-
-于是完整问题变成：
-
-> **NextN logits 怎样形成多分支搜索？累计路径 score 到底是什么？`parent_list` 和 `selected_index` 为什么需要两个索引空间？Tree Mask 怎样让兄弟分支在一次 Target Forward 中互不污染？Target 最后又如何只提交其中一条路径？**
+本文沿一棵小树解释累计分数、候选池和父节点索引，说明它怎样变成可执行的 Verify 输入。DeepSeek-V4 在本文固定版本中仍要求 EAGLE `topk=1`；多分支部分讨论的是通用 Runtime 机制，最后单独核对 V4 的配置与后端限制。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。正文分析 SGLang EAGLE Runtime 中真实存在的 `topk>1` Draft Tree 机制，并以 DeepSeek-V4 / NextN 为模型背景。当前 DeepSeek-V4 + Ascend 官方部署使用 `--attention-backend dsv4`、`page_size=128`、`speculative_eagle_topk=1`；同一版本的 DeepSeek-V4 模型配置 hook 对 EAGLE 直接要求 `topk=1`；另有 `dsv4 + page_size>1 + topk>1` 的后端 guard。因此本文讲的是 DeepSeek-V4 所使用的 EAGLE Runtime 的 Tree 能力，以及它为什么在当前 Ascend DSV4 官方配置中退化成 Chain，而不是宣称当前 Ascend DSV4 已经开放多分支 Tree 生产配置。
 
-## 一、Draft Tree 不是完整 k 叉树：EAGLE 保留的是有限宽度的高分路径
+## 一、在有限预算内保留候选路径
 
 先从 `topk=1` 开始。
 
-假设 NextN 依次提出：
+假设 NextN 依次提出：`A → B → C`
 
-~~~text
-A → B → C
-~~~
-
-如果 Target 实际希望：
-
-~~~text
-A → X
-~~~
+如果 Target 实际希望：`A → X`
 
 那么 B 之后的 rollout 都无法进入最终已接受上下文。
 
 `topk>1` 的直觉是：不要在每个位置只押一个答案。
 
-假设：
-
-~~~text
-topk = 2
-~~~
+假设：`topk = 2`
 
 第一步 Draft Extend 得到：
 
@@ -187,11 +133,7 @@ top_scores = torch.topk(
 
 为什么是 `num_draft_token - 1`？
 
-因为 Target Verify Window 的第一个位置留给上一轮已经由 Target 确认的 `bonus token`，真正留给 Draft nodes 的容量只有：
-
-~~~text
-num_draft_tokens - 1
-~~~
+因为 Target Verify Window 的第一个位置留给上一轮已经由 Target 确认的 `bonus token`，真正留给 Draft nodes 的容量只有：`num_draft_tokens - 1`
 
 因此 EAGLE 有两层 budget：
 
@@ -211,9 +153,7 @@ k × k child
 
 这不是完整 k 叉树，更接近一个固定 frontier width、固定 verify-token budget 的未来搜索。
 
----
-
-## 二、`parent_list` 和 `selected_index` 不在同一个索引空间：它们怎样把扁平候选池重新变回树
+## 二、候选池索引怎样还原父节点关系
 
 Tree 最容易看懂，源码索引却最容易看错。
 
@@ -225,11 +165,7 @@ top_scores_index
 draft_tokens
 ~~~
 
-这里的 `top_scores_index` 在传给 Tree Builder 后叫：
-
-~~~text
-selected_index
-~~~
+这里的 `top_scores_index` 在传给 Tree Builder 后叫：`selected_index`
 
 必须先明确：
 
@@ -264,11 +200,7 @@ B → F
 
 会继续排到候选搜索池后面。
 
-所以：
-
-~~~text
-selected_index
-~~~
+所以：`selected_index`
 
 回答的是：
 
@@ -303,11 +235,7 @@ draft_tokens = torch.gather(
 
 只知道“这个 node 原来是 search-pool index 17”仍然不够。
 
-Tree Builder还要知道：
-
-~~~text
-index 17 的 parent 是谁？
-~~~
+Tree Builder还要知道：`index 17 的 parent 是谁？`
 
 `_select_top_k_tokens_first()` 第一层构造：
 
@@ -337,11 +265,7 @@ parent_tb_idx = (
 )
 ~~~
 
-如果：
-
-~~~text
-parent_tb_idx == 0
-~~~
+如果：`parent_tb_idx == 0`
 
 说明它属于第一层，父节点就是 Verify Tree 的 root/bonus。
 
@@ -441,9 +365,7 @@ node 3 是 node 1 的 child
 
 > **`selected_index` 保存“最终节点来自原搜索池哪里”，`parent_list` 保存“搜索池中的 parent 关系怎样追溯”；`retrieve_*` 才是 Tree Build 完成以后真正面向 Verify traversal 的最终树结构。**
 
----
-
-## 三、FULL_MASK 和 QLEN_ONLY 表达的是同一棵树，只是 Prefix 是否显式放进 Mask
+## 三、把树关系转成 Verify Mask
 
 最终 Tree 结构确定以后，需要把它转换成一次 Target Forward 可以执行的 Attention Layout。
 
@@ -490,11 +412,7 @@ C    → 7
 
 A 和 B 虽然是不同 Tensor row，却代表同一语言模型位置上的两种互斥未来，所以共享 position 6。
 
-如果简单用普通 lower-triangular causal mask，把节点 flatten 为：
-
-~~~text
-[root, A, B, C]
-~~~
+如果简单用普通 lower-triangular causal mask，把节点 flatten 为：`[root, A, B, C]`
 
 那么 B 会错误地看到 A，C 也可能错误地看到 B。
 
@@ -531,11 +449,7 @@ C          1   1 0 1
 
 ### QLEN_ONLY：只显式保存 speculative query block
 
-`QLEN_ONLY` 的 shape 是：
-
-~~~text
-[bs × draft_token_num × draft_token_num]
-~~~
+`QLEN_ONLY` 的 shape 是：`[bs × draft_token_num × draft_token_num]`
 
 它只描述：
 
@@ -555,21 +469,13 @@ draft_token_num
 (seq_len + draft_token_num)
 ~~~
 
-左侧：
-
-~~~text
-seq_len
-~~~
+左侧：`seq_len`
 
 列表示已经提交的历史 Prefix。
 
 这些列对所有 Tree node 都应该可见。
 
-右侧：
-
-~~~text
-draft_token_num
-~~~
+右侧：`draft_token_num`
 
 列才是刚才那块 ancestor-only Tree Mask。
 
@@ -639,9 +545,7 @@ mask_mode = verify_mask.mode
 
 这比按硬件平台硬分更准确。
 
----
-
-## 四、一次 Target Verify 不会“选概率最高 Branch”：Target prediction 逐层决定走哪个 child
+## 四、Target 预测怎样确定接受路径
 
 Tree 构建完成后，`build_eagle_verify_input()` 先把上一轮 Target 确认的 `bonus token` prepend 到 Draft nodes：
 
@@ -655,17 +559,9 @@ draft_tokens = torch.cat(
 )
 ~~~
 
-所以 Target Verify 真正看到：
+所以 Target Verify 真正看到：`[root/previous bonus, draft nodes...]`
 
-~~~text
-[root/previous bonus, draft nodes...]
-~~~
-
-随后：
-
-~~~text
-ForwardMode = TARGET_VERIFY
-~~~
+随后：`ForwardMode = TARGET_VERIFY`
 
 完整 Target Model 对所有 Tree rows 一次 Forward。
 
@@ -746,11 +642,7 @@ A.first_child   = C
 
 CPU 与 Triton reference 的算法语义一致。
 
-初始：
-
-~~~text
-last_accept = root
-~~~
+初始：`last_accept = root`
 
 下一层先进入：
 
@@ -766,11 +658,7 @@ cur = retrieve_next_token[last_accept]
 target_tok = target_predict[last_accept]
 ~~~
 
-如果 child token：
-
-~~~text
-== Target 在 parent row 上预测的 token
-~~~
+如果 child token：`== Target 在 parent row 上预测的 token`
 
 则接受。
 
@@ -782,19 +670,11 @@ cur = retrieve_next_sibling[cur]
 
 沿 sibling 链继续找。
 
-找到匹配 child 后：
-
-~~~text
-last_accept = child
-~~~
+找到匹配 child 后：`last_accept = child`
 
 再进入它的下一层。
 
-如果整个 sibling list 都没有 Target 想要的 Token：
-
-~~~text
-停止 Draft-path acceptance
-~~~
+如果整个 sibling list 都没有 Target 想要的 Token：`停止 Draft-path acceptance`
 
 固定源码：
 
@@ -816,17 +696,11 @@ Target prediction
 形成唯一 accepted path
 ~~~
 
----
-
-## 五、Greedy Kernel 最后的 bonus 是什么：Verify 输入 root 和新 trailing bonus 必须分开
+## 五、旧 root 与新 bonus 的位置
 
 EAGLE 里“bonus”这个词很容易因为时序不同而混乱。
 
-这一轮 Target Verify 开始前，输入 Tree 的 root 是：
-
-~~~text
-上一轮 Target 已确认的 bonus token
-~~~
+这一轮 Target Verify 开始前，输入 Tree 的 root 是：`上一轮 Target 已确认的 bonus token`
 
 它已经是当前序列下一次模型执行的输入，但它的 Target KV 要在本轮 Verify forward 中真正计算。
 
@@ -850,29 +724,13 @@ at A → C
 at C → X
 ~~~
 
-Kernel 首先发现：
+Kernel 首先发现：`A == Target(R)`
 
-~~~text
-A == Target(R)
-~~~
+于是接受 Draft A，并写：`predict[row(R)] = A`
 
-于是接受 Draft A，并写：
+下一层：`C == Target(A)`
 
-~~~text
-predict[row(R)] = A
-~~~
-
-下一层：
-
-~~~text
-C == Target(A)
-~~~
-
-于是接受 Draft C：
-
-~~~text
-predict[row(A)] = C
-~~~
+于是接受 Draft C：`predict[row(A)] = C`
 
 到 C 后没有匹配 child，Kernel 最后执行：
 
@@ -882,11 +740,7 @@ predicts[last_accept_index]
 target_predict[last_accept_index]
 ~~~
 
-于是：
-
-~~~text
-predict[row(C)] = X
-~~~
+于是：`predict[row(C)] = X`
 
 固定源码：
 
@@ -944,15 +798,9 @@ return (
 )
 ~~~
 
-这个：
-
-~~~text
-+1
-~~~
+这个：`+1`
 
 表示输出 token 数还包括新的 Target trailing bonus。
-
-因此：
 
 ~~~text
 accept_lens
@@ -968,9 +816,7 @@ accepted Draft token count
 
 这和下一节的 KV compaction 直接相关。
 
----
-
-## 六、为什么 KV Compaction 传 `accept_lens - 1`：搬的是 Verify 输入 KV，不是新 trailing bonus 的 KV
+## 六、接受路径对应哪些输入 KV
 
 多分支 Verify 结束后，物理 KV 仍然按照整棵 Verify Tree 的 layout 存放。
 
@@ -985,19 +831,11 @@ slot2 → B
 slot3 → C
 ~~~
 
-而 Target 接受的是：
-
-~~~text
-R → A → C
-~~~
+而 Target 接受的是：`R → A → C`
 
 后续 Runtime 希望已提交的输入历史重新成为连续 Chain。
 
-于是 `run_eagle_verify()` 在：
-
-~~~text
-topk > 1
-~~~
+于是 `run_eagle_verify()` 在：`topk > 1`
 
 时调用：
 
@@ -1020,19 +858,11 @@ move_accept_tokens_to_target_kvcache(
 
 [`_finalize_accept_tree_path()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_common.py#L407-L459)
 
-为什么传的是：
-
-~~~text
-accept_lens - 1
-~~~
+为什么传的是：`accept_lens - 1`
 
 这里不能只解释成“减掉 bonus，所以只搬 Draft KV”。
 
-`move_accept_tokens_to_target_kvcache()` 的第三个参数名字就是：
-
-~~~text
-num_correct_drafts
-~~~
+`move_accept_tokens_to_target_kvcache()` 的第三个参数名字就是：`num_correct_drafts`
 
 函数契约明确：
 
@@ -1081,11 +911,7 @@ accepted Draft-node KV
 
 [`move_accept_tokens_to_target_kvcache()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L728-L790)
 
-真正**不会被搬 KV**的是：
-
-~~~text
-new trailing bonus
-~~~
+真正**不会被搬 KV**的是：`new trailing bonus`
 
 因为它只是这轮 Target logits 的预测结果，还没作为输入执行，自然不存在本轮可搬的 KV row。
 
@@ -1117,11 +943,7 @@ A
 C
 ~~~
 
-共：
-
-~~~text
-2 + 1 = 3
-~~~
+共：`2 + 1 = 3`
 
 个 KV rows。
 
@@ -1171,15 +993,9 @@ Rejected branch B 的 KV 仍可能暂时留在 overshoot slots，但不再属于
 
 所以 Tree 的生命周期是暂时的。
 
-模型最终历史永远重新收敛成一条：
+模型最终历史永远重新收敛成一条：`autoregressive chain`
 
-~~~text
-autoregressive chain
-~~~
-
----
-
-## 七、DeepSeek-V4 的模型限制与 Paged-Tree 后端限制
+## 七、DeepSeek-V4 的模型与后端限制
 
 最后回到 DeepSeek-V4 + Ascend。首先要检查模型级限制，而不只是后端 allowlist。同一固定版本的 [`deepseek_v4_hook.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/arg_groups/deepseek_v4_hook.py) 在 EAGLE 配置下直接断言 `speculative_eagle_topk == 1`。因此，前面的多分支树解释的是通用 EAGLE Runtime；当前 DeepSeek-V4 配置只开放 Chain。
 
@@ -1196,11 +1012,7 @@ autoregressive chain
 --speculative-num-draft-tokens 3
 ~~~
 
-所以官方实际使用的是：
-
-~~~text
-topk = 1
-~~~
+所以官方实际使用的是：`topk = 1`
 
 即 Chain。
 
@@ -1230,8 +1042,6 @@ if (
 
 [`_handle_eagle_family()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/arg_groups/speculative_hook.py#L1067-L1095)
 
-因此：
-
 ~~~text
 dsv4
 +
@@ -1244,27 +1054,13 @@ topk > 1
 
 ### 这个 Guard 不是在说“NPU 不支持 Tree”
 
-NPU 路径已经有：
+NPU 路径已经有：`torch.ops.npu.build_tree_kernel_efficient`
 
-~~~text
-torch.ops.npu.build_tree_kernel_efficient
-~~~
-
-用于构造 Tree topology / mask，也有：
-
-~~~text
-sgl_kernel_npu.sample.verify_tree_greedy
-~~~
+用于构造 Tree topology / mask，也有：`sgl_kernel_npu.sample.verify_tree_greedy`
 
 用于 Greedy tree traversal。
 
-DeepSeek-V4 Ascend 还拥有：
-
-~~~text
-DeepseekV4AscendMultiStepDraftBackend
-~~~
-
-所以：
+DeepSeek-V4 Ascend 还拥有：`DeepseekV4AscendMultiStepDraftBackend`
 
 ~~~text
 Tree Builder
@@ -1278,11 +1074,7 @@ Guard 限制的是更具体的一层：
 
 > **当 Draft Tree 有多个 branch 且 KV allocator 使用 page_size>1 时，Draft Decode 如何让不同 branch 正确共享 Prefix，同时又在自己的 paged KV 区域写入未来 Token。**
 
-源码注释称这一能力为：
-
-~~~text
-two-pass cascade draft-decode
-~~~
+源码注释称这一能力为：`two-pass cascade draft-decode`
 
 需要：
 
@@ -1388,74 +1180,9 @@ Draft physical KV layout
 Paged multi-branch cache ownership
 ~~~
 
-真正阻塞当前官方 DSV4 多分支路径的是后者。
+当前配置同时受到模型级 `topk=1` 约束和后端 paged-tree 支持范围的限制。后者是需要补齐的一项能力，不能单独视为全部阻塞原因。
 
----
-
-把全文重新串起来，EAGLE Draft Tree 的完整数据流已经非常清楚：
-
-~~~mermaid
-flowchart TD
-    H[Target confirmed hidden]
-    H --> D[Draft Extend / NextN]
-
-    D --> F[Top-k frontier]
-    F --> S[Cumulative path scores]
-    S --> P[score_list / token_list / parent_list]
-
-    P --> G[Global verify-budget pruning]
-    G --> T[Selected Draft Tree]
-
-    T --> M[Tree Mask + positions]
-    M --> V[One Target Verify Forward]
-
-    V --> R[first-child / next-sibling traversal]
-    R --> A[One accepted path + new trailing bonus]
-
-    A --> C[Compact root + accepted Draft KV/hidden]
-    C --> N[Next speculative round]
-~~~
-
-这里每一层解决的是不同问题：
-
-~~~text
-Cumulative score
-→ 哪些未来值得花 Verify Budget
-
-
-parent_list / selected_index
-→ 怎样从 rollout candidate pool 恢复父子关系
-
-
-Tree Mask
-→ 怎样一次 Forward 验证多种互斥未来
-
-
-retrieve_next_token / sibling
-→ 怎样让 Target prediction 在树里逐层找匹配 child
-
-
-accept_lens - 1
-→ 怎样把 Tree 状态重新压回 committed Chain
-
-
-Ascend page-tree guard
-→ 当前物理 KV layout 是否能承载 paged multi-branch Draft
-~~~
-
-因此 EAGLE Draft Tree 真正做的不是简单“多猜几个 Token”。
-
-它是在有限 speculative compute budget 下，把多个可能未来压缩成一个稀疏搜索结构，再用一次 Target Forward 对它们统一求值，最后由 Target 只选择一条合法的自回归路径，并把物理状态重新收敛回 Chain。
-
-而当前 DeepSeek-V4 + Ascend DSV4 官方配置中：
-
-~~~text
-topk = 1
-~~~
-
-这棵 Tree 退化成一条 Chain。
-
-理解完整 Tree 仍然很重要，因为它告诉我们：要把未来 Ascend speculative decoding 从 Chain 推向真正多分支，缺的不只是一个 sampling kernel，而是 **Draft branch 的 paged KV ownership、prefix-tail duplication、attention metadata、graph 与后续 compaction 整套状态布局能力**。
+候选分数决定哪些路径进入 Verify，树索引与 Mask 保持父子关系和可见性，接受结果再把这些候选收敛为一条输出序列。若要扩展到新的模型或后端，需要同时验证上述语义和物理 KV 布局，而不只是补一个 Tree Sampling Kernel。
 
 ### 源码阅读入口
 

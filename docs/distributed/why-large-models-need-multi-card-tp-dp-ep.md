@@ -1,16 +1,12 @@
 # 模型怎样跨多卡运行：从显存容量到 TP、DP Attention 与 EP
 
-第一次接触大模型分布式推理时，最容易把多卡理解成一句话：**一张卡显存不够，所以多插几张卡。**
+部署大模型时，第一道约束通常是容量：权重、KV Cache 和执行中的临时 Tensor 能否同时放进设备内存。把权重分到多张卡后，还要决定一次计算怎样分工，以及分片结果在哪里合并。
 
-这句话只说对了一半。对 DeepSeek-V4 这样的超大 MoE 模型，多卡确实首先解决“模型装不下”，但真正进入 SGLang 之后，很快还会碰到另外三个工程问题：权重已经分到多张 NPU 上了，一次矩阵乘法该由谁算、结果怎样合回来；请求并发越来越高，为什么不能让不同设备各自处理一部分请求；MoE 有大量 Expert，为什么还要把所有 Expert 都复制到每张卡？
+TP 拆分 Tensor 计算，普通 DP 让模型副本处理不同请求，EP 把不同专家交给不同 Rank。SGLang 的 DP Attention 又把请求分组嵌入同一个 TP 域。下面先算显存，再用一组 DeepSeek-V4 的并行例子说明这些方式怎样配合。
 
-这三个问题分别把我们带到 **Tensor Parallelism（TP）**、**Data Parallelism（DP）** 和 **Expert Parallelism（EP）**。
+本文的并行语义参考 `sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a`，核对日期为 2026-09-21；DeepSeek-V4 参数规模与 Ascend 支持情况同时参考当前 SGLang 官方文档。本文只讨论推理，不讨论训练里的梯度同步与 Optimizer State。
 
-本文不从三个术语的定义开始，而是从一笔最简单的 HBM 账出发，一路推到真实的 DeepSeek-V4 并行拓扑。文章中的 SGLang 并行语义固定参考 `sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a`，核对日期为 2026-09-21；DeepSeek-V4 参数规模与 Ascend 支持情况同时参考当前 SGLang 官方文档。本文只讨论推理，不讨论训练里的梯度同步与 Optimizer State。
-
----
-
-## 一、先算最朴素的一笔账：为什么一张 910C 装不下 DeepSeek-V4
+## 一、显存需要容纳哪些内容
 
 SGLang 当前 DeepSeek-V4 cookbook 给出的 `DeepSeek-V4-Flash-0731` 规模约为 **304B Total Parameters / 13B Active Parameters**。
 
@@ -57,10 +53,10 @@ DeepSeek-V4 又有自己的压缩缓存与 Attention 实现，因此这里不能
 
 ```mermaid
 flowchart TD
-    R0["Rank 0<br/>Local HBM"]
-    R1["Rank 1<br/>Local HBM"]
-    R2["Rank 2<br/>Local HBM"]
-    R3["Rank 3<br/>Local HBM"]
+    R0["Rank 0 · Local HBM"]
+    R1["Rank 1 · Local HBM"]
+    R2["Rank 2 · Local HBM"]
+    R3["Rank 3 · Local HBM"]
 
     R0 <-->|collective / P2P| R1
     R1 <-->|collective / P2P| R2
@@ -69,9 +65,7 @@ flowchart TD
 
 所以多卡推理真正要解决的是：**哪一份数据属于哪个 Rank，以及什么时候必须跨 Rank 搬数据。** 从这里开始，TP、DP、EP 才真正有意义。
 
----
-
-## 二、多卡到底在切什么：先把 TP、DP、EP 放到同一张地图上
+## 二、TP、DP 与 EP 分别切什么
 
 如果只背缩写，很容易把三种并行都理解成“把任务分给多张卡”。更有用的方式是问：**它们到底在切什么对象？**
 
@@ -111,9 +105,7 @@ flowchart TD
 
 物理 Rank 没有凭空增加；变化的是**数据 ownership 与通信 Group**。有了这张总图，再分别看 TP、DP、EP，就不会把三个概念学成互不相干的名词。
 
----
-
-## 三、TP：一份模型太大，就把一个 Tensor 的计算拆给多个 Rank
+## 三、TP：拆分矩阵计算，再合并结果
 
 Transformer 中大量计算最终都会落到 Linear / GEMM。用最简单的矩阵乘法表示就是 `Y = XW`。
 
@@ -121,11 +113,11 @@ Transformer 中大量计算最终都会落到 Linear / GEMM。用最简单的矩
 
 ```mermaid
 flowchart LR
-    X["Input X"] --> R0["Rank 0<br/>W0"]
-    X --> R1["Rank 1<br/>W1"]
+    X["Input X"] --> R0["Rank 0 · W0"]
+    X --> R1["Rank 1 · W1"]
     R0 --> Y0["Y0"]
     R1 --> Y1["Y1"]
-    Y0 --> NEXT["后续计算<br/>必要时合并"]
+    Y0 --> NEXT["后续计算 · 必要时合并"]
     Y1 --> NEXT
 ```
 
@@ -145,9 +137,7 @@ TP 还有一个代价：切开以后经常要重新交换或归并数据。比�
 
 这也解释了为什么 `tp_size` 不是越大越好。TP 太小，模型可能放不下；TP 太大，又可能让通信、small GEMM 和同步成本开始吞噬收益。
 
----
-
-## 四、DP：它不是为了把模型装下；而 DP Attention 更不能按“TP × DP”算卡数
+## 四、普通 DP 与 DP Attention 怎样分配请求
 
 TP 解决了“同一份模型怎么拆”。当模型已经能运行，服务系统还要面对另一个问题：同时来了很多请求怎么办？
 
@@ -205,9 +195,7 @@ SGLang 官方 DPA 文档也明确区分了普通 DP 和 DPA：普通 DP 是完�
 
 因此以后看到 `dp_size`，第一反应不应该是“复制了多少套模型”，而应该先问：**这是普通 DP，还是已经开启了 DP Attention？** 这个问题不回答，`TP16 / DP8` 几乎没有完整的拓扑含义。
 
----
-
-## 五、EP：MoE 真正特殊的地方，是 Expert 权重和 Token 会发生跨 Rank 重分布
+## 五、EP：让 Token 找到对应专家
 
 现在只剩 DeepSeek 最有代表性的一层：MoE。
 
@@ -226,9 +214,9 @@ Dense FFN 可以粗略理解为每个 Token 都经过同一套 MLP；MoE 则先�
 ```mermaid
 flowchart TD
     H["Hidden States"] --> R["Router / Top-K"]
-    R --> D["Dispatch<br/>token → expert owner"]
+    R --> D["Dispatch · token → expert owner"]
     D --> E["Local Expert GEMM"]
-    E --> C["Combine<br/>expert output → token"]
+    E --> C["Combine · expert output → token"]
     C --> O["MoE Output"]
 ```
 
@@ -249,9 +237,7 @@ EP 描述的是 **Expert ownership 如何分片**；All-to-All 是某些 EP back
 
 这才是 DeepSeek 分布式推理真正有意思的地方：**不是先做完 TP，再额外套一层 EP；而是同一批 Rank 在不同子模块里承担不同的数据 ownership。**
 
----
-
-## 六、把一次 DeepSeek-V4 Forward 串起来：多卡的本质其实是“放哪里、谁来算、何时通信”
+## 六、从权重分布回到一次 Forward
 
 现在可以回到开头的问题。假设有一组 16 个 Rank，概念配置是：
 
@@ -272,7 +258,7 @@ Attention 结束以后，数据要进入 MoE。此时同一批 Rank 的意义发
 
 ```mermaid
 flowchart TD
-    Q["Requests"] --> A["Attention<br/>DP8 × TP2"]
+    Q["Requests"] --> A["Attention · DP8 × TP2"]
     A --> B["Layout bridge"]
     B --> R["MoE Router"]
     R --> D["DeepEP Dispatch"]
@@ -282,27 +268,15 @@ flowchart TD
     G --> N["Next Decoder Layer"]
 ```
 
-现在再看 TP、DP、EP，三者已经不只是三个缩写：
-
-- **TP** 回答：一个 Tensor / Linear 太大，权重和计算怎样切到多个 Rank？
-- **DP** 回答：不同 Request / Batch 怎样分给不同 Replica 或 Attention shard？
-- **EP** 回答：大量 Expert 权重归谁所有，Token 怎样找到真正持有目标 Expert 的 Rank？
-
-而 AllReduce、AllGather、ReduceScatter、All-to-All 这些 collective，本质上都在补同一个代价：**数据一旦被分布到不同 Rank，本地计算结束后，总会有某个时刻需要恢复下一阶段所要求的数据布局。**
-
-所以大模型分布式推理最值得建立的第一性视角不是“背并行名词”，而是连续追问：
-
-> **这份数据现在放在哪里？这一阶段由谁来计算？下一阶段开始前必须搬什么数据？**
-
-只要沿着这三个问题走，后面的 Rank、Group、HCCL、DeepEP、DP Attention、CP、PP 都会逐渐变成同一套系统里的不同答案。
+这套配置中，同一批设备先按 Attention 的 DP/TP 组织处理请求，再按 MoE 的 Expert 归属交换 Token。TP 分摊张量与权重，DP 分配请求，EP 分配专家；通信把一个阶段的输出变成下一个阶段需要的布局。评估是否值得增加设备时，应同时计算容量收益和这部分交换成本。
 
 ### 继续阅读
 
 这篇只负责回答“为什么需要多卡，以及 TP / DP / EP 分别在解决什么”。继续进入 SGLang 源码时，推荐按下面的顺序阅读：
 
-1. [SGLang 里的 Rank 和 Group 到底是什么？用 DeepSeek-V4 画清 TP Rank、DP Rank、EP Rank](sglang-rank-group-deepseek-v4.md)
+1. [SGLang Rank 与 Group：读懂 TP、DP Attention 和 EP 坐标](sglang-rank-group-deepseek-v4.md)
 2. [SGLang 里的 AllReduce、AllGather、ReduceScatter、All-to-All 到底在搬什么？](sglang-collectives-deepseek-v4.md)
-3. [DeepSeek-V4 分布式推理源码解析：TP、EP、DP 三种并行如何共同驱动一次前向计算](../sglang/deepseek-v4-distributed-parallel-source-analysis.md)
+3. [DeepSeek-V4 分布式 Forward：Attention 与 MoE 怎样交换布局](../sglang/deepseek-v4-distributed-parallel-source-analysis.md)
 
 ### 主要资料
 

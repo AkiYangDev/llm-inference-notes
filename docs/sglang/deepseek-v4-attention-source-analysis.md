@@ -1,25 +1,12 @@
-# DeepSeek-V4 Attention：Query 生成、缓存写入与历史寻址
+# DeepSeek-V4 Attention：Query、缓存写入与历史寻址
 
-上一篇《[SGLang ModelRunner 源码解析：ForwardBatch 如何驱动 DeepSeek 完成一次 Prefill / Decode](sglang-modelrunner-source-analysis.md)》把执行链追到了 `DeepseekV4DecoderLayer`。从这里继续往下一层，就是推理引擎里最核心的一段：当前 token 怎样形成 Query，又怎样准确找到属于自己这条请求的历史缓存。
+一个 batch 可以把多条请求的 Token 放进同一个 Tensor，Attention 却必须让每一行读取自己的历史。这里有两条相互配合的数据流：hidden states 生成 Query，请求索引、位置和页表决定 Query 能访问哪些缓存。
 
-如果只用 Transformer 教科书公式回答，大概会写成：
-
-~~~text
-Q = XWq
-K = XWk
-V = XWv
-Attention(Q, K, V)
-~~~
-
-这足以解释基本数学，却不足以解释 DeepSeek-V4 在 SGLang 里的真实执行。服务端已经把多条请求打包成一个 token-major Tensor；历史状态分散在缓存池的不同物理页；DeepSeek-V4 还同时存在滑窗历史与压缩历史。真正需要追的是：
-
-> `ForwardBatch` 怎样把 packed token 重新绑定到各自请求的逻辑位置和物理缓存，再让当前 Query 只读取属于自己的历史？
-
-这篇文章沿着一个普通自回归 batch，把 `ForwardBatch → MQALayer → Query / cache write → page table → SWA / C4 / C128 → Attention output` 连起来。
+下面沿 DeepSeek-V4 的普通 Decode 路径追踪这两条线，先生成 Query 并写入当前状态，再找到请求历史，最后按当前层的配置组合滑窗与压缩信息。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线使用公开源码中的 DeepSeek-V4、普通文本生成、非投机推理、PP=1，并聚焦 Ascend NPU eager 的普通单流职责路径。图回放、多流、Context Parallel、unified FP8 KV 和 DeepSeek-V4.1 的 `compress_ratio=1/2` 会改变部分中间表示或时序，不在本文代表路径中展开。本文追到公开 NPU Attention operator 入口与缓存映射，不把这些代码外推成某个私有部署镜像的底层运行轨迹。
 
-## 一、ForwardBatch 不会直接“变成 Query”，它先把 packed token 放回各自请求的坐标系
+## 一、为打包的 Token 保留请求坐标
 
 `DeepseekV4DecoderLayer.forward()` 在完成 mHC / norm 准备后，会把当前层的 hidden states、positions 和整份 `ForwardBatch` 一起交给 Attention：
 
@@ -51,11 +38,7 @@ seq_lens = [7, 7]
 positions = [6, 6]
 ~~~
 
-经过 Embedding、mHC 和输入层归一化后，某一层 Attention 收到：
-
-~~~text
-x.shape = [2, H]
-~~~
+经过 Embedding、mHC 和输入层归一化后，某一层 Attention 收到：`x.shape = [2, H]`
 
 其中 `x[0]` 属于 R1，`x[1]` 属于 R2。问题在于，单看 `x` 自己并没有“请求身份”。真正把它们区分开的，是继续同行的 `ForwardBatch`：
 
@@ -102,7 +85,9 @@ Q2 -> K2 / V2
 
 当前实现拥有多个 Query heads，但共享一套 KV / latent-cache 侧表示。后文仍会沿用源码里的变量名 `kv`、`k`、`v`，但不会把它们机械等价为传统 Transformer 中“两套独立 K Cache 和 V Cache”。
 
-## 二、当前 hidden states 如何生成 Query，并把 position 注入这一轮计算
+## 二、从 hidden states 生成 Query
+
+本节形状描述模型的逻辑 head 维。后端为算子要求做的 head padding 属于设备布局，不能直接拿 padding 后的维度反推模型 head 数。
 
 `MQALayer` 的 Query 主干不是一次单独的 `XWq`，而是低秩两阶段投影。逻辑上：
 
@@ -160,11 +145,7 @@ head_dim          = 512
 
 普通 NPU 单流路径在 `MQALayer._forward_prepare()` 中形成 Q 后，还会对当前 head 表示进行归一化，并把位置编码作用到对应维度。固定源码见 [`MQALayer._forward_prepare()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1750-L2095)。
 
-当前两个 Decode token：
-
-~~~text
-positions = [6, 6]
-~~~
+当前两个 Decode token：`positions = [6, 6]`
 
 并不冲突。position 是“每条请求内部的逻辑位置”，不是 packed batch 的全局行号：
 
@@ -177,12 +158,12 @@ Q[1] -> R2 position 6
 
 ~~~mermaid
 flowchart TD
-    X[hidden states<br/>T x H]
+    X[hidden states · T x H]
     X --> QA[wq_a / fused qkv_a]
-    QA --> QL[q_lora<br/>T x Rq]
+    QA --> QL[q_lora · T x Rq]
     QL --> QN[q_norm]
     QN --> QB[wq_b]
-    QB --> Q[Query<br/>T x Nlocal x D]
+    QB --> Q[Query · T x Nlocal x D]
 
     P[ForwardBatch.positions] --> R[RoPE / position transform]
     Q --> R
@@ -191,7 +172,7 @@ flowchart TD
 
 到这里已经有了当前 Query，但历史还没有出现。历史不是从这些 hidden states 中重新计算出来的，而是在此前 Prefill / Decode 轮次中逐步写进长期缓存池。
 
-## 三、普通 NPU 路径会先写当前缓存，再执行主 Attention；`k=v` 只是接口约定
+## 三、写入当前 Token 的缓存状态
 
 同一个当前层输入 `x` 还会产生本轮新的共享缓存表示。未融合时，基础投影是：
 
@@ -288,7 +269,7 @@ flowchart TD
     W -. physical write timing .-> N[logical visibility still comes from metadata and masks]
 ~~~
 
-## 四、Query 找回历史的真正桥梁，是请求索引、req_to_token 和 page table
+## 四、用请求映射和页表找到历史
 
 写入缓存解决的是“当前 token 的状态放在哪里”。读取历史还需要反方向回答：
 
@@ -343,11 +324,7 @@ R1 req_pool_index = 3
 R2 req_pool_index = 8
 ~~~
 
-那么即使当前：
-
-~~~text
-input_ids = [T1, T2]
-~~~
+那么即使当前：`input_ids = [T1, T2]`
 
 两个 token 在同一个 packed Tensor 中，backend 仍会分别沿：
 
@@ -358,22 +335,16 @@ req_to_token[8, ...]
 
 构造两套历史映射。
 
-所以：
-
 ~~~text
 Q0 -> R1 page table -> R1 cache pages
 Q1 -> R2 page table -> R2 cache pages
 ~~~
 
-而不会变成：
-
-~~~text
-Q0 / Q1 -> 同一整块历史
-~~~
+而不会变成：`Q0 / Q1 -> 同一整块历史`
 
 这就是 packed batching 不会导致请求上下文串线的关键原因。
 
-### Prefill 和 Decode 的 metadata 到底差在哪里
+### Prefill 与 Decode 的 metadata 差异
 
 `DeepseekV4AscendAttnBackend.init_forward_metadata()` 会进一步构造 DSV4 所需的 Query / KV 长度 metadata。[固定源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L1837-L1930)
 
@@ -417,8 +388,6 @@ actual_seq_lengths_q      = 每条请求 Query 的累计结束位置
 actual_seq_lengths_q_pa   = 带 leading 0 的 Query 边界
 actual_seq_lengths_kv     = 每条请求当前可用 KV 长度
 ~~~
-
-因此：
 
 ~~~text
 Query rows 0..5 -> R1
@@ -479,7 +448,7 @@ flowchart TD
     A --> O[Attention Output]
 ~~~
 
-## 五、SWA / C4 / C128 不是三路同时开启，而是每个 Attention Layer 按 compress_ratio 选择自己的历史结构
+## 五、按层选择 SWA、C4 与 C128
 
 SWA、C4、C128 的关系需要按具体层和后端展开，不能把它们统一画成 Query 同时扇出的三条支路。
 
@@ -491,11 +460,7 @@ SWA、C4、C128 的关系需要按具体层和后端展开，不能把它们统�
 self.compress_ratio = config.compress_ratios[layer_id]
 ~~~
 
-对于本文 DeepSeek-V4 + Ascend backend 主线，主 Attention 接口接受：
-
-~~~text
-compress_ratio = 0 / 4 / 128
-~~~
+对于本文 DeepSeek-V4 + Ascend backend 主线，主 Attention 接口接受：`compress_ratio = 0 / 4 / 128`
 
 源码见 [`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2075)。
 
@@ -513,8 +478,6 @@ flowchart TD
     R -->|128| S128[SWA plus C128 compressed history]
 ~~~
 
-也就是说：
-
 ~~~text
 Layer A: ratio 0
 -> SWA only
@@ -526,11 +489,7 @@ Layer C: ratio 128
 -> SWA + C128
 ~~~
 
-不是：
-
-~~~text
-每一层都同时做 SWA + C4 + C128
-~~~
+不是：`每一层都同时做 SWA + C4 + C128`
 
 ### ratio = 0：只读取 SWA
 
@@ -633,177 +592,20 @@ cmp_sparse_indices = None
 
 这也是为什么 DeepSeek-V4 的缓存不能直接套标准 MHA KV Cache 公式。真实运行时状态还包括 SWA pool、compressed pool、compressor state、C4 indexer state、page table、压缩布局与不同 dtype。
 
-## 六、把一次 Decode 完整串起来：Query 怎样只读取 R1 自己的过去
+## 六、把请求坐标与 Attention 输出连起来
 
-最后把所有环节重新落回 R1 / R2。
+回到 R1、R2 的普通 Decode：`input_ids=[T1,T2]`，`positions=[6,6]`，`seq_lens=[7,7]`。两行 hidden states 可以在同一 Tensor 中计算，读取历史时则分别使用各自的请求映射。
 
-当前 Decode：
+| 当前对象 | 本轮发生的变化 | 保持请求隔离的依据 |
+| --- | --- | --- |
+| hidden states | 投影成当前 Query 与缓存表示 | Token 行仍与请求对应 |
+| 当前缓存 | 写入各自的 SWA 槽位，并更新该层需要的压缩状态 | 本轮写入位置 |
+| 历史寻址 | 查到 SWA 及当前层需要的压缩条目 | 请求映射、页表和有效长度 |
+| Attention 输出 | 经过输出投影，回到 token-major hidden states | 每行输出对应原输入 Token |
 
-~~~text
-input_ids = [T1, T2]
-positions = [6, 6]
-seq_lens  = [7, 7]
-~~~
+`compress_ratio=0/4/128` 分别选择 SWA、SWA 加选中的 C4 历史、SWA 加 C128 历史。它们是不同层的配置选择。[Attention 后的 inverse-RoPE、`wo_a`、`wo_b`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2360-L2585) 将结果送回 Decoder Layer，继续下一子层。
 
-某层收到：
-
-~~~text
-x.shape = [2, H]
-~~~
-
-第一步，生成 Query：
-
-~~~text
-x
-[2,H]
-  |
-  | q low-rank projections
-  v
-q_lora
-[2,Rq]
-  |
-  v
-Q
-[2,Nlocal,D]
-  |
-  | positions=[6,6]
-  v
-position-aware Q
-~~~
-
-第二步，生成当前缓存表示并先写入 SWA pool：
-
-~~~text
-x
-  |
-  | wkv / fused path
-  v
-current cache representation
-  |
-  | norm + RoPE
-  v
-SWA cache write
-~~~
-
-如果当前层是 ratio 4，还会在主 Attention 前完成：
-
-~~~text
-indexer compressor
-      ↓
-C4 Indexer Top-K
-
-core compressor
-      ↓
-C4 compressed cache
-~~~
-
-如果是 ratio 128，则只需要相应的 core compressor 路径。
-
-第三步，backend 根据：
-
-~~~text
-req_pool_indices
-      ↓
-req_to_token
-      ↓
-block / page tables
-~~~
-
-分别得到 R1 和 R2 的历史。
-
-于是即使：
-
-~~~text
-Q.shape = [2, Nlocal, D]
-~~~
-
-两个 Query 在同一个 Tensor 中，它们的历史仍然是：
-
-~~~text
-Q[0] -> R1 page tables -> R1 cache
-Q[1] -> R2 page tables -> R2 cache
-~~~
-
-第四步，根据当前层的 `compress_ratio` 选择历史结构：
-
-~~~text
-ratio 0   -> R1/R2 SWA
-ratio 4   -> R1/R2 SWA + selected C4 history
-ratio 128 -> R1/R2 SWA + C128 history
-~~~
-
-第五步，Attention backend 返回当前 token 对应的输出。随后 `MQALayer.forward()` 还会执行 DSV4 的 inverse-RoPE / `wo_a` / `wo_b` 等输出投影，最终重新回到 token-major hidden states，再交还 Decoder Layer。[源码：MQALayer 输出路径](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2360-L2585)
-
-整条链最终是：
-
-~~~mermaid
-flowchart TD
-    X[Layer hidden states<br/>T x H]
-
-    X --> Q[Build current Query]
-    X --> K[Build current cache representation]
-
-    P[positions] --> Q
-    P --> K
-
-    K --> W[Write current SWA cache]
-
-    F[ForwardBatch<br/>req_pool_indices / seq_lens] --> RT[ReqToTokenPool]
-    RT --> PT[Block / Page Tables]
-
-    W --> CP[Physical cache pools]
-    PT --> CP
-
-    R{this layer compress_ratio}
-    R -->|0| S0[Read SWA]
-    R -->|4| S4[Read SWA plus Top-K C4]
-    R -->|128| S128[Read SWA plus C128]
-
-    CP --> S0
-    CP --> S4
-    CP --> S128
-
-    Q --> S0
-    Q --> S4
-    Q --> S128
-
-    S0 --> O[Attention output]
-    S4 --> O
-    S128 --> O
-~~~
-
-图里三个分支是**不同层的备选路径**，不是同一个层同时执行三次 Attention。
-
-这也回答了开头的问题。
-
-`ForwardBatch` 本身不会变成 Query。它真正做的是把 packed token 放回各自请求的时空坐标系：
-
-- hidden states 负责产生当前 Query；
-- `positions` 决定当前 Query / cache 的逻辑位置；
-- `req_pool_indices` 找到这条请求的映射行；
-- `req_to_token` 把逻辑 token 位置翻译成物理 cache slot；
-- page table 让 Attention kernel 定位历史页；
-- `seq_lens` 和 Query/KV metadata 决定有效边界；
-- cache write location 决定本轮新状态写到哪里；
-- `compress_ratio` 决定这一层读取 SWA-only、SWA+C4，还是 SWA+C128。
-
-Prefix Cache / Radix Cache 则位于更上一层：它负责判断哪些已有前缀缓存可以被另一个请求复用，并把可复用的 cache indices 交给后续请求状态。到了本篇这一层，Attention backend 并不重新“搜索 Radix Tree”；它消费的是 Scheduler / cache system 已经落实到 request-token mapping 和 page table 上的结果。
-
-因此，一次 Decode 真正依赖的不是一句抽象的“读取 KV Cache”，而是一整条确定的数据关系：
-
-~~~text
-Req identity
-    ↓
-logical token positions
-    ↓
-physical cache mapping
-    ↓
-layer-specific history structure
-    ↓
-Attention operator
-~~~
-
-这条链才是在线推理系统能够让大量请求共享同一个 batch、却仍然各自记住自己过去的根本原因。
+Prefix Cache 的匹配发生在更上层。到 Attention 执行时，可复用前缀已经落实为请求映射与页表，后端消费这些结果，不在每次 Query 计算时重新搜索 Radix Tree。
 
 ### 源码阅读入口
 

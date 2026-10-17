@@ -1,41 +1,51 @@
-# AI 推理基础设施工作名词表：SGLang、DeepSeek 与 Ascend 910C 从 Token 到 NPU Kernel
+# AI 推理基础设施名词表：从 Token 到 Ascend Kernel
 
-> 这不是一份按字母排序的缩写大全，而是一张面向推理工程工作的知识地图：看到一个陌生词，先判断它属于模型、Runtime、内存、分布式、投机解码，还是算子与 NPU Kernel。
+这份名词表按推理工作的上下文组织：请求怎样变成 Token，模型怎样生成下一枚 Token，缓存和调度怎样支持持续生成，最后才是多卡通信与 Ascend 执行。
 
-刚开始接触大模型推理基础设施时，很容易遇到一种非常典型的困境：每一个中文字都认识，但一句话连起来就看不懂了。
-
-例如下面这段启动参数：
-
-~~~bash
---tp-size 16
---dp-size 8
---enable-dp-attention
---attention-backend dsv4
---moe-a2a-backend deepep
---deepep-mode auto
---quantization modelslim
---speculative-algorithm DSPARK
---page-size 128
---chunked-prefill-size 131072
-~~~
-
-第一次看到时，很容易产生一种错觉：是不是必须先把几十个概念全部背下来，才能开始看 SGLang、DeepSeek 和 Ascend 源码？
-
-真正的问题并不是名词太多，而是这些名词通常被一个一个地学习，却没有被放进同一条执行链里。今天学 TP，明天学 KV Cache，后天学 Scheduler，再过几天学 DeepEP、CANN、Tiling。脑子里有很多点，却没有一张地图。
-
-本文的目标就是建立这张地图。
+查词可以从下面的速查表进入；想建立整体认识，可以从“一次请求的全局地图”顺着读。每个词条解释它解决什么问题、与相邻概念有什么关系，并给出继续读源码的入口。
 
 > **源码与适用范围**：SGLang 源码入口固定到 <code>sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a</code>，核对日期为 2026-09-21。路径级入口用于帮助定位概念，不代表某个高层语义永远只由一个文件实现。SGLang 仍在快速演进，未来目录、类名和 backend 能力可能变化。
 
----
+## 速查：按当前问题找术语
 
-## 一、先建立全局地图：一次请求到底经过了什么
+点击术语可以跳到对应解释；同一组内的词条放在一起，便于比较它们的职责。
 
-一个用户输入：
+| 看到这个词 | 第一反应 |
+| --- | --- |
+| [Token / Hidden States](#hidden-statesresidual-norm) | 模型输入与中间表示 |
+| [Q / K / V / Attention](#attentionqkv-head) | Token 怎样读取上下文 |
+| [MLA](#attentionqkv-head) | Attention / KV 表示方式 |
+| [MoE / Router / Expert](#mlpgemm-moe) | Token 怎样选择稀疏 FFN |
+| [Logits / Sampler](#logits-sampling) | 怎样决定下一个 Token |
+| [Prefill / Decode](#prefill-decode) | 当前处于哪种推理阶段 |
+| [KV Cache / Page](#kv-cache-page) | 历史 Attention 状态放在哪里 |
+| [RadixCache](#prefix-cache-radixcache) | Prefix KV 怎样复用 |
+| [Req](#reqschedulerschedulebatchforwardbatchmodelrunner) | 单请求跨轮次状态 |
+| [Scheduler](#reqschedulerschedulebatchforwardbatchmodelrunner) | 下一轮谁能跑 |
+| [ScheduleBatch](#reqschedulerschedulebatchforwardbatchmodelrunner) | 调度侧的本轮计算计划 |
+| [ForwardBatch](#reqschedulerschedulebatchforwardbatchmodelrunner) | Device Forward 的执行视图 |
+| [ModelRunner](#reqschedulerschedulebatchforwardbatchmodelrunner) | Runtime 到模型执行的关键边界 |
+| [Rank / Group](#rankworld-size-process-group) | 当前进程在什么通信坐标系 |
+| [TP](#tptensor-parallelism) | 一个 Layer 的 Tensor/GEMM 怎样分片 |
+| [DP Attention](#dp-dp-attention) | Attention 请求/KV 怎样按 DP 布局 |
+| [EP](#epexpert-parallelism) | Expert 怎样分布在不同 Rank |
+| [DeepEP](#deepep) | MoE Token 怎样 Dispatch / Combine |
+| [AllReduce / A2A](#collectiveallreduceallgatherreducescatterall-to-all) | 需要执行什么 Collective |
+| [HCCL](#collectiveallreduceallgatherreducescatterall-to-all) | Ascend Collective 通信基础库 |
+| [RDMA](#collectiveallreduceallgatherreducescatterall-to-all) | 跨机器数据怎么高效搬 |
+| [Draft / Verify / Accept](#verify-accept) | 投机未来怎样收敛成正式历史 |
+| [DSpark](#dspark) | DeepSeek-V4 speculative 路径 |
+| [Backend](#backend) | 当前语义选择哪套具体实现 |
+| [CANN / Operator](#operator-kernel) | 上层 Forward 如何进入 Ascend 计算栈 |
+| [Tiling](#canntiling-tilingkey) | 大 Tensor 如何切成 Device 可执行任务 |
+| [Kernel](#operator-kernel) | 真正在 Device 上跑的计算程序 |
+| [BF16 / W8A8](#bf16w8a8-modelslim) | 数据精度与量化格式 |
+| [ModelSlim](#bf16w8a8-modelslim) | Ascend 量化格式/方法如何接入 Runtime |
+| [PD Disaggregation](#pd-disaggregation) | Prefill 与 Decode 的状态如何跨实例交接 |
 
-~~~text
-请解释一下 DeepSeek 的 MoE 是怎么工作的？
-~~~
+## 一、一次请求的全局地图
+
+一个用户输入：`请解释一下 DeepSeek 的 MoE 是怎么工作的？`
 
 从文本变成最终输出，在一个现代推理服务中大致会经过下面这些层：
 
@@ -125,9 +135,7 @@ flowchart TD
 
 第二，**路径只是坐标，不是结论**。例如 Attention 不是只存在于一个 backend 文件里；真正完整的行为还要结合模型层、Runtime metadata、backend 和底层算子一起看。
 
----
-
-## 二、模型语义层：Token、Tensor、Attention、MoE 到 Logits
+## 二、模型：从 Token 与 Tensor 到 Logits
 
 大模型最上层的问题是：模型究竟在处理什么？
 
@@ -229,9 +237,7 @@ SGLang 当前分别可以从 [logits_processor.py](https://github.com/sgl-projec
 
 > **模型结构决定 Tensor 语义；Tensor 语义决定后面的缓存、并行和 Kernel 需要处理什么数据。**
 
----
-
-## 三、推理生命周期与 Runtime：Prefill、Decode、KV Cache、Scheduler
+## 三、运行时：生成阶段、缓存与调度
 
 模型会算，并不代表已经理解“推理服务”。
 
@@ -346,9 +352,28 @@ Decode 期间大量小 Kernel 又会放大 Host Launch Overhead，因此还会�
 
 > **让更多有用工作在正确的时间进入 Device，同时避免内存、通信和同步成为新的瓶颈。**
 
----
+### PD Disaggregation
 
-## 四、分布式推理：Rank、TP、DP Attention、EP 与 DeepEP
+Prefill 和 Decode 的硬件特征不同，因此生产系统可以把它们拆到不同实例。
+
+这叫 **PD Disaggregation**。
+
+一旦分离，Prefill 侧产生的 KV / State 必须被 Decode 侧接管，于是问题从“调度”升级成：
+
+- KV ownership；
+- 远程传输；
+- 目标侧预分配；
+- handoff metadata；
+- 网络与内存注册；
+- 首轮 Decode 如何恢复执行状态。
+
+SGLang 当前通用 Prefill 侧入口可以从 [disaggregation/prefill.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/prefill.py) 看，Ascend transfer 路径则有 [disaggregation/ascend/transfer_engine.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/ascend/transfer_engine.py)。
+
+这很好地说明了 AI Infra 的一个共同规律：
+
+> **一个优化只要改变“数据归谁所有”，就很快会变成分布式状态管理问题。**
+
+## 四、分布式：Rank、TP、DP Attention 与 EP
 
 模型大到一张卡放不下，或者吞吐目标高到单卡不够，就必须进入分布式世界。
 
@@ -444,11 +469,7 @@ Rank 2 → Experts E/F
 
 Router 选中某个远端 Expert 后，Token 必须先被发送到持有该 Expert 的 Rank，完成 Expert Compute 后结果再返回。
 
-于是 MoE Forward 从模型视角的：
-
-~~~text
-Router → Expert
-~~~
+于是 MoE Forward 从模型视角的：`Router → Expert`
 
 变成系统视角的：
 
@@ -466,7 +487,7 @@ Combine
 
 SGLang 当前 EP 主流程可以从 [ep_moe/layer.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/ep_moe/layer.py) 开始。
 
-### DeepEP：通信 Backend，不是 Expert GEMM
+### DeepEP 与专家计算的边界
 
 **DeepEP** 最容易被初学者误解成“一个 MoE 算子”。
 
@@ -533,9 +554,7 @@ HCCL / 专用 MoE backend / 网络传输能力
 
 真正读源码时，要以当前框架对 Group、Tensor Layout 和 Collective 的定义为准。
 
----
-
-## 五、投机解码：Draft、Verify、Accept 与 DSpark
+## 五、投机解码：Draft、Verify 与 Accept
 
 普通自回归 Decode 的问题是：Target Model 每做一次昂贵 Forward，只向前推进很少的新 Token。
 
@@ -649,9 +668,7 @@ KV / Sequence State 正确
 
 这也是为什么分布式 Speculative Decoding 是典型的 AI Infra 问题：算法、Runtime、内存和通信同时耦合。
 
----
-
-## 六、Ascend 910C 执行层：Backend、CANN、Tiling、Kernel 与量化
+## 六、Ascend：Backend、CANN、Kernel 与量化
 
 到这里，我们还主要在 Python / Runtime / Tensor 层。
 
@@ -789,30 +806,7 @@ SGLang 当前 ModelSlim 入口在 [modelslim.py](https://github.com/sgl-project/
 
 > 不要停在“模型是 W8A8”，要继续追到“这一个 Layer 的 Weight/Activation 具体是什么格式，最终被哪个 Kernel 消费”。
 
-### PD Disaggregation
-
-Prefill 和 Decode 的硬件特征不同，因此生产系统可以把它们拆到不同实例。
-
-这叫 **PD Disaggregation**。
-
-一旦分离，Prefill 侧产生的 KV / State 必须被 Decode 侧接管，于是问题从“调度”升级成：
-
-- KV ownership；
-- 远程传输；
-- 目标侧预分配；
-- handoff metadata；
-- 网络与内存注册；
-- 首轮 Decode 如何恢复执行状态。
-
-SGLang 当前通用 Prefill 侧入口可以从 [disaggregation/prefill.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/prefill.py) 看，Ascend transfer 路径则有 [disaggregation/ascend/transfer_engine.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/ascend/transfer_engine.py)。
-
-这很好地说明了 AI Infra 的一个共同规律：
-
-> **一个优化只要改变“数据归谁所有”，就很快会变成分布式状态管理问题。**
-
----
-
-## 七、怎样把这篇文章真正当成工作导航页
+## 七、按工作任务继续阅读
 
 如果只是把上面的定义全部背下来，这篇文章仍然没有发挥最大价值。
 
@@ -897,7 +891,7 @@ ForwardBatch
 
 重点从“Prefill 和 Decode 为什么不同”进入“KV / state ownership 怎样跨实例迁移”。
 
-### 最终应该形成的因果链
+### 把术语放回正在排查的问题
 
 真正值得长期记住的，不是几十个孤立缩写，而是下面这条因果链：
 
@@ -937,48 +931,3 @@ flowchart TD
 如果这些问题逐渐形成条件反射，SGLang、DeepSeek 与 Ascend 910C 源码就不会再像几百个互不相干的缩写。
 
 它们只是同一条推理执行链在不同层次上的名字。
-
----
-
-## 一页速查
-
-最后用一张最短的表收尾。
-
-| 看到这个词 | 第一反应 |
-| --- | --- |
-| Token / Hidden States | 模型输入与中间表示 |
-| Q / K / V / Attention | Token 怎样读取上下文 |
-| MLA | Attention / KV 表示方式 |
-| MoE / Router / Expert | Token 怎样选择稀疏 FFN |
-| Logits / Sampler | 怎样决定下一个 Token |
-| Prefill / Decode | 当前处于哪种推理阶段 |
-| KV Cache / Page | 历史 Attention 状态放在哪里 |
-| RadixCache | Prefix KV 怎样复用 |
-| Req | 单请求跨轮次状态 |
-| Scheduler | 下一轮谁能跑 |
-| ScheduleBatch | 调度侧的本轮计算计划 |
-| ForwardBatch | Device Forward 的执行视图 |
-| ModelRunner | Runtime 到模型执行的关键边界 |
-| Rank / Group | 当前进程在什么通信坐标系 |
-| TP | 一个 Layer 的 Tensor/GEMM 怎样分片 |
-| DP Attention | Attention 请求/KV 怎样按 DP 布局 |
-| EP | Expert 怎样分布在不同 Rank |
-| DeepEP | MoE Token 怎样 Dispatch / Combine |
-| AllReduce / A2A | 需要执行什么 Collective |
-| HCCL | Ascend Collective 通信基础库 |
-| RDMA | 跨机器数据怎么高效搬 |
-| Draft / Verify / Accept | 投机未来怎样收敛成正式历史 |
-| DSpark | DeepSeek-V4 speculative 路径 |
-| Backend | 当前语义选择哪套具体实现 |
-| CANN / Operator | 上层 Forward 如何进入 Ascend 计算栈 |
-| Tiling | 大 Tensor 如何切成 Device 可执行任务 |
-| Kernel | 真正在 Device 上跑的计算程序 |
-| BF16 / W8A8 | 数据精度与量化格式 |
-| ModelSlim | Ascend 量化格式/方法如何接入 Runtime |
-| PD Disaggregation | Prefill 与 Decode 的状态如何跨实例交接 |
-
-如果只记一句话，可以记：
-
-> **Model → Runtime → Memory → Distributed → Communication → Operator → Kernel → Hardware。**
-
-之后所有新名词，都尝试把它放回这条链里。

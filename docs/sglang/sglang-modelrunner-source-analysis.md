@@ -1,16 +1,12 @@
-# SGLang ModelRunner 源码解析：ForwardBatch 如何驱动 DeepSeek 完成一次 Prefill / Decode
+# SGLang ModelRunner：九个输入 Token 怎样产生两行 Logits
 
-上一篇《[SGLang Scheduler 源码解析：一个请求是如何被组批、调度并送进 ModelRunner 的](sglang-scheduler-source-analysis.md)》停在了一个明确的边界：Scheduler 已经把长期请求状态整理成了这一轮的 `ScheduleBatch`，Worker 又进一步构造出 `ForwardBatch`。从这里开始，问题不再是“这一轮运行谁”，而是“这一轮到底怎样执行”。
+Scheduler 已经选好这一轮要计算的 Token，Worker 把它们连同位置、缓存索引和执行模式组织为 `ForwardBatch`。ModelRunner 接下来的任务，是选择执行路径、调用模型，并把结果交给后续采样处理。
 
-这篇文章只追一个问题：
-
-> 一份 `ForwardBatch` 进入 `ModelRunner` 后，怎样经过执行方式选择、Prefill / Decode 分流、DeepSeek-V4 模型主体、LogitsProcessor 和 Sampling，最终得到下一枚 token？
-
-这条链里有两个很容易被误解的地方。第一，Prefill 和 Decode 并不是两个不同的 DeepSeek 模型入口；在本文的 eager 主线中，它们最终都会进入同一个 `DeepseekV4ForCausalLM.forward()`。第二，`model.forward()` 的输出也不是最终 token，而是 logits；Sampling 发生在模型 forward 之后。
+本文用两条 Prefill 请求、合计九个输入 Token 的例子往下追：九行 hidden states 怎样进入 DeepSeek-V4，为什么普通生成最后只需要两行 next-token logits，以及下一轮 Decode 怎样接上。
 
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线采用普通文本生成、非投机推理、PP=1，并以 eager execution 作为最容易观察的代表路径；Decode Graph、Prefill Graph 只解释到 ModelRunner 的分发边界。DeepSeek 案例使用公开源码中的 `DeepseekV4ForCausalLM`。Ascend 部分只追到可确认的 `DeepseekV4AscendAttnBackend` 接口，不把公开源码路径外推成具体部署镜像的底层运行轨迹。源码中的 `cuda_graph` 命名是框架内部接口名，本文不据此把 NPU 图执行等同于 CUDA。
 
-## 一、ForwardBatch 是 Scheduler 交给执行层的一份“执行合同”
+## 一、ForwardBatch 描述本次执行
 
 普通生成路径中，`TpModelWorker.forward_batch_generation()` 会先把 `ScheduleBatch` 转成 `ForwardBatch`：
 
@@ -117,8 +113,8 @@ R1 和 R2 的序列边界仍由长度、请求索引和 Attention metadata 保�
 
 ```mermaid
 flowchart TD
-    S[ScheduleBatch<br/>本轮调度计划]
-    S --> F[ForwardBatch<br/>本轮执行状态]
+    S[ScheduleBatch · 本轮调度计划]
+    S --> F[ForwardBatch · 本轮执行状态]
 
     F --> I[input_ids]
     F --> P[positions]
@@ -137,7 +133,7 @@ flowchart TD
 
 到这里，Scheduler 已经完成“决定执行什么”的工作，ModelRunner 开始决定“用什么执行路径完成它”。
 
-## 二、ModelRunner 先选择执行路径，再决定是否真正走 Python eager forward
+## 二、ModelRunner 选择 Graph 或 Eager 路径
 
 `ModelRunner` 的类注释很短：
 
@@ -203,7 +199,7 @@ ret = self.eager_runner.execute(
 
 这篇文章选择 Eager 作为主线，不是因为线上一定只跑 Eager，而是因为它最适合观察 `ForwardBatch` 如何一步步进入真实模型代码。
 
-## 三、Prefill 和 Decode 在 EagerRunner 中分叉，但最后进入同一个 DeepSeek forward
+## 三、Prefill 与 Decode 怎样进入同一个模型
 
 EagerRunner 收到 `ForwardBatch` 后，首先根据 `forward_mode` 决定路径：
 
@@ -297,7 +293,7 @@ DeepseekV4ForCausalLM.forward(
 
 这也是 `ForwardBatch` 为什么会继续一路传入模型层：只有 hidden states 本身，无法告诉 Attention“这些 token 属于哪条请求、当前序列多长、历史 KV 在哪里、本轮新缓存应该写到哪里”。
 
-## 四、进入 DeepSeek-V4 后：从 packed token 到多路 hidden state，再到 Attention Backend
+## 四、从打包的 Token 进入 DeepSeek-V4
 
 本文主线设定 PP=1，因此当前进程既是第一个 PP stage，也是最后一个 PP stage。这样可以连续观察 Embedding、Decoder Layers 和 LogitsProcessor，而不在中间插入 Pipeline Parallel IPC。
 
@@ -335,13 +331,7 @@ Embedding
 hidden_states  [T, H]
 ```
 
-上一节的 Prefill 主例中：
-
-```text
-T = 9
-```
-
-所以：
+上一节的 Prefill 主例中：`T = 9`
 
 ```text
 input_ids      [9]
@@ -383,7 +373,7 @@ hidden_states, ... = layer(
 
 ```mermaid
 flowchart TD
-    I[input_ids<br/>packed tokens]
+    I[input_ids · packed tokens]
     I --> E[Embedding]
     E --> H[mHC hidden states]
 
@@ -450,7 +440,7 @@ Norm
 
 到这里，“Transformer 计算”基本完成，但 token 还没有被选出来。
 
-## 五、为什么 9 个 Prefill hidden states 最后只产生 2 行 next-token logits
+## 五、九行 hidden states 怎样得到两行 Logits
 
 继续沿两个请求的例子：
 
@@ -462,17 +452,9 @@ R2:
 extend_len = 3
 ```
 
-整个 Prefill forward 共处理：
+整个 Prefill forward 共处理：`T = 9`
 
-```text
-T = 9
-```
-
-模型主体结束后，可以把最终 hidden states 理解成：
-
-```text
-hidden_states.shape = [9, H]
-```
+模型主体结束后，可以把最终 hidden states 理解成：`hidden_states.shape = [9, H]`
 
 如果直接把全部 9 行都送进 LM Head，确实可以得到 9 个位置的词表分数。但普通生成请求只需要“每条序列的下一个 token”，不需要把所有 prompt 位置都当成采样位置。
 
@@ -507,13 +489,7 @@ pruned_states = hidden_states[last_index]
 
 源码见 [`LogitsProcessor._get_pruned_states()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L599-L665)。
 
-我们的：
-
-```text
-extend_seq_lens = [6, 3]
-```
-
-所以：
+我们的：`extend_seq_lens = [6, 3]`
 
 ```text
 cumsum([6, 3]) = [6, 9]
@@ -562,17 +538,17 @@ next_token_logits
 
 ```mermaid
 flowchart TD
-    I[Prefill input_ids<br/>9 tokens]
+    I[Prefill input_ids · 9 tokens]
     I --> M[DeepSeek Forward]
-    M --> H[hidden_states<br/>9 x H]
+    M --> H[hidden_states · 9 x H]
 
-    H --> R[按每条请求取最后位置<br/>index 5 和 8]
+    H --> R[按每条请求取最后位置 · index 5 和 8]
 
-    R --> P[pruned_states<br/>2 x H]
+    R --> P[pruned_states · 2 x H]
     P --> L[LM Head]
-    L --> G[next_token_logits<br/>2 x V]
+    L --> G[next_token_logits · 2 x V]
     G --> S[Sampler]
-    S --> O[R1 -> T1<br/>R2 -> T2]
+    S --> O[R1 -> T1 · R2 -> T2]
 ```
 
 如果请求了 prompt input logprob，LogitsProcessor 会保留更多位置并进入另一条 pruning / logprob 路径，因此不能把“Prefill 永远只做两行 LM Head”当成无条件规则。本文的 9 → 2 只对应普通生成、无输入 logprob 的代表场景。
@@ -612,189 +588,23 @@ next_token_ids
 
 > **第一枚输出 token 可以直接由 Prefill 最后位置的 logits 采样得到，不需要为了“生成第一个 token”再额外执行一次普通 Decode forward。**
 
-## 六、把 Prefill 和下一轮 Decode 连成一条完整时间线
+## 六、接上下一轮 Decode
 
-现在把前面的所有对象重新放回同一个请求生命周期里。
+Prefill 结束后，R1、R2 分别采样得到 T1、T2。如果请求未结束，这两枚 Token 就成为下一轮 Decode 的输入。普通非投机路径每条请求推进一个位置，因此两条请求的 `seq_lens` 从 6 变成 7，输入位置都是各自序列中的 6。
 
-第一轮是 Prefill。
+| 字段或结果 | 本轮 Prefill | 下一轮 Decode |
+| --- | --- | --- |
+| 请求数 | 2 | 2 |
+| 输入 Token 行数 | 9：R1 的 6 行加 R2 的 3 行 | 2：T1、T2 各一行 |
+| 逻辑位置 | `[0,1,2,3,4,5,3,4,5]` | `[6,6]` |
+| `seq_lens` | `[6,6]` | `[7,7]` |
+| 模型末端 hidden rows | `[9,H]` | `[2,H]` |
+| 用于下一 Token 采样的行 | 每请求选择最后一行，共 2 行 | 每请求本来就只有一行 |
+| 逻辑 next-token logits | `[2,V]` | `[2,V]` |
 
-两个请求的执行状态是：
+两轮都进入同一个 DeepSeek-V4 模型入口，变化的是本轮输入、位置和 Attention metadata。Decode 中，当前 Token 的状态先写入对应缓存位置，再按该后端路径参与 Attention；R1 与 R2 各自读取自己的历史。请求未结束时，这个过程继续。
 
-| 字段 | Prefill |
-| --- | --- |
-| `batch_size` | 2 |
-| `input_ids.shape` | `[9]` |
-| `extend_prefix_lens` | `[0, 3]` |
-| `extend_seq_lens` | `[6, 3]` |
-| `seq_lens` | `[6, 6]` |
-| `positions` | `[0,1,2,3,4,5,3,4,5]` |
-| 最终 hidden states | `[9,H]` |
-| 采样前 pruned states | `[2,H]` |
-| next-token logits | `[2,V]` |
-| 采样结果 | `T1, T2` |
-
-也就是说：
-
-```text
-9 个 token 参与模型计算
-        ↓
-每个请求保留 1 个采样位置
-        ↓
-2 行 next-token logits
-        ↓
-2 个首 token
-```
-
-Prefill 结果返回 Scheduler 后，`T1`、`T2` 会进入请求的输出状态。如果请求没有结束，它们就成为下一轮 Decode 要消费的新 token。
-
-普通非投机 Decode 的 `prepare_for_decode()` 会让每条请求的 `seq_lens` 向前推进一个位置。于是下一轮可以得到：
-
-```text
-seq_lens = [7, 7]
-```
-
-`ForwardBatch.init_new()` 对 Decode 使用当前 sequence length 构造位置。当前实现通过 `clamp_position(batch.seq_lens)` 得到逻辑上的 `seq_len - 1`，因此：
-
-```text
-positions = [6, 6]
-```
-
-两个请求都可以拥有 position 6，因为 position 是**各自序列内部的逻辑位置**，不是 packed batch Tensor 的全局下标。
-
-此时：
-
-```text
-input_ids = [T1, T2]
-input_ids.shape = [2]
-```
-
-模型再次进入同一个：
-
-```text
-DeepseekV4ForCausalLM.forward()
-```
-
-只是这一次：
-
-```text
-forward_mode = DECODE
-```
-
-Attention Backend 看到的是两个新的 query token，同时每条请求都已经有自己的历史缓存。概念上：
-
-```text
-T1 query
-   ↓
-读取 R1 自己的历史 KV
-   ↓
-写入 R1 position 6 对应的新缓存
-
-T2 query
-   ↓
-读取 R2 自己的历史 KV
-   ↓
-写入 R2 position 6 对应的新缓存
-```
-
-DeepSeek 主体的 token 维从 Prefill 的 9 变成了 Decode 的 2：
-
-```text
-input_ids
-[2]
-
-   ↓ Embedding
-
-[2, H]
-
-   ↓ mHC
-
-[2, hc_mult, H]
-
-   ↓ Decoder Layers
-
-[2, hc_mult, H]
-
-   ↓ final combine + norm
-
-[2, H]
-```
-
-Decode 模式下，每条普通请求本轮本来就只有一个新增位置，所以 `LogitsProcessor._get_pruned_states()` 不需要再像普通 Prefill 那样从多个 prompt 位置中挑出每条请求的最后一行；这些 hidden rows 可以直接进入后续 logits 计算。
-
-最终再次得到：
-
-```text
-next_token_logits
-[2, V]
-
-   ↓ Sampling
-
-T1'
-T2'
-```
-
-如果请求仍未结束，下一轮继续消费 `T1'`、`T2'`。
-
-```mermaid
-sequenceDiagram
-    participant S as Scheduler
-    participant F as ForwardBatch
-    participant R as ModelRunner
-    participant D as DeepSeek
-    participant P as Sampler
-
-    S->>F: Prefill batch
-    Note over F: 9 input tokens<br/>positions = 9 rows
-    F->>R: forward()
-    R->>D: DeepSeek forward
-    D-->>R: next-token logits [2,V]
-    R->>P: sample()
-    P-->>S: T1, T2
-
-    S->>F: Decode batch
-    Note over F: input_ids = [T1,T2]<br/>positions = [6,6]
-    F->>R: forward()
-    R->>D: 同一个 DeepSeek forward
-    D-->>R: next-token logits [2,V]
-    R->>P: sample()
-    P-->>S: T1', T2'
-
-    Note over S,P: 请求未结束则继续下一轮 Decode
-```
-
-在 overlap schedule 下，下一轮所需 token 可以通过 `FutureMap` 等设备侧 relay 机制提前衔接，CPU 的结果处理也可能与下一轮设备计算交错；这会改变时间上的重叠方式，但不会改变这里的逻辑闭环：
-
-```text
-Req 长期状态
-    ↓
-ScheduleBatch
-    ↓
-ForwardBatch
-    ↓
-ModelRunner
-    ↓
-DeepSeek Model
-    ↓
-LogitsProcessor
-    ↓
-Sampler
-    ↓
-next_token_ids
-    ↓
-Req 长期状态
-```
-
-现在可以更准确地给两个核心对象下定义。
-
-`ForwardBatch` 是：
-
-> **Scheduler / Worker 交给模型执行层的一份单轮执行状态快照。**
-
-而 `ModelRunner` 是：
-
-> **把这份执行状态兑现成一次真实模型执行，并在 Graph / Eager、Attention Backend、Logits 与 Sampling 之间组织运行路径的执行边界。**
-
-这也把上一篇 Scheduler 与模型内部源码真正接了起来。Scheduler 负责回答“这一轮算什么”；ModelRunner 负责回答“这一轮怎么算”；DeepSeek 模型层和 Attention Backend 则继续回答“这些 Tensor 具体怎样经过 Attention、MoE 和 KV Cache 得到下一步表示”。
+`ForwardBatch` 因而是一份单次执行描述，其中部分 Tensor 借用上游对象，并非完整深拷贝快照。ModelRunner 消费这份描述，选择 Graph/Eager 路径并组织模型与采样。Overlap 改变的是准备、设备执行和结果处理的重叠关系，输入到输出的逻辑对应仍然成立。
 
 ### 源码阅读入口
 
