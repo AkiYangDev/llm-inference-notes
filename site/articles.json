@@ -432,5 +432,19 @@
     "role": "advanced",
     "seo_title": "Ascend 950DT 单机 PD 调优：128K 长上下文的 TTFT 与吞吐",
     "seo_summary": "一次 128K/1K、90% Cache 的单机 PD 调优记录。用四张工程图解释 HiCache、DSPARK、图 padding 与时延分布，结合 N192/C48 实测分析 TTFT、TPOT 和平均输出吞吐。"
+  },
+  "docs/performance/inference-tuning-workflow-postmortem.md": {
+    "summary": "从23分钟配置准备、昂贵预热后的旧断言到采集子进程失败，复盘一次DeepSeek/Ascend调优为何变慢，并给出减少返工与跨会话重演的执行约束。",
+    "category": "工程复盘",
+    "tags": [
+      "性能调优",
+      "实验方法",
+      "自动化",
+      "Ascend"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "推理只跑了三分钟，调优为什么花了几天：DeepSeek实验流程复盘",
+    "seo_summary": "一次DeepSeek-V4-Flash与Ascend 910C调优复盘：拆解配置硬编码、无效核验、热状态恢复和统计口径带来的返工，用真实时间账讨论自动化实验效率。"
   }
 }

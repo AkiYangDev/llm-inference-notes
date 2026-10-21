@@ -1,0 +1,46 @@
+kind,case,scope,metric,value,unit,note
+cost,nocp_preparation,preparation,freeze_elapsed,1382.354294,s,not model loading
+cost,layout_comparison,controller,wall_time,748.2276301,s,contains formal and preparation stages
+cost,layout_comparison,formal,wall_time,68.6755033,s,subset of controller
+cost,layout_comparison,two_warmups,wall_time,255.7151938,s,models already loaded
+cost,layout_comparison,routes,wall_time,275.7486248,s,subset of controller
+cost,c90_hot,controller,wall_time,309.1593542,s,no new model start or MF or routes
+cost,c90_hot,formal,wall_time,179.5765827,s,subset of controller
+cost,c90_hot,cache_seed_check,wall_time,47.910238524,s,parallel wall time within controller
+performance,layout_old_n160,whole,output_per_PD16_card,147.9063625,tok/s,128K prefix90 favorable copy
+performance,layout_new_n160,whole,output_per_PD16_card,149.107025,tok/s,single comparison not confirmed stable gain
+performance,c128_n640,whole,output_total,3845.9447,tok/s,16 physical cards
+performance,c128_n640,whole,output_per_PD16_card,240.37154375,tok/s,native unavailable
+performance,c128_n640,whole,average_system_concurrency,112.3225,requests,configured C128 rate6
+performance,c128_n640,whole,TTFT_mean,18140.7,ms,640 successes zero failures
+performance,c128_n640,whole,TTFT_P90,20323.6,ms,640 successes zero failures
+performance,c128_n640,whole,TPOT_mean,11.5,ms,640 successes zero failures
+performance,c128_n640,whole,TPOT_P90,12.6,ms,640 successes zero failures
+performance,c128_n640,whole,E2E_mean,29.9064,s,640 successes zero failures
+performance,c90_n640,whole,output_total,3649.4736,tok/s,16 physical cards
+performance,c90_n640,whole,output_per_PD16_card,228.0921,tok/s,640 successes zero failures
+performance,c90_n640,whole,average_system_concurrency,82.8179,requests,configured C90 rate6
+performance,c90_n640,whole,TTFT_mean,12681.9,ms,640 successes zero failures
+performance,c90_n640,whole,TTFT_P90,14325.9,ms,640 successes zero failures
+performance,c90_n640,whole,TPOT_mean,10.3,ms,640 successes zero failures
+performance,c90_n640,whole,TPOT_P90,10.9,ms,640 successes zero failures
+performance,c90_n640,whole,E2E_mean,23.2377,s,640 successes zero failures
+performance,c90_n640,whole,QPS,3.5639,req/s,configured rate6 is distinct
+performance,c90_n640,native,request_count,549,requests,original AISBench selector
+performance,c90_n640,native,interval,143.4935254,s,project threshold128 requests and60s
+performance,c90_n640,native,output_total,3917.7796,tok/s,16 physical cards
+performance,c90_n640,native,output_per_PD16_card,244.861225,tok/s,not directly comparable with another whole interval
+performance,c90_n640,native,average_system_concurrency,87.4978,requests,configured C90 rate6
+performance,c90_n640,native,TTFT_mean,12250.2,ms,549 selected requests
+performance,c90_n640,native,TTFT_P90,13927.3,ms,549 selected requests
+performance,c90_n640,native,TPOT_mean,10.4,ms,549 selected requests
+performance,c90_n640,native,TPOT_P90,11.0,ms,549 selected requests
+performance,c90_n640,native,E2E_mean,22.8695,s,549 selected requests
+performance,c90_n640,native,QPS,3.8260,req/s,configured rate6 is distinct
+tokens,c90_n640,all_requests,body_input,131072,tokens,real tokenizer verified
+tokens,c90_n640,all_requests,chat_input,131076,tokens,cache denominator
+tokens,c90_n640,all_requests,output,1024,tokens,actual fixed output
+tokens,c90_n640,all_requests,cached,118784,tokens,each request not global gauge
+acceptance,c90_n640,whole,output_tokens,655360,tokens,AL numerator
+acceptance,c90_n640,whole,verify_calls,113463,calls,AL denominator
+acceptance,c90_n640,whole,actual_proposal_strict_AR,NOT_OBSERVED,ratio,do not infer from AL

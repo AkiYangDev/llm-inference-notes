@@ -35,6 +35,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
 
+- [推理只跑了三分钟，调优为什么花了几天](docs/performance/inference-tuning-workflow-postmortem.md)：用真实时间账复盘配置硬编码、无效核验与热状态恢复，讨论自动化调优如何减少返工并形成可信决策。
 - [从缓存校准到并发取舍：DeepSeek-V4-Pro 在 Ascend 910C 上的一次 32k/1k 调优记录](docs/performance/deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md)：从 85.8%→91.8% 的缓存校准，到 C24/C36/C72 的吞吐与等待时间对照，解释 TPOT 的非单调变化和压测日志的统计口径。
 - [GSM8K 精度排查：从 200 题失败到全量与逐题对照](docs/sglang/gsm8k-accuracy-debugging-from-200-to-full-evaluation.md)：记录 DeepSeek-V2-Lite-W8A8 的配置对照、原始评测器核对与两轮全量结果，解释为什么准确率过线和逐题输出稳定需要分别判断。
 - [DeepSeek-V4 W8A8 执行链：从量化权重到 Ascend INT8 算子](docs/ascend/deepseek-v4-w8a8-ascend-910c.md)：严格区分官方 `W8A8_DYNAMIC` 主路径与静态 W8A8 对照路径，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ → `aclnnQuantMatmulWeightNz` → CANN QuantBatchMatmulV3。
