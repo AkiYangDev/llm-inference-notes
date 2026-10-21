@@ -35,7 +35,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
 
-- [推理只跑了三分钟，调优为什么花了几天](docs/performance/inference-tuning-workflow-postmortem.md)：用真实时间账复盘配置硬编码、无效核验与热状态恢复，讨论自动化调优如何减少返工并形成可信决策。
+- [让 AI 连续调优几天后，我发现实验流程也有瓶颈](docs/performance/inference-tuning-workflow-postmortem.md)：回看复制脚本、反复检查、采集失败和多代理等待，追问为什么忙了很久，正式实验还没发出。
 - [把性能目标交给 AI 之后：大模型推理的全自动调优闭环](docs/performance/ai-driven-inference-autotuning-decision-loop.md)：沿 P 端尾块合批与并发取舍，讲清下一轮实验怎么选、什么结果值得保留。
 - [一轮实验什么时候算完成：全自动调优的状态、证据与恢复](docs/performance/ai-driven-inference-autotuning-execution-and-evidence.md)：跟着配置、进程、缓存和原始统计走完整条执行链，讨论出错后从哪里接。
 - [从缓存校准到并发取舍：DeepSeek-V4-Pro 在 Ascend 910C 上的一次 32k/1k 调优记录](docs/performance/deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md)：从 85.8%→91.8% 的缓存校准，到 C24/C36/C72 的吞吐与等待时间对照，解释 TPOT 的非单调变化和压测日志的统计口径。

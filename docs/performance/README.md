@@ -4,7 +4,7 @@
 
 ## 调优实践
 
-- [推理只跑了三分钟，调优为什么花了几天](inference-tuning-workflow-postmortem.md)：从一次 DeepSeek / Ascend 实验的时间账、编排故障与统计边界，复盘如何提高自动化调优效率。
+- [让 AI 连续调优几天后，我发现实验流程也有瓶颈](inference-tuning-workflow-postmortem.md)：沿真实时间账与几次返工，讨论脚本复制、检查错位、多代理协作和跨会话接续。
 - [把性能目标交给 AI 之后：大模型推理的全自动调优闭环](ai-driven-inference-autotuning-decision-loop.md)：从固定场景、瓶颈证据到短筛确认，讨论下一轮实验怎么选。
 - [一轮实验什么时候算完成：全自动调优的状态、证据与恢复](ai-driven-inference-autotuning-execution-and-evidence.md)：沿一次实验的执行和采集过程，说明热状态接续、计数范围与跨会话交接。
 - [Ascend 950DT 单机 PD 调优：128K/1K、90% Cache 场景下的配置与实测](ascend-950dt-single-node-pd-optimization.md)：从整体结果展开 P 端缓存调整、D 端 DSPARK、dispatch 容量与图档位，结合四张图和 N192/C48 完整实测解释优化效果。

@@ -434,7 +434,7 @@
     "seo_summary": "一次 128K/1K、90% Cache 的单机 PD 调优记录。用四张工程图解释 HiCache、DSPARK、图 padding 与时延分布，结合 N192/C48 实测分析 TTFT、TPOT 和平均输出吞吐。"
   },
   "docs/performance/inference-tuning-workflow-postmortem.md": {
-    "summary": "从23分钟配置准备、昂贵预热后的旧断言到采集子进程失败，复盘一次DeepSeek/Ascend调优为何变慢，并给出减少返工与跨会话重演的执行约束。",
+    "summary": "代理一直在改脚本、补检查，正式实验却迟迟没有发出。沿几次真实返工，追问自动调优的准备、恢复和多代理协作哪里出了问题。",
     "category": "工程复盘",
     "tags": [
       "性能调优",
@@ -444,8 +444,8 @@
     ],
     "topic": "performance",
     "role": "advanced",
-    "seo_title": "推理只跑了三分钟，调优为什么花了几天：DeepSeek实验流程复盘",
-    "seo_summary": "一次DeepSeek-V4-Flash与Ascend 910C调优复盘：拆解配置硬编码、无效核验、热状态恢复和统计口径带来的返工，用真实时间账讨论自动化实验效率。"
+    "seo_title": "让AI连续调优几天后，我发现实验流程也有瓶颈",
+    "seo_summary": "一次DeepSeek-V4-Flash与Ascend 910C实验复盘：23分钟准备、预热后的旧断言、统计子进程故障和多代理等待，以及这些问题怎样从执行工具里解决。"
   },
   "docs/performance/ai-driven-inference-autotuning-decision-loop.md": {
     "summary": "从P端尾块合批的实测收益出发，讨论怎样固定场景、选择下一轮实验，以及在吞吐和等待时间之间作取舍。",

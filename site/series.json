@@ -204,7 +204,7 @@
       {
         "path": "docs/performance/inference-tuning-workflow-postmortem.md",
         "label": "回看走过的弯路",
-        "description": "用时间账复盘准备、核验与恢复中的返工"
+        "description": "从脚本复制、重复检查和多代理等待追到工具层面的改法"
       }
     ]
   }
