@@ -1,0 +1,9 @@
+scene,change,scope,requests,configured_concurrency,configured_rate_req_s,metric,before,after,unit,note
+16K_copy_zero_cache,P_prefill_cap_1_to_2,native,640,128,6,output_per_PD16_card,179.0441,236.826825,tok/s,same data layouts and Compact combination
+16K_copy_zero_cache,P_prefill_cap_1_to_2,whole,640,128,6,output_per_PD16_card,166.2402,216.5483,tok/s,same data layouts and Compact combination
+16K_copy_zero_cache,P_prefill_cap_2_confirmation,native,640,128,6,selected_requests,,493,requests,original AISBench selector
+16K_copy_zero_cache,P_prefill_cap_2_confirmation,native,640,128,6,interval,,133.228,s,rounded interval
+16K_copy_zero_cache,P_prefill_cap_2_confirmation,native,640,128,6,TPOT_mean,,9.4,ms,zero failures actual output1024
+128K_copy_prefix90,C128_to_C90,whole,640,90,6,output_per_PD16_card,240.37154375,228.0921,tok/s,every request cache90.6222 percent
+128K_copy_prefix90,C90,native,640,90,6,output_per_PD16_card,,244.861225,tok/s,no valid C128 native comparison
+128K_copy_prefix90,C90,native,640,90,6,TPOT_mean,,10.4,ms,549 selected requests over143.4935seconds

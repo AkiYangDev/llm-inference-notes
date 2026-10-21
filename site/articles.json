@@ -446,5 +446,31 @@
     "role": "advanced",
     "seo_title": "推理只跑了三分钟，调优为什么花了几天：DeepSeek实验流程复盘",
     "seo_summary": "一次DeepSeek-V4-Flash与Ascend 910C调优复盘：拆解配置硬编码、无效核验、热状态恢复和统计口径带来的返工，用真实时间账讨论自动化实验效率。"
+  },
+  "docs/performance/ai-driven-inference-autotuning-decision-loop.md": {
+    "summary": "从P端尾块合批的实测收益出发，讨论怎样固定场景、选择下一轮实验，以及在吞吐和等待时间之间作取舍。",
+    "category": "工程实践",
+    "tags": [
+      "性能调优",
+      "自动化",
+      "实验方法"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "把性能目标交给AI之后：大模型推理的全自动调优闭环",
+    "seo_summary": "结合DeepSeek-V4-Flash和Ascend 910C实验，讲清AI代理如何从瓶颈证据选择候选、短筛确认，并保留有收益的配置。"
+  },
+  "docs/performance/ai-driven-inference-autotuning-execution-and-evidence.md": {
+    "summary": "跟着一次压测走过配置、进程、缓存和统计，解释推理成功但采集失败时怎样接续，以及跨会话怎样保留已完成的工作。",
+    "category": "工程实践",
+    "tags": [
+      "自动化",
+      "实验方法",
+      "AISBench"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "一轮实验什么时候算完成：全自动调优的状态、证据与恢复",
+    "seo_summary": "从一次AISBench统计子进程故障展开，讨论全自动推理调优中的配置身份、执行阶段、缓存观测、结果口径与恢复。"
   }
 }
