@@ -72,3 +72,11 @@
 - 角色参考：TreapGoGo/deepseek-whale-girl，Copyright (c) 2026 TreapGoGo；参考仓库按 MIT License 提供。许可原文保存在 [TREAPGOGO-LICENSE.txt](TREAPGOGO-LICENSE.txt)。此记录仅说明上游声明，不对其他角色图或整个社区形象追加授权。
 
 - 上游固定版本：a7e58d261885e12a7652d4677e1412edbab557e8；图片 SHA-256：18dc5a1d5f16e6383d01c9b79ca9bfad15cbba1b661d2a0cc82916e51b0cb783。
+
+
+## 用户指定素材（2026-10-24）
+
+- `whale-standing-user.png`：站点所有者提供并选定的蓝发鲸鱼娘全身立绘，270 × 480。文件原样保存；本站没有生成、重绘或放大原图。未提供原作品链接及作者信息，不追加原创或开放许可声明。
+- `whale-chibi-loop.mp4`：由用户提供的《【哲风壁纸】deepseek-Q版.mp4》转为网页版本。原始视频 2560 × 1440 / 60 fps / 35.5 秒；网页版本 640 × 360 / 20 fps / H.264，保留完整时长与画幅，去除音轨，开启 faststart。来源名称沿用用户提供的文件名，不将平台名称推定为原作者。
+- `whale-chibi-poster.jpg`：从网页视频第 3 秒提取的静态封面。减少动态效果、禁用 JavaScript 或未进入可视区域时保留静态展示。
+- 上一版办公桌插画和此前看板仅作为历史素材保留，首页改用本节两份用户指定素材。

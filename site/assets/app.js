@@ -373,3 +373,44 @@ for (const heading of document.querySelectorAll('.prose h2[id],.prose h3[id]')) 
   const anchor = document.createElement('a'); anchor.className = 'heading-anchor'; anchor.href = '#' + encodeURIComponent(heading.id); anchor.textContent = '#'; anchor.setAttribute('aria-label','复制本节链接：' + heading.textContent);
   anchor.addEventListener('click', event => { event.preventDefault(); copyText(anchor.href,null,'本节链接已复制'); }); heading.append(anchor);
 }
+
+
+// The homepage video loads only when visible; motion and pause preferences are respected.
+const whaleVideo = document.querySelector('.whale-loop');
+if (whaleVideo) {
+  const button = document.querySelector('.whale-motion-toggle');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let wantsPlayback = !reducedMotion.matches;
+  let visible = false;
+  button.hidden = false;
+  const updateButton = () => {
+    const playing = !whaleVideo.paused;
+    button.textContent = playing ? '暂停动画' : '播放动画';
+    button.setAttribute('aria-label', playing ? '暂停鲸鱼娘动画' : '播放鲸鱼娘动画');
+    button.setAttribute('aria-pressed', String(playing));
+  };
+  const syncPlayback = () => {
+    if (wantsPlayback && visible && !document.hidden) {
+      if (!whaleVideo.getAttribute('src')) whaleVideo.src = whaleVideo.dataset.src;
+      whaleVideo.muted = true;
+      whaleVideo.play().catch(updateButton);
+    } else whaleVideo.pause();
+    updateButton();
+  };
+  button.addEventListener('click', () => { wantsPlayback = whaleVideo.paused; syncPlayback(); });
+  whaleVideo.addEventListener('play', updateButton);
+  whaleVideo.addEventListener('pause', updateButton);
+  whaleVideo.addEventListener('error', () => {
+    wantsPlayback = false;
+    button.textContent = '动画暂不可用';
+    button.setAttribute('aria-pressed', 'false');
+    button.disabled = true;
+  });
+  reducedMotion.addEventListener('change', event => { wantsPlayback = !event.matches; syncPlayback(); });
+  document.addEventListener('visibilitychange', syncPlayback);
+  if ('IntersectionObserver' in window) new IntersectionObserver(entries => {
+    visible = entries[0].isIntersecting;
+    syncPlayback();
+  }, {threshold:0.15}).observe(whaleVideo);
+  else { visible = true; syncPlayback(); }
+}
