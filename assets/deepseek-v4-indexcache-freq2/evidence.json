@@ -1,0 +1,86 @@
+{
+  "experiment_date": "2026-10-20",
+  "model": "DeepSeek-V4-Flash W8A8",
+  "hardware": "Ascend 910C",
+  "physical_cards": {
+    "P": 8,
+    "D": 8,
+    "total": 16
+  },
+  "body_tokens": 16384,
+  "chat_tokens": 16388,
+  "output_tokens": 1024,
+  "prefix_cache_pct": 0,
+  "sent_N": 640,
+  "C": 64,
+  "arrival_rate_req_s": 3,
+  "speculative": {
+    "draft_length": 3,
+    "verify_width": 4
+  },
+  "feature_delta": "P and D jointly OFF -> use_index_cache=true,index_topk_freq=2; no explicit pattern",
+  "source_pr": "https://github.com/Ascend/sglang/pull/1332",
+  "source_commit": "63bc1055c89aabcb62cb70f42032b8639053b94c",
+  "layer_numbering": "zero-based",
+  "compute_layer_ids": [
+    2,
+    6,
+    10,
+    14,
+    18,
+    22,
+    26,
+    30,
+    34,
+    38,
+    42
+  ],
+  "reuse_layer_ids": [
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32,
+    36,
+    40
+  ],
+  "native_output_gain_pct": 5.4143855610494285,
+  "whole_output_gain_pct": 3.4488729685005826,
+  "AL_proxy_counters": {
+    "OFF": {
+      "generation_tokens": 655360,
+      "verify_calls": 208933
+    },
+    "ON": {
+      "generation_tokens": 655360,
+      "verify_calls": 206180
+    }
+  },
+  "quality": "NOT_EVALUATED",
+  "strict_draft_AR": "NOT_OBSERVED",
+  "draft_verify_phase_wall": "NOT_OBSERVED",
+  "limitations": [
+    "One matched run pair; native request subsets differ.",
+    "P and D toggled together; no role-isolated attribution.",
+    "Whole AL proxy is not native AL or measured strict acceptance.",
+    "Whole output total and D8 columns are derived from saved PD16 rates."
+  ],
+  "experiment_cost_s": {
+    "paired_cost": {
+      "startup_loading_and_two_MF_wall_s": 621.3274441999965,
+      "actual64_wall_s": 335.214303500019,
+      "dualflush_and_postlive_wall_s": 8.745587200013688,
+      "paired_total_wall_s": 966.42553149999,
+      "loading_vs_MF_individual_breakdown": "See original restore/startup logs; combined wall above is not pure loading.",
+      "paired_startups": 1,
+      "MF_completed": 2,
+      "actual64_verified": 64
+    },
+    "controller_wall_s": 1330.9276597000135,
+    "formal_wall_s": 269.33296210000003,
+    "lifecycle_elapsed_including_collection_s": 1352.000351
+  }
+}

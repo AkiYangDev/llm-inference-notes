@@ -531,5 +531,20 @@
     "role": "advanced",
     "seo_title": "Ascend 910C P端静态EPLB：路由计数、专家布局与实测收益",
     "seo_summary": "P端静态EPLB如何采集和拟合？区分逻辑专家、物理副本、static分发与在线重排，解释14.18%组合收益、理想均分模型和场景边界。"
+  },
+  "docs/performance/deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md": {
+    "summary": "从c4层调度到共享TopK、compressor状态与Graph存储，解释IndexCache freq2的执行路径，以及同负载native吞吐提高5.41%的适用边界。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "IndexCache",
+      "Attention",
+      "性能调优"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么",
+    "seo_summary": "DeepSeek-V4 IndexCache freq2源码与Ascend 910C实测：按c4层跨层复用TopK，保留compressor状态，native吞吐提高5.41%，同时明确精度未评测与Graph存储边界。"
   }
 }
