@@ -426,7 +426,7 @@ Weight = ND
 aclnnQuantMatmulV5
 ~~~
 
-所以 FRACTAL_NZ 不只是存储格式不同，而是直接改变下游 QuantMatmul dispatch。
+这条路径中，FRACTAL_NZ 格式还参与了下游 QuantMatmul 的分发选择。因此，比较格式耗时时，需要一起确认实际调用的算子。
 
 ### 测量 NZ 与 ND 的耗时差异
 
@@ -469,7 +469,7 @@ throughput
 
 ## 五、Expert Token 数与 Grouped MatMul
 
-DeepSeek-V4 MoE 一轮不是一个共享 Weight 的大 GEMM，而是：
+DeepSeek-V4 MoE 的 Token 分给不同专家后，每位专家都有自己的权重和输入行数：
 
 ~~~text
 Expert 0: M_0

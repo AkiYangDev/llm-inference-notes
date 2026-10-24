@@ -1,6 +1,6 @@
 {
   "docs/sglang/sglang-ascend-request-lifecycle.md": {
-    "summary": "以 DeepSeek-V4 为例，从 HTTP 请求到调度、缓存、Ascend 设备执行与流式输出，建立完整推理链路的全局视角。",
+    "summary": "一句聊天消息怎样变成 NPU 上的一轮计算？跟随一条请求，串起分词、排队、缓存、组批和持续生成。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -10,10 +10,10 @@
     "topic": "sglang",
     "role": "entry",
     "seo_title": "SGLang 推理执行链路：一次请求如何跑到 Ascend NPU",
-    "seo_summary": "以 DeepSeek-V4 为例，从 HTTP 请求、Scheduler、KV Cache、ModelRunner 到 Ascend NPU 和流式输出，建立完整推理链路。"
+    "seo_summary": "一句聊天消息怎样变成 NPU 上的一轮计算？跟随一条请求，串起分词、排队、缓存、组批和持续生成。"
   },
   "docs/sglang/sglang-scheduler-source-analysis.md": {
-    "summary": "跟随请求进入等待队列、组成批次并交给 ModelRunner，理解 Scheduler 的状态管理与 Prefill / Decode 调度边界。",
+    "summary": "请求会持续很多轮，设备每轮只执行一个批次。看 Scheduler 怎样在前缀缓存、Token 预算和 KV 空间之间安排工作。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -24,7 +24,7 @@
     "role": "advanced"
   },
   "docs/sglang/sglang-modelrunner-source-analysis.md": {
-    "summary": "用两条请求、九个输入 Token 的例子，追踪 ForwardBatch、模型前向与两行采样 Logits，再进入下一轮 Decode。",
+    "summary": "两条请求共有九个输入 Token，为什么最后只需两行 Logits？用这个例子读懂 ModelRunner 的输入、前向和采样交接。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -35,7 +35,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-attention-source-analysis.md": {
-    "summary": "追踪 DeepSeek-V4 Attention 中 Query 的生成和 KV Cache 的访问，连接张量变化、历史上下文与实际源码入口。",
+    "summary": "多条请求打包进同一个 Tensor 后，Attention 怎样找到各自的历史？沿 Query、缓存写入和页表追踪一次 Decode。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -47,7 +47,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-moe-source-analysis.md": {
-    "summary": "沿 Router、All-to-All、专家计算和结果合并，理解一个 Token 如何完成 MoE 前向，以及 Expert Parallel 的职责。",
+    "summary": "一个 Token 会被送到哪些专家，算完又怎样回到原位置？用四个 Rank、八个专家的例子解释路由、分发和合并。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -59,7 +59,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md": {
-    "summary": "结合源码与配置示例，梳理 TP、DP、EP 在 Attention 和 MoE 之间如何协作，辨清并行组与布局转换的适用边界。",
+    "summary": "同一批进程在 Attention 和 MoE 中怎样改变分工？用 TP32 / DP16 的 Target 布局追踪 Token 行的转换与恢复。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -71,7 +71,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md": {
-    "summary": "追踪 Prefill 与 Decode 分离后的请求交接，梳理状态传输、目标资源准备与完成确认，理解独立调度两类负载的工程代价。",
+    "summary": "P 端已经采样出首 Token，为什么它还没有自己的 KV？从这个交接点看 Decode 接管需要哪些缓存、资源和确认。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -83,7 +83,7 @@
     "role": "advanced"
   },
   "docs/fundamentals/ai-infra-working-glossary.md": {
-    "summary": "从 Token、Tensor、Attention、KV Cache、Scheduler、分布式通信一路连接到 CANN 与 Ascend 910C Kernel，作为整个仓库的工作知识地图与源码阅读入口。",
+    "summary": "读源码时遇到陌生名词，可以按正在解决的问题查：输入表示、模型计算、缓存调度、多卡通信和 Ascend 执行。",
     "category": "基础原理",
     "tags": [
       "AI Infra",
@@ -94,10 +94,10 @@
     "topic": "fundamentals",
     "role": "reference",
     "seo_title": "AI Infra 名词表：SGLang、DeepSeek 与 Ascend 910C",
-    "seo_summary": "从 Token、Tensor、Attention、KV Cache、Scheduler、分布式通信到 Ascend 910C Kernel，建立大模型推理基础知识地图。"
+    "seo_summary": "读源码时遇到陌生名词，可以按正在解决的问题查：输入表示、模型计算、缓存调度、多卡通信和 Ascend 执行。"
   },
   "docs/distributed/sglang-rank-group-deepseek-v4.md": {
-    "summary": "从 WORLD、TP Group 和局部 Rank 出发，画清 DeepSeek-V4 Attention 与 MoE 中 TP / DP / EP 多套逻辑坐标，以及 Ascend 910C 上独立 MoE EP Group 的边界。",
+    "summary": "同一个进程为什么有好几个 Rank 编号？用 TP16 / DP8 展开它在 Attention、请求分组和 MoE 中的不同位置。",
     "category": "分布式基础",
     "tags": [
       "SGLang",
@@ -108,10 +108,10 @@
     "topic": "distributed",
     "role": "reference",
     "seo_title": "SGLang Rank 和 Group 是什么？TP / DP / EP 图解",
-    "seo_summary": "用 DeepSeek-V4 图解 WORLD、TP/DP/EP Rank 与通信 Group，建立多卡推理的进程和坐标系直觉。"
+    "seo_summary": "同一个进程为什么有好几个 Rank 编号？用 TP16 / DP8 展开它在 Attention、请求分组和 MoE 中的不同位置。"
   },
   "docs/distributed/sglang-collectives-deepseek-v4.md": {
-    "summary": "沿 Tensor ownership 解释 AllReduce、AllGather、ReduceScatter 与 All-to-All 到底搬什么，并把 DPA、MoE、DeepEP 与 FuseEP 的通信方向落到当前 SGLang 源码。",
+    "summary": "该求和、拼接，还是把 Token 送给另一位专家？先看四类通信的小张量例子，再对照 SGLang 的 Attention 与 MoE。",
     "category": "分布式基础",
     "tags": [
       "SGLang",
@@ -123,10 +123,10 @@
     "topic": "distributed",
     "role": "reference",
     "seo_title": "AllReduce、AllGather、ReduceScatter、All-to-All 有什么区别？",
-    "seo_summary": "沿 Tensor ownership 解释四类分布式通信到底搬什么，并连接 SGLang、DPA、MoE 与 DeepEP。"
+    "seo_summary": "该求和、拼接，还是把 Token 送给另一位专家？先看四类通信的小张量例子，再对照 SGLang 的 Attention 与 MoE。"
   },
   "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md": {
-    "summary": "把 DSpark Draft / Verify、NPU Graph replay、Accept / Commit 与 DeepEP 通信映射到 Ascend 910C Profiling 时间线，用源码边界解释真实 Host / Device gap。",
+    "summary": "DSpark 慢在哪一段，怎样从计时字段追到 NPU 时间线？说明阶段边界、通信等待和 Profiling 对照方法。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -139,7 +139,7 @@
     "role": "deep"
   },
   "docs/ascend/deepseek-v4-w8a8-ascend-910c.md": {
-    "summary": "从官方 ModelSlim W8A8_DYNAMIC 配方出发，追踪 Dense QuantMatmul、MoE GroupedMatmul、DeepEP INT8 wire，以及 FRACTAL_NZ 到 ACLNN / CANN AI Core 的量化执行链。",
+    "summary": "W8A8 权重加载后，激活在哪里量化，矩阵乘法又交给谁？分别沿 Dense 与 MoE 追到 Ascend 算子入口。",
     "category": "Ascend 实践",
     "tags": [
       "DeepSeek-V4",
@@ -152,7 +152,7 @@
     "role": "advanced"
   },
   "docs/performance/deepseek-v4-w8a8-ascend-910c-performance.md": {
-    "summary": "从 Decode 小 M 出发，严格核对 DynamicQuant 的 Vector Core 并行度、QuantBatchMatmulV3 的 SmallMN / StreamK、DeepSeek-V4 实际 FRACTAL_NZ shape，以及 GroupedMatmul 的 Expert Token 调优阈值，区分源码机制与必须实测的性能结论。",
+    "summary": "INT8 矩阵乘法省下的时间，能否覆盖动态量化等额外开销？结合小 M、专家批次和 NZ 布局分析该怎样测量。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -165,7 +165,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-dspark-adaptive-verify-scheduler.md": {
-    "summary": "从 DeepSpec 的 AcceptRatePredictor 训练 target 出发，严格区分 STS greedy prefix 校准事件，推导 tau 与 commit_lens 的成立条件，分析 1D / Additive SPS 在 Graph tier cliff 附近的误差，并拆清 Ascend 910C 从 static 放开 compact 仍缺的 NPU DSV4 ragged metadata、graph 与 DP/DeepEP 能力。",
+    "summary": "验证预算有限时，每条请求都分配相同长度合适吗？解释 DSpark 的候选预算分配，以及 Ascend 固定版本仍使用 static 的原因。",
     "category": "投机解码",
     "tags": [
       "DeepSeek-V4",
@@ -179,7 +179,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md": {
-    "summary": "沿 Draft、Verify、Accept / Reject 与状态提交，追踪一轮 DSpark 投机解码，理解候选验证、接受结果与缓存状态如何衔接。",
+    "summary": "Draft 猜 A/B/C，Target 接受 A/B 后生成 X，下一轮从哪里继续？沿一个例子走完 DSpark 的提议、验证、接受和提交。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -191,7 +191,7 @@
     "role": "advanced"
   },
   "docs/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md": {
-    "summary": "区分 CPU 请求记录、设备执行进度和下一轮结果，解释 publish、字段隔离与 FutureMap 怎样支持投机调度重叠。",
+    "summary": "开启重叠执行后，CPU 记录和设备进度可能暂时不同。看请求长度、KV 预留和结果发布怎样保证下一轮接得上。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -203,7 +203,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
-    "summary": "沿 Draft Extend 和 NextN rollout 说明候选怎样逐步产生，区分候选数量、Forward 次数与 Target 验证窗口。",
+    "summary": "三枚 Draft 候选需要几次 NextN Forward？算清第一枚候选的来源、后续逐步预测和 Target 验证窗口的关系。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -215,7 +215,7 @@
     "role": "advanced"
   },
   "docs/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md": {
-    "summary": "从候选池、父节点索引到 Verify Mask 与接受路径解释通用 EAGLE 树机制，并核对 DeepSeek-V4 的 topk=1 限制。",
+    "summary": "EAGLE 怎样把候选分支整理成一次 Verify 输入？跟着小树读索引和接受路径；DeepSeek-V4 固定版本仍限定 topk=1。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -228,7 +228,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-tree-attention-source-analysis.md": {
-    "summary": "从 Candidate Layout、Tree Position 与 Tree Mask 出发，解释多分支 Verify 为什么只允许访问祖先路径，并区分 FULL_MASK / QLEN_ONLY 与不同 attention backend 的消费边界。",
+    "summary": "候选树排成 Tensor 后，一行怎样只读自己的祖先？用一棵小树解释位置和可见性；多分支部分属于通用 EAGLE 机制。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -240,7 +240,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-accept-decision-source-analysis.md": {
-    "summary": "聚焦 Verify 之后的 Accept Decision，区分 Greedy Tree Match、Target-only Tree Sampling 与经典 p/q Rejection Sampling，并解释 accept_index、terminal bonus 与 DSpark correct_len。",
+    "summary": "Verify 算出了候选位置的预测，哪些 Token 最终能输出？区分几种接受规则，并解释行索引与新 bonus 的错位关系。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -253,7 +253,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
-    "summary": "追踪 accepted path 如何从 Verify row 映射到 committed KV，解释 KV relocation、tensor compaction、Spec V2 overshoot 与 Ascend C4/C128 状态清理边界。",
+    "summary": "候选算过了，不代表都能留在历史里。看接受路径怎样映射到正式 KV，以及被拒绝候选的空间何时整理、复用或释放。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -265,7 +265,7 @@
     "role": "deep"
   },
   "docs/performance/deepseek-v4-speculative-performance-analysis.md": {
-    "summary": "从 Accept Length、strict Accept Rate、Draft / Verify 成本与 Ragged Verify 出发，建立投机解码何时加速、何时反而变慢的性能 break-even 模型。",
+    "summary": "接受长度变大，投机解码为什么仍可能变慢？把每轮有效输出与 Draft、Verify、通信和并发成本放在一起算。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -277,7 +277,7 @@
     "role": "advanced"
   },
   "docs/performance/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
-    "summary": "沿 Draft Graph、Target Verify、Plan Stream、Attention Multi-Stream 与 DeepEP async event 拆解 Ascend 910C 上一轮投机解码的真实 critical path 与 overlap 边界。",
+    "summary": "开了 Graph 和多流，下一步为什么仍在等？沿 EAGLE/NextN 标出候选、缓存和通信依赖，再说明怎样与实测时间线对应。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -290,7 +290,7 @@
     "role": "deep"
   },
   "docs/distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
-    "summary": "拆分 speculative control、logical layout 与 model-data collective 三层一致性，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast，并厘清 Ascend 多卡通信职责。",
+    "summary": "一张卡接受两枚候选，另一张接受三枚，会发生什么？区分模型分片通信与投机决策同步，追踪分歧怎样传到下一轮。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -303,7 +303,7 @@
     "role": "deep"
   },
   "docs/distributed/deepseek-v4-dspark-parallel-layout-analysis.md": {
-    "summary": "分析 DSpark Draft Model 的并行上下文、同步与布局规划，区分已确认的源码行为和 TP / DP 适配中待验证的假设。",
+    "summary": "Target 能使用 TP32 / DP16，为什么 MoE Draft 启动时被拒绝？追踪 DSpark 的配置检查、Token 布局和决策同步。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -316,7 +316,7 @@
     "role": "deep"
   },
   "docs/fundamentals/prefill-vs-decode-performance.md": {
-    "summary": "从 DeepSeek-V4 的真实 Dense / MoE shape 出发，解释 Prefill 与 Decode 在 Weight reuse、Expert M_e、SWA/C4/C128 历史读取和串行调度上的差异，并给出 Ascend 910C 上验证 Cube / Vector / Memory 瓶颈的 Profiling 方法。",
+    "summary": "同一份权重，为什么处理长输入和逐枚生成的性能不同？从矩阵形状讲到权重复用、专家 Token 数和每轮固定开销。",
     "category": "基础原理",
     "tags": [
       "AI Infra",
@@ -329,10 +329,10 @@
     "topic": "fundamentals",
     "role": "entry",
     "seo_title": "Prefill 和 Decode 有什么区别？为什么性能差这么多",
-    "seo_summary": "用 DeepSeek-V4 解释 Prefill 与 Decode 的计算形态、内存访问和性能瓶颈，并给出 Ascend 910C 上的 Profiling 思路。"
+    "seo_summary": "同一份权重，为什么处理长输入和逐枚生成的性能不同？从矩阵形状讲到权重复用、专家 Token 数和每轮固定开销。"
   },
   "docs/fundamentals/sglang-decode-source-reading-primer.md": {
-    "summary": "用一个普通 DeepSeek-V4 Decode Step 串起 SGLang 的 ScheduleBatch、ForwardBatch、mHC、Ascend 910C DSV4 KV ownership、MoE、Vocab Parallel LM Head 与 Sampling，并严格解释 L→L+1 的时间语义和多卡 Logits 边界。",
+    "summary": "刚生成的 Token，下一轮怎样变成模型输入？用三条请求的小批次串起长度、KV 写入、Attention、MoE 和采样。",
     "category": "基础原理",
     "tags": [
       "SGLang",
@@ -346,10 +346,10 @@
     "topic": "fundamentals",
     "role": "entry",
     "seo_title": "第一次读 SGLang 源码：从一次 Decode 看懂推理链路",
-    "seo_summary": "沿 DeepSeek-V4 的一次 Decode 串起 ScheduleBatch、ForwardBatch、KV Cache、MoE、LM Head 与 Sampling。"
+    "seo_summary": "刚生成的 Token，下一轮怎样变成模型输入？用三条请求的小批次串起长度、KV 写入、Attention、MoE 和采样。"
   },
   "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md": {
-    "summary": "用 Maintainer 视角重读 SGLang PR #39871：从 TP16/DP2 却打印 AttnTP16 的错误日志出发，追踪 parallel width 的前置设计背景、Runtime Derivation、Impact/Validation Surface，并提炼 Configured Value 与 Derived Runtime Value 的 Review Pattern。",
+    "summary": "TP16 / DP2 的 Attention 实际宽度是 8，日志却打印 16。这个小补丁说明了原始配置值和运行时派生值为什么要分清。",
     "category": "PR 精读",
     "tags": [
       "SGLang",
@@ -362,7 +362,7 @@
     "role": "deep"
   },
   "docs/pr-reviews/sglang-pr-39120-tensor-view-storage-cache.md": {
-    "summary": "从 SGLang PR #39120 的 multimodal embedding cache 问题出发，解释 torch.split View 为什么会保活整个 Batch Storage，以及 Cache accounting 如何通过 clone 重新对齐 ownership 与 lifetime。",
+    "summary": "缓存里只有 0.8 MiB 的小 Tensor，为什么可能占住约 7.8 MiB？解释 View 如何引用整块存储，以及补丁为什么选择复制。",
     "category": "PR 精读",
     "tags": [
       "SGLang",
@@ -375,7 +375,7 @@
     "role": "deep"
   },
   "docs/distributed/why-large-models-need-multi-card-tp-dp-ep.md": {
-    "summary": "从 DeepSeek-V4 的模型规模与 Ascend 910C HBM 约束出发，解释为什么单卡放不下模型，并区分 TP、DP、EP 在权重、请求和专家维度上的分工。",
+    "summary": "每个 Token 只激活部分专家，为什么仍需要放下整套权重？先算设备内存，再区分 TP、DP 和 EP 各自拆分什么。",
     "category": "分布式基础",
     "tags": [
       "DeepSeek-V4",
@@ -386,10 +386,10 @@
     "topic": "distributed",
     "role": "entry",
     "seo_title": "大模型为什么需要多卡？TP、DP、EP 一次讲清",
-    "seo_summary": "从 DeepSeek-V4 模型规模和 Ascend 910C 显存约束出发，解释单卡为什么放不下，以及 TP、DP、EP 分别切什么。"
+    "seo_summary": "每个 Token 只激活部分专家，为什么仍需要放下整套权重？先算设备内存，再区分 TP、DP 和 EP 各自拆分什么。"
   },
   "docs/sglang/gsm8k-accuracy-debugging-from-200-to-full-evaluation.md": {
-    "summary": "从 DeepSeek-V2-Lite-W8A8 的 200 题精度失败出发，核对 DeepEP 配置对照、提示词与评分规则，再用两轮 1314 题全量实验区分评测覆盖和输出稳定性。",
+    "summary": "200 题得分未过线，扩大到 1314 题后却通过了。沿配置对照和逐题结果，分开检查评测覆盖与输出稳定性。",
     "category": "工程排查",
     "tags": [
       "SGLang",
@@ -401,10 +401,10 @@
     "topic": "sglang",
     "role": "advanced",
     "seo_title": "GSM8K 精度不达标怎么排查？从 200 题到全量评测",
-    "seo_summary": "记录 DeepSeek-V2-Lite-W8A8 在 Ascend 上的 GSM8K 精度排查：200 题对照、1314 题全量实验、答案提取规则与测试用例修改建议。"
+    "seo_summary": "200 题得分未过线，扩大到 1314 题后却通过了。沿配置对照和逐题结果，分开检查评测覆盖与输出稳定性。"
   },
   "docs/performance/deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md": {
-    "summary": "记录 DeepSeek-V4-Pro-W4A8 在 Ascend 910C 上的 32k/1k 调优：先校准缓存命中率，再对照 C24、C36、C72 的吞吐与首 Token 等待，解释 TPOT、预热和峰值并发的统计口径。",
+    "summary": "先把缓存命中率校准，再比较并发。记录一次 32K/1K 调优中，吞吐、TPOT 与首 Token 等待之间的取舍。",
     "category": "调优实践",
     "tags": [
       "DeepSeek-V4",
@@ -416,10 +416,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "DeepSeek-V4-Pro 性能调优：缓存命中、并发与 TTFT/TPOT",
-    "seo_summary": "Ascend 910C 双机 DP8 的 32k/1k 实测记录：缓存从85.8%校准到91.8%，对比C24/C36/C72的TTFT、TPOT和输出吞吐，附测试脚本与CSV。"
+    "seo_summary": "先把缓存命中率校准，再比较并发。记录一次 32K/1K 调优中，吞吐、TPOT 与首 Token 等待之间的取舍。"
   },
   "docs/performance/ascend-950dt-single-node-pd-optimization.md": {
-    "summary": "记录 Ascend 950DT 单机 128K/1K、90% Cache 的 PD 调优：P 端关闭 HiCache、多流和 WAR barrier，D 端启用 DSPARK，并结合 dispatch 容量、图档位与完整压测结果分析首字等待。",
+    "summary": "一次 Ascend 950DT 单机长输入调优记录：解释两端配置、缓存与并发如何一起影响结果，避免把总收益归给一个开关。",
     "category": "调优实践",
     "tags": [
       "SGLang",
@@ -431,10 +431,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 950DT 单机 PD 调优：128K 长上下文的 TTFT 与吞吐",
-    "seo_summary": "一次 128K/1K、90% Cache 的单机 PD 调优记录。用四张工程图解释 HiCache、DSPARK、图 padding 与时延分布，结合 N192/C48 实测分析 TTFT、TPOT 和平均输出吞吐。"
+    "seo_summary": "一次 Ascend 950DT 单机长输入调优记录：解释两端配置、缓存与并发如何一起影响结果，避免把总收益归给一个开关。"
   },
   "docs/performance/inference-tuning-workflow-postmortem.md": {
-    "summary": "代理一直在改脚本、补检查，正式实验却迟迟没有发出。沿几次真实返工，追问自动调优的准备、恢复和多代理协作哪里出了问题。",
+    "summary": "正式请求只跑了约三分钟，准备和修统计却耗时更久。沿几次真实返工，看连续调优的时间花在了哪里。",
     "category": "工程复盘",
     "tags": [
       "性能调优",
@@ -445,10 +445,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "让AI连续调优几天后，我发现实验流程也有瓶颈",
-    "seo_summary": "一次DeepSeek-V4-Flash与Ascend 910C实验复盘：23分钟准备、预热后的旧断言、统计子进程故障和多代理等待，以及这些问题怎样从执行工具里解决。"
+    "seo_summary": "正式请求只跑了约三分钟，准备和修统计却耗时更久。沿几次真实返工，看连续调优的时间花在了哪里。"
   },
   "docs/performance/ai-driven-inference-autotuning-decision-loop.md": {
-    "summary": "从P端尾块合批的实测收益出发，讨论怎样固定场景、选择下一轮实验，以及在吞吐和等待时间之间作取舍。",
+    "summary": "把吞吐目标交给 AI 后，下一轮实验该怎么选？结合真实调优，讨论比较条件、候选依据和停止投入的时机。",
     "category": "工程实践",
     "tags": [
       "性能调优",
@@ -458,10 +458,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "把性能目标交给AI之后：大模型推理的全自动调优闭环",
-    "seo_summary": "结合DeepSeek-V4-Flash和Ascend 910C实验，讲清AI代理如何从瓶颈证据选择候选、短筛确认，并保留有收益的配置。"
+    "seo_summary": "把吞吐目标交给 AI 后，下一轮实验该怎么选？结合真实调优，讨论比较条件、候选依据和停止投入的时机。"
   },
   "docs/performance/ai-driven-inference-autotuning-execution-and-evidence.md": {
-    "summary": "跟着一次压测走过配置、进程、缓存和统计，解释推理成功但采集失败时怎样接续，以及跨会话怎样保留已完成的工作。",
+    "summary": "640 条请求已成功，统计程序却退出非零。怎样接着处理原数据，并让配置、进程和结果始终对得上？",
     "category": "工程实践",
     "tags": [
       "自动化",
@@ -471,10 +471,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "一轮实验什么时候算完成：全自动调优的状态、证据与恢复",
-    "seo_summary": "从一次AISBench统计子进程故障展开，讨论全自动推理调优中的配置身份、执行阶段、缓存观测、结果口径与恢复。"
+    "seo_summary": "640 条请求已成功，统计程序却退出非零。怎样接着处理原数据，并让配置、进程和结果始终对得上？"
   },
   "docs/performance/ascend-910c-inference-tuning-effective-optimizations-and-costs.md": {
-    "summary": "复盘DeepSeek-V4-Flash真实PD调优：P端尾块合批的32.27%稳态吞吐收益、IndexCache与静态布局、Compact负例，以及whole/native、缓存和实验成本的判断边界。",
+    "summary": "哪些改动带来了吞吐，哪些只增加了实验成本？放在一起看 P 端合批、IndexCache、静态布局和 Compact 的真实对照。",
     "category": "性能调优",
     "tags": [
       "Ascend 910C",
@@ -486,10 +486,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 910C推理调优复盘：有效优化、失败假设与实验成本",
-    "seo_summary": "用DeepSeek-V4-Flash真实PD实验解释P端尾块合批为何提高32.27%稳态吞吐，以及IndexCache、静态EPLB和Compact的收益边界。"
+    "seo_summary": "哪些改动带来了吞吐，哪些只增加了实验成本？放在一起看 P 端合批、IndexCache、静态布局和 Compact 的真实对照。"
   },
   "docs/performance/ascend-910c-inference-tuning-negative-results-and-stop-rules.md": {
-    "summary": "从真实PD实验分析CP与chunk调整、请求速率、Compact与固定SPS预算、静态专家布局的负例和小收益，解释窗口差异、逻辑验证槽与端到端吞吐，以及何时停止投入。",
+    "summary": "TPOT 降了，吞吐却没涨；分块少了，执行反而慢了。沿几项负例，判断原假设漏了什么、何时值得重试。",
     "category": "性能调优",
     "tags": [
       "Ascend 910C",
@@ -501,10 +501,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 910C调优负例分析：Compact、静态EPLB与实验取舍",
-    "seo_summary": "为什么TPOT更低却没提高吞吐？用DeepSeek-V4-Flash实测拆解CP/chunk、请求速率、Compact逻辑槽与SPS预算的负例，以及静态EPLB小收益和停止条件。"
+    "seo_summary": "TPOT 降了，吞吐却没涨；分块少了，执行反而慢了。沿几项负例，判断原假设漏了什么、何时值得重试。"
   },
   "docs/performance/decode-fast-throughput-limited-by-prefill.md": {
-    "summary": "TPOT已经低至8.7ms，吞吐却没跟上。沿16388-token输入的4-token尾块，追到P端合批与页对齐，再用同640请求对照解释32.27%的native收益。",
+    "summary": "平均 TPOT 已经低至 8.7ms，吞吐仍没跟上。一个 4-token 尾块，把排查方向从 Decode 带回了 Prefill 合批。",
     "category": "性能分析",
     "tags": [
       "PD 分离",
@@ -515,10 +515,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Decode已经很快了，吞吐为什么上不去？一次Prefill尾块合批优化",
-    "seo_summary": "DeepSeek-V4-Flash在Ascend 910C上的真实PD调优：从4-token尾块、128-token页预算和Pcap1到2，解释低TPOT与系统吞吐的区别及同负载实测收益。"
+    "seo_summary": "平均 TPOT 已经低至 8.7ms，吞吐仍没跟上。一个 4-token 尾块，把排查方向从 Decode 带回了 Prefill 合批。"
   },
   "docs/performance/ascend-910c-prefill-scenario-static-eplb.md": {
-    "summary": "拆解DeepSeek-V4-Flash P端场景静态EPLB的计数、冗余专家放置、理想均分估计和运行验收，解释同320请求whole提升14.18%的组合归因，以及128K两端布局仅约0.81%的边界。",
+    "summary": "专家布局怎样从路由计数拟合出来？沿一次 P 端静态方案解释放置与分发，并说明 14.18% 的组合收益该怎样归因。",
     "category": "性能调优",
     "tags": [
       "Ascend 910C",
@@ -530,10 +530,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 910C P端静态EPLB：路由计数、专家布局与实测收益",
-    "seo_summary": "P端静态EPLB如何采集和拟合？区分逻辑专家、物理副本、static分发与在线重排，解释14.18%组合收益、理想均分模型和场景边界。"
+    "seo_summary": "专家布局怎样从路由计数拟合出来？沿一次 P 端静态方案解释放置与分发，并说明 14.18% 的组合收益该怎样归因。"
   },
   "docs/performance/deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md": {
-    "summary": "从c4层调度到共享TopK、compressor状态与Graph存储，解释IndexCache freq2的执行路径，以及同负载native吞吐提高5.41%的适用边界。",
+    "summary": "跨层复用 TopK 后，哪些计算省下了，哪些状态还得更新？对照实际执行路径和同负载实验，看 freq2 的收益与代价。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -545,10 +545,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么",
-    "seo_summary": "DeepSeek-V4 IndexCache freq2源码与Ascend 910C实测：按c4层跨层复用TopK，保留compressor状态，native吞吐提高5.41%，同时明确精度未评测与Graph存储边界。"
+    "seo_summary": "跨层复用 TopK 后，哪些计算省下了，哪些状态还得更新？对照实际执行路径和同负载实验，看 freq2 的收益与代价。"
   },
   "docs/performance/deepseek-v4-prefill-chunk-size-selection.md": {
-    "summary": "从DP折算后的有效chunk、page128接纳预算和CP执行行数，解释8320分块更少却没提速，以及保持8192、调整Pcap为何有效。",
+    "summary": "把 chunk 从 8192 增到 8320，分块少了，吞吐却略降。结合页对齐、并行布局和通信轮次解释为什么。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -560,10 +560,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批",
-    "seo_summary": "DeepSeek-V4 / Ascend 910C 的Prefill chunk选择实录：8192与8320、CP2/DP8负例、页对齐与DeepEP通信轮次，结合128K前缀缓存和尾块合批分析调优方法。"
+    "seo_summary": "把 chunk 从 8192 增到 8320，分块少了，吞吐却略降。结合页对齐、并行布局和通信轮次解释为什么。"
   },
   "docs/performance/128k-prefix-cache-benchmark-calibration.md": {
-    "summary": "首轮8条请求长度正确，实际缓存却只有87.50%至89.06%。从公共区构造、短seed与独立check，走到多DP预热和逐条90.6222%的验收。",
+    "summary": "输入长度正确、请求全部成功，缓存却没达到九成。记录公共前缀、预热与逐条检查怎样把压测场景校准。",
     "category": "压测实践",
     "tags": [
       "前缀缓存",
@@ -574,10 +574,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "128K输入、90%前缀缓存：怎样把压测场景真正跑准",
-    "seo_summary": "DeepSeek-V4-Flash与Ascend 910C压测实践：真实tokenizer核长、共享前缀与独立后缀、多DP的seed和check，以及逐请求缓存计数、吞吐和准备成本。"
+    "seo_summary": "输入长度正确、请求全部成功，缓存却没达到九成。记录公共前缀、预热与逐条检查怎样把压测场景校准。"
   },
   "docs/performance/npu-timeline-gaps-and-recoverable-speedup.md": {
-    "summary": "从真实18.77%/20.68%的rank局部空隙出发，解释wall、区间并集、等待累计、跨rank依赖和Profiler扰动，配套教学图与纯CPU统计脚本。",
+    "summary": "NPU 时间线约两成空白，为什么不能当成可回收的加速空间？先算清区间覆盖，再检查等待、跨 Rank 依赖和测量范围。",
     "category": "性能分析",
     "tags": [
       "Ascend 910C",
@@ -589,10 +589,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？",
-    "seo_summary": "Ascend 910C NPU trace中的19%空隙为何不等于19%可回收加速：跨stream区间并集、跨rank等待、Graph端点、DSpark元数据小拷贝与Profiler扰动的真实案例。"
+    "seo_summary": "NPU 时间线约两成空白，为什么不能当成可回收的加速空间？先算清区间覆盖，再检查等待、跨 Rank 依赖和测量范围。"
   },
   "docs/performance/expert-count-export-hccl-gloo.md": {
-    "summary": "160条推理完成，专家统计却在dump时触发HCCL内存申请失败。从storage.cpu的异步错误栈，追到同成员CPU/Gloo整数SUM与真实16worker导出验证。",
+    "summary": "160 条请求已生成完，存专家计数时服务却崩了。沿错误栈追到设备通信，再看 CPU/Gloo 导出怎样保住统计含义。",
     "category": "故障排查",
     "tags": [
       "Ascend",
@@ -603,7 +603,7 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "专家计数都采到了，为什么导出还会失败？",
-    "seo_summary": "DeepSeek-V4-Flash/Ascend 910C专家统计导出排障：HcclAllreduce内存申请失败、CPU/Gloo归约修复、循环缓冲与有效文件验收。"
+    "seo_summary": "160 条请求已生成完，存专家计数时服务却崩了。沿错误栈追到设备通信，再看 CPU/Gloo 导出怎样保住统计含义。"
   },
   "docs/performance/ascend-910c-cp2-vs-cp4-prefill-throughput.md": {
     "summary": "复盘CP4/DP4切到CP2/DP8的N480同负载负例：单rank行数、page预算、EP16通信轮次与请求驻留时间，解释TPOT改善却没有吞吐收益。",

@@ -373,7 +373,7 @@ SGLang 当前通用 Prefill 侧入口可以从 [disaggregation/prefill.py](https
 
 模型大到一张卡放不下，或者吞吐目标高到单卡不够，就必须进入分布式世界。
 
-这一部分最容易学乱，因为 TP、DP、EP、CP、Group、Rank、AllReduce、DeepEP、HCCL 经常出现在同一句话里，但它们并不属于同一个层级。
+读多卡代码时，常会在同一段里看到 TP、DP、EP、CP、Group、Rank、AllReduce、DeepEP、HCCL。可以先把它们按职责分开：并行方式决定怎样分工，Rank 和 Group 描述参与者，通信操作与后端负责交换数据。
 
 ### Rank、World Size 与 Process Group
 
@@ -483,11 +483,7 @@ SGLang 当前 EP 主流程可以从 [ep_moe/layer.py](https://github.com/sgl-pro
 
 ### DeepEP 与专家计算的边界
 
-**DeepEP** 最容易被初学者误解成“一个 MoE 算子”。
-
-更准确地说，它首先解决的是：
-
-> **Expert Parallel 场景下 Token 的 Dispatch / Combine 通信。**
+**DeepEP** 负责 Expert Parallel 中 Token 的 Dispatch / Combine 通信：先把数据送到相应专家所在的进程，专家算完后再合并返回。
 
 SGLang 当前有 [deepep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py) 和 [deepep_v2.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep_v2.py) 等 dispatcher。
 
@@ -570,9 +566,7 @@ flowchart TD
 
 ### Draft 是角色，不一定是独立小模型
 
-这是非常重要的一点。
-
-**Draft** 首先描述“谁负责提出候选”，并不必然意味着另起一套完整小模型。
+**Draft** 描述的是提出候选的角色；实现这个角色时，可以使用独立小模型，也可以复用大模型中的预测模块。
 
 不同实现可能是：
 

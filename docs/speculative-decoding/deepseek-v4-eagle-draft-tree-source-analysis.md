@@ -4,7 +4,12 @@
 
 本文沿一棵小树解释累计分数、候选池和父节点索引，说明它怎样变成可执行的 Verify 输入。DeepSeek-V4 在本文固定版本中仍要求 EAGLE `topk=1`；多分支部分讨论的是通用 Runtime 机制，最后单独核对 V4 的配置与后端限制。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。正文分析 SGLang EAGLE Runtime 中真实存在的 `topk>1` Draft Tree 机制，并以 DeepSeek-V4 / NextN 为模型背景。当前 DeepSeek-V4 + Ascend 官方部署使用 `--attention-backend dsv4`、`page_size=128`、`speculative_eagle_topk=1`；同一版本的 DeepSeek-V4 模型配置 hook 对 EAGLE 直接要求 `topk=1`；另有 `dsv4 + page_size>1 + topk>1` 的后端 guard。因此本文讲的是 DeepSeek-V4 所使用的 EAGLE Runtime 的 Tree 能力，以及它为什么在当前 Ascend DSV4 官方配置中退化成 Chain，而不是宣称当前 Ascend DSV4 已经开放多分支 Tree 生产配置。
+
+</details>
 
 ## 一、在有限预算内保留候选路径
 
@@ -155,7 +160,7 @@ k × k child
 
 ## 二、候选池索引怎样还原父节点关系
 
-Tree 最容易看懂，源码索引却最容易看错。
+树图直接画出了父子关系，源码却要通过多组索引还原它。接下来分别看每组索引对应哪个候选池。
 
 `organize_draft_results()` 最后返回：
 
@@ -584,11 +589,7 @@ Target(C | prefix + root + A)
 verify_tree_greedy_func(...)
 ~~~
 
-这里最容易误写成：
-
-> Target 从所有 root-to-leaf path 中挑一个概率最高的路径。
-
-源码实际上完全不是这么做的。
+Draft 的累计分数用于筛选候选。进入 Greedy Verify 后，接受路径由 Target 在各节点的预测逐步确定，并不按整条 root-to-leaf 路径的概率重新排名。
 
 ### Tree 被转换成 first-child / next-sibling
 

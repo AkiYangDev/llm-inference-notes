@@ -636,7 +636,7 @@ C0 C1 C2 C3
 SGLANG_RAGGED_VERIFY_MODE=static
 ~~~
 
-这不只是“官方还没打开环境变量”。
+要从 static 走到 compact，还需要核对下面的 NPU 后端与输入布局。
 
 ### NPU DSV4 使用的是另一套 backend
 
@@ -696,9 +696,7 @@ RaggedVerifyLayout.verify_lens
 RaggedVerifyLayout.qo_indptr
 ~~~
 
-因此缺口不只是 Graph capability flag。
-
-> **NPU DSV4 Target Verify 本身的 Query geometry contract 仍然是 uniform-width。**
+这里还存在输入布局约束：NPU DSV4 Target Verify 的 Query 组织方式仍要求 uniform-width。单独修改 Graph capability flag，无法改变这项要求。
 
 ### C4 / C128 Compressor metadata 也依赖固定 width
 

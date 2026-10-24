@@ -4,7 +4,12 @@ Target Verify 为候选位置算出 logits 后，系统还要决定哪些候选�
 
 本文用输入 R、A、C 对应输出 A、C、X 的小例子追踪接受结果：`accept_index` 保存的是 Verify 行索引，输出中的新 bonus X 与这些行已经计算出的 KV 相差一位。先讲清这个映射，再展开树遍历、不同 Sampling 算法和 DSpark 的链式接受。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 791c7850d0960fd768102f71e7d999b036bb75ba`，核对日期为 2026-09-20。EAGLE 部分分析 SGLang Runtime 的 tree accept；DSpark 部分分析当前 DeepSeek-V4 的 chain accept。GPU JIT kernel 的内部逻辑可以直接从 SGLang 仓库核对；NPU 路径在 SGLang 中调用 `sgl_kernel_npu` 的同名算子，本文只把当前 SGLang 调用契约视为已确认，不把外部 NPU kernel 的未展开实现写成已经逐行验证的事实。
+
+</details>
 
 ## 一、Target 怎样确认候选前缀
 

@@ -4,9 +4,14 @@
 
 下面按一次 Profiling 的工作顺序展开：先建立阶段边界，再采集稳定 Decode 窗口，把框架记录与 NPU 时间线对齐，最后用对照实验检验判断。重点是把耗时归到具体依赖上，而不是只按 Kernel 总时长排序。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码基线与适用范围**
 >
 > 本文基于 sgl-project/sglang @ ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e，核对日期为 2026-09-21。重点讨论 SGLang SRT 文本推理路径下的 DeepSeek-V4 + DSpark + Ascend 910C。本文所有“当前实现”结论都固定到该 commit；Profiler 截图与具体毫秒数必须在目标机器上实测，本文不会把源码推导伪装成硬件实测结果。
+
+</details>
 
 ## 一、把一轮 DSpark 对应到计时字段
 
@@ -629,11 +634,7 @@ replay
 
 ### Launch、独立计算与 Wait
 
-通信 overlap 是最容易把“API 有 async”误写成“性能已经 overlap”的地方。
-
-先说结论：
-
-> **async_finish=True 或 return_recv_hook=True 只说明 Runtime 把“发起通信”和“等待结果可消费”解耦了。是否形成性能收益，取决于两者之间有没有独立的有用工作。**
+`async_finish=True` 或 `return_recv_hook=True` 允许 Runtime 先发起通信，再到消费结果时等待。能否获得重叠收益，要看发起和等待之间有没有独立工作可以执行；仅凭接口带有 async，还不能判断设备上的耗时是否减少。
 
 #### Ascend + ZBAL 仍复用同一 Dispatcher 状态机
 
@@ -735,9 +736,7 @@ recv data 可消费
 
 Combine 同理。
 
-所以 recv_hook 的核心不是“通信更快”，而是：
-
-> **把同步点向消费数据的位置推迟。**
+recv_hook 把同步点推迟到消费数据的位置，为中间安排独立计算留下空间。这里推迟的是等待位置，不能据此推断传输速度提高了。
 
 #### 但当前 DeepSeek-V4 Decode / TARGET_VERIFY 没有 TBO
 

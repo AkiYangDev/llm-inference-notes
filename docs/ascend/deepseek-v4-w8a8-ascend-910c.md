@@ -426,9 +426,7 @@ npu_grouped_matmul
 
 ### DeepEP INT8 Dispatch 到 W13：什么时候完全避免二次量化
 
-这是最容易因为模块分层而误判的一段。
-
-如果只看：
+是否会再次量化，要把 Dispatcher 的输出和 MoE Method 的输入接起来看。单看下面这个类还不够：
 
 ```python
 NPUW8A8Int8MoEMethod

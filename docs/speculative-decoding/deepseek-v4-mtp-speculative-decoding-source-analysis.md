@@ -4,11 +4,16 @@ DeepSeek-V4 的 NextN 路径先通过 Draft Extend 产生第一枚候选，再�
 
 下面以三个 Draft 候选为例，追踪 Target hidden、边界 Token、Draft Extend 和 NextN rollout 的衔接，算清一轮里有哪些输入、多少次 forward，以及哪些缓存要留给下一轮。它与 DSpark 的块式提议是不同的 Draft 实现。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线讨论 DeepSeek-V4 bundled MTP / NextN draft，在 SGLang 中由 EAGLE-family worker 驱动。它与 DSpark 是不同 Draft 实现。固定版本的 V4 EAGLE 配置限定 `topk=1`；通用 Runtime 的多分支机制见 Draft Tree 专题。
+
+</details>
 
 ## 一、MTP、NextN 与 EAGLE 的职责
 
-先解决最容易混乱的三个名字。
+MTP、NextN 和 EAGLE 出现在同一条路径上，分别指向权重能力、模型实现和运行时算法：
 
 | 名字 | 在本文中的层次 | 当前 DeepSeek-V4 路径里的含义 |
 | --- | --- | --- |
@@ -241,13 +246,11 @@ Token embedding
 [2, M, 8]
 ~~~
 
-这才是当前 DeepSeek-V4 NextN 吃进去的 Draft feature。
+上面的形状对应当前 DeepSeek-V4 NextN 实际接收的 Draft feature。
 
 ## 三、Draft Extend 产生第一枚候选
 
-这里是整条链里最容易写错的 ownership。
-
-上一轮 Target Verify 或 Prefill 完成后，会得到一枚 **Target 已确认的 Token**。
+生成第一枚 Draft 候选前，先看这一轮从哪里起步。上一轮 Target Verify 或 Prefill 完成后，会得到一枚 **Target 已确认的 Token**。
 
 在 EAGLE 数据结构里，它叫：`bonus_tokens`
 
@@ -467,13 +470,7 @@ Verify Window:
 [bonus, draft1, draft2, draft3]
 ~~~
 
-所以宽度是：`4`
-
-这才是：`speculative_num_draft_tokens = 4`
-
-在 topk=1 线性链下的实际意义。
-
-因此最好把四个概念分开：
+因此，在 topk=1 线性链下，窗口宽度是 `4`，对应 `speculative_num_draft_tokens = 4`。候选数量与窗口宽度相差一枚边界 Token，可以按下表区分：
 
 | 概念 | `num_steps=3, topk=1` | 含义 |
 | --- | ---: | --- |

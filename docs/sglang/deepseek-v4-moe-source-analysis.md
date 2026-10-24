@@ -4,7 +4,12 @@ Attention 输出一行 hidden states 后，MoE 要先决定这行数据交给哪
 
 本文用四个 Rank、八个 Expert 的教学例子走过 Router、Dispatch、专家计算和 Combine，再对照 DeepSeek-V4 的实现。DeepEP 暴露这些阶段的独立接口，Ascend FuseEP 则会把其中多项工作融合到同一执行路径。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线分析 DeepSeek-V4 target model 的普通 MoE forward。具体 checkpoint 可以覆盖配置类默认值；文中用 4 Rank / 8 Expert 的教学例子演示路由与通信。
+
+</details>
 
 ## 一、DeepSeek-V4 复用的 MoE 实现
 

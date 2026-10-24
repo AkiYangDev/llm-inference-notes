@@ -4,9 +4,14 @@
 
 Tree Attention 要在一次 forward 中保持这种祖先关系。本文用同一棵小树串起 Verify 行布局、位置编号和可见性，再比较不同后端怎样消费这些信息。当前 DeepSeek-V4 的 EAGLE 配置仍限定 `topk=1`，多分支实现作为通用 EAGLE 机制讨论。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码基线**：本文基于 `sgl-project/sglang @ 791c7850d0960fd768102f71e7d999b036bb75ba`，核对日期为 2026-09-20。重点覆盖 EAGLE Spec V2 的 tree builder、VerifyMask、Triton / FlashAttention target-verify，以及 DeepSeek-V4 DSV4 的当前 capability gate。
 >
 > **DeepSeek-V4 当前边界**：固定版本中，DeepSeek-V4 的 EAGLE 配置仍要求 `speculative_eagle_topk == 1`；CUDA/HIP DSV4 Attention backend 还会独立 assert `topk in [0, 1]`。因此本文的 multi-branch Tree Attention 是对 **SGLang 通用 EAGLE Tree Verify 机制，以及 DeepSeek-V4 若未来放开 topk>1 所必须满足的 correctness contract** 的源码解析，而不是声称当前 DeepSeek-V4 生产路径已经在跑多分支 Tree Attention。
+
+</details>
 
 ## 一、把候选树放进 Verify Tensor
 

@@ -4,7 +4,12 @@
 
 要理解这个差异，需要分别看 Draft 的并行上下文、各 Rank 的 Token 计数，以及投机决策同步。下面沿这三处源码展开：先定位限制，再说明现有布局如何衔接，最后列出验证更宽 Attention TP 所需的检查项。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。讨论 DeepSeek-V4 MoE draft + DSpark V2 + DP Attention。限制位于通用 DSpark worker 的配置检查中。NPU Draft 还涉及 ModelSlim、独立 vocab modules 和 shared-expert fusion 等平台分支，后文分别说明。
+
+</details>
 
 ## 一、启动限制发生在哪里
 
@@ -37,9 +42,7 @@ attn_tp_size > 1
 
 所以 TP32 / DP16 在创建 DeepSeek-V4 draft worker 之前就被拒绝。
 
-这条 guard 没有 `is_npu()` 判断，也没有 HCCL 判断。这项限制位于：
-
-> **这项限制由 DSpark Worker 的配置检查实施，位于通用 MoE Draft Runtime 中。**
+这项限制由通用 MoE Draft Runtime 中的 DSpark Worker 配置检查实施，guard 没有 `is_npu()` 或 HCCL 判断。
 
 报错文本进一步给出一个重要线索：`attn_tp > 1 corrupts the MoE-under-DP all-reduce`
 

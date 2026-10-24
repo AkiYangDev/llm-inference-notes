@@ -4,7 +4,12 @@ DeepSeek-V4 的一层从 Attention 进入 MoE 时，同一批 Rank 会改变分�
 
 本文用 `TP32 / DP16` 的 Target 布局展开这次转换。先算有效 Attention 宽度，再追踪局部输出归约、Token 行拆分、Expert Dispatch 和结果恢复。这里讨论的 TP 域不包含外层 Native DP 副本；DSpark 的额外限制会另行说明。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线聚焦 DeepSeek-V4 target model 的 TP、DP Attention 与 MoE EP 组合。本文会单独指出 DSpark speculative path 的额外限制，避免把 target model 能表达的拓扑误写成 DSpark 已经支持的拓扑。Ascend 通信以当前 torch.distributed / HCCL 路径为基础说明，同时标注 ZBAL / FuseEP 等专用 backend 的例外。
+
+</details>
 
 ## 一、配置宽度怎样变成有效 Attention 布局
 
@@ -227,7 +232,7 @@ MoE EP 仍然使用 standalone process group。
 
 > **相同的 Rank 成员，可以拥有独立的 communicator 对象。**
 
-这个细节对排查跨机 collective mismatch、通信超时和 communicator 初始化非常重要。
+排查跨机 collective mismatch、通信超时或初始化问题时，需要同时核对成员与 communicator；只看 Rank 列表会漏掉这层区别。
 
 ## 四、Attention 与 MoE 之间的 Token 行转换
 

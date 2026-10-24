@@ -240,9 +240,7 @@ ep_rank
 
 ## 三、展开 TP16 / DP8 的坐标
 
-现在进入最容易产生误解的例子。
-
-假设启动配置满足：
+把这些编号放进一组具体配置，区别就更清楚了：
 
 ```text
 tp_size = 16
@@ -608,7 +606,7 @@ MOE EP Group
 
 它们的**成员集合可能一样，但 group handle / communicator 语义是独立的**。
 
-这件事非常重要，因为 Group 不只是“一串 Rank 数字”。Group 还决定：
+成员列表相同，还不足以确认两次通信使用同一个 Group。Group 还决定：
 
 ```text
 这次 collective 使用哪个通信上下文
@@ -642,11 +640,7 @@ moe_dp_rank / moe_dp_size
 
 Scheduler 构造这些字段的位置可以看 [`scheduler.py`](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/scheduler.py#L519-L548)。
 
-它不是把“同一个 Rank”重复保存很多遍，而是在保存：
-
-> **同一个执行进程，在不同并行坐标系中的身份。**
-
-把整篇文章压缩成一张图：
+这些字段分别记录同一个进程在各套并行坐标中的身份。可以用下图对照：
 
 ```mermaid
 flowchart TD

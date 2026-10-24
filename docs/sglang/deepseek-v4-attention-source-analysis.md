@@ -4,7 +4,12 @@
 
 下面沿 DeepSeek-V4 的普通 Decode 路径追踪这两条线，先生成 Query 并写入当前状态，再找到请求历史，最后按当前层的配置组合滑窗与压缩信息。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线使用公开源码中的 DeepSeek-V4、普通文本生成、非投机推理、PP=1，并聚焦 Ascend NPU eager 的普通单流职责路径。图回放、多流、Context Parallel、unified FP8 KV 和 DeepSeek-V4.1 的 `compress_ratio=1/2` 会改变部分中间表示或时序，不在本文代表路径中展开。本文追到公开 NPU Attention operator 入口与缓存映射，不把这些代码外推成某个私有部署镜像的底层运行轨迹。
+
+</details>
 
 ## 一、为打包的 Token 保留请求坐标
 

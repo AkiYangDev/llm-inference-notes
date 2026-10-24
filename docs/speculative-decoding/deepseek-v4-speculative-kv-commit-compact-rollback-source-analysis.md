@@ -4,7 +4,12 @@ Target 验证过一批候选后，候选 KV 已经写进缓存，但只有接受
 
 本文用旧 root R、接受的 A/C 和新 bonus X 说明三个动作：Commit 确认有效历史，Compact 整理布局，Rollback 撤销候选对后续状态的影响。输出追加 A/C/X 时，已经物化的输入 KV 对应 R/A/C；这个错位关系贯穿后面的地址映射。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 6880a4795533640f41ebb3db9e4ae0af5a371a1f`，核对日期为 2026-09-20。主线覆盖 Spec V2 的 EAGLE accepted-path KV compaction、经典 rejection sampling、Target-only sampling，以及 Ascend DeepSeek-V4 的 C4/C128 KV/state 生命周期。当前 DeepSeek-V4 + DSpark 仍是 `topk=1` 的 linear chain；因此文中的 tree-specific `accept_index` compaction 主要解释通用 EAGLE Spec V2，DSpark 部分会单独标出。
+
+</details>
 
 ## 一、Token、Verify 行、逻辑位置与物理槽位
 

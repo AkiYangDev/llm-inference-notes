@@ -4,7 +4,12 @@
 
 下面从已经完成分词的请求开始，追踪它如何进入等待队列、参与 Prefill、转入持续 Decode，再结束并回收资源。`Req` 表示跨轮请求，`ScheduleBatch` 表示调度计划，`ForwardBatch` 表示本次执行所需的 Tensor 与元数据。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线分析普通文本生成、非 PD 分离、非投机推理的 Scheduler 路径，并补充 overlap schedule、Chunked Prefill 与 mixed batch 对主线的影响。示例以 DeepSeek serving 请求为背景，但 Scheduler 这一层的大部分机制与具体 Transformer 模型结构解耦。SGLang 源码仍在快速演进，阅读时应以文中固定 commit 为准。
+
+</details>
 
 ## 一、请求状态与本轮执行计划
 
@@ -43,7 +48,7 @@ flowchart TD
     Z --> O[输出 / 完成]
 ```
 
-这里最容易混淆的是 `waiting_queue`、`running_batch` 和 `last_batch`。
+`waiting_queue`、`running_batch` 和 `last_batch` 保存的是不同阶段的状态，读后面的组批逻辑时需要分开看。
 
 `waiting_queue` 里是等待被 admission 的请求；`running_batch` 主要保存已经进入持续生成阶段、后续还要继续 Decode 的请求；`last_batch` 则只是“上一轮实际跑过的 batch”。上一轮如果是 Prefill / Extend，下一轮调度时它可能被并入 `running_batch`，从而开始后续 Decode。这个合并逻辑就在 [`get_next_batch_to_run()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3648-L3794)。
 
@@ -156,7 +161,7 @@ new_batch.prepare_for_extend()
 | Prefill 输入 | R1 的 6 个 token + R2 未命中的 3 个 token |
 | `out_cache_loc` | 为这 9 个新增 KV token 分配的写入位置 |
 
-这里有一个很值得注意的实现细节：当前版本不会在 `prepare_for_extend()` 里立刻把 Prefill input IDs 全部物化成设备 Tensor。它先把扁平化后的输入保存在 pinned CPU staging 中，`self.input_ids` 暂时保持 `None`，并把 staging 保存到 `prefill_input_ids_cpu`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2686-L2728) [字段写入](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2870-L2915)
+当前版本不会在 `prepare_for_extend()` 里立刻把 Prefill input IDs 全部物化成设备 Tensor。它先把扁平化后的输入保存在 pinned CPU staging 中，`self.input_ids` 暂时保持 `None`，并把 staging 保存到 `prefill_input_ids_cpu`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2686-L2728) [字段写入](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2870-L2915)
 
 此时的 `ScheduleBatch` 保存已完成 Admission、KV 分配与批次组织的执行计划，后续继续转换为设备输入。
 

@@ -4,7 +4,12 @@
 
 例如，同一批请求的平均接受长度增加了，但 Verify 行数、图填充或通信成本增长得更快，总吞吐仍可能下降。本文从固定 batch 的产出公式开始，依次解释接受指标、窗口大小、compact 执行和并发饱和，再把这些因素放回压测。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码基线**：本文基于 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。这个 commit 本身更新了 Ascend/NPU performance testing framework，并开始把 speculative acceptance 纳入性能 CI。
+
+</details>
 
 ## 一、先计算每轮的有效产出
 
@@ -581,9 +586,7 @@ SGLang 甚至提供：`--speculative-dspark-align-verify-tokens-to-graph-tier`
 
 ### 相同行数也可能有不同耗时
 
-这一步非常重要。
-
-`dspark_sps_profiler.py` 明确记录了一个 caveat：
+`dspark_sps_profiler.py` 记录了一个会影响成本比较的条件：
 
 ```text
 static:

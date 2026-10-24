@@ -4,7 +4,12 @@
 
 本文从这个例子出发，区分两类通信：TP/EP 搬运模型计算所需的 Tensor，投机同步对齐候选、接受长度和后续执行计划。DSpark 的 `SpecTpSync` 与 EAGLE 的接受路径分别怎样完成这件事，需要放在各自的 Group 和执行分支中看。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线讨论 PP1 下 DeepSeek-V4 + SGLang speculative decoding，重点覆盖 DSpark V2、EAGLE/NextN、DP Attention 与 Ascend NPU。PP speculative relay 有额外跨 stage 状态传递，不在本文展开。文中的 TP16/DP8 用于演示 Group 划分；实际部署配置见对应模型的支持条件。
+
+</details>
 
 ## 一、先区分计算分片与执行决策
 
@@ -566,9 +571,7 @@ num_correct_drafts
 
 ## 五、决策同步与模型通信怎样配合
 
-现在可以把最容易混淆的两套通信彻底拆开。
-
-DeepSeek-V4 在 DP Attention + MoE 场景本身就需要复杂的 Tensor layout transition。
+前面讨论的投机决策同步，要与模型自身的数据通信配合。DeepSeek-V4 在 DP Attention + MoE 场景中需要转换 Tensor 布局；即使候选和接受长度已经同步，这些数据转换仍要完成。
 
 固定源码 `_run_moe_ffn_dp_sync()` 中，当：
 

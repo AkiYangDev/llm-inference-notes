@@ -4,7 +4,12 @@
 
 本文跟随这条请求的表示变化：聊天消息变成 Token ID，独立请求进入 batch，模型输入与缓存位置交给 NPU，结果再回到 Scheduler 决定继续还是结束。先把这条链走通，再把 DeepSeek-V4 的后端细节放到相应环节。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：基于 `sgl-project/sglang @ dd83b54611897a5f80f4df59e69756bd2fb4b8ab`，核对日期为 2026-09-20。模型案例采用公开源码中的 DeepSeek-V4 文本模型与 NPU `dsv4` 后端，以合设服务、普通自回归和直接执行为主线，展开非 A5 的 BF16 缓存路径，最后说明 DSPARK 如何改变生成循环。Tensor 示例观察一个参与计算的 Rank；多机通信、量化与图回放不逐项展开。本文分析到源码中的算子入口，具体 Flash/Pro 权重尺寸与部署镜像行为需对应配置和源码确认。
+
+</details>
 
 ## 一、请求经过哪些进程
 

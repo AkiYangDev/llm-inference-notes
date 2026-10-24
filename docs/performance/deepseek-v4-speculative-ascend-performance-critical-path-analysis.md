@@ -4,7 +4,12 @@
 
 本文沿 DeepSeek-V4 的 EAGLE/NextN 路径标出这些依赖：图里捕获了哪些 forward，Plan Stream 能与谁重叠，DeepEP 的等待点在哪里。源码可以确定执行关系；哪一段成为实际关键路径，还要把设备时间线与这些关系对齐。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码基线**：本文固定基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-21。主线讨论 DeepSeek-V4 + EAGLE / NextN + Ascend 910C + `dsv4` backend。图中展示由 Stream、Event、Wait 和 Graph 调用推导的依赖关系；耗时与重叠比例由设备时间线测量。
+
+</details>
 
 ## 一、Graph、Stream 与通信各自负责什么
 
@@ -547,9 +552,7 @@ Draft Extend Compute
 
 ## 五、Target 与 Draft 的多流路径
 
-另一套容易和 Plan Stream 混淆的机制是：`SGLANG_NPU_USE_MULTI_STREAM=1`
-
-它不是 speculative phase planner，而是深入 DeepSeek-V4 **单个模型 Layer 内部**的局部并行。
+`SGLANG_NPU_USE_MULTI_STREAM=1` 控制 DeepSeek-V4 **单个模型 Layer 内部**的局部并行。Plan Stream 处理投机阶段的计划工作，两者的作用范围不同。
 
 Target DeepSeek-V4 Model 初始化时，只要 NPU 环境变量开启，就创建一组 `alt_streams`，并把它传进每个 `DeepseekV4DecoderLayer`。
 

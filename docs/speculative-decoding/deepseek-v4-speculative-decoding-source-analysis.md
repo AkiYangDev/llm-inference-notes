@@ -4,7 +4,12 @@
 
 DSpark 把这个过程组织为 Draft、Verify Planning、Target Verify、Accept 和 Commit。本文跟随这个小例子走完一轮：候选怎样组成块，Target 怎样一次验证，接受结果又怎样更新缓存与下一轮 Draft 输入。并行布局和更复杂的树式候选放到对应专题。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线使用 DSpark V2、DeepSeek-V4 target / draft、普通链式 speculative decoding。源码同时支持 greedy、sampling、static verify、compact/ragged verify、folded proposal / verify epilogue 等优化；正文先解释共同语义，再标注优化路径。实际收益由接受长度、Draft / Verify 成本、Batch、Graph 与通信共同决定。
+
+</details>
 
 ## 一、一轮多枚输出怎样减少 Target 轮数
 

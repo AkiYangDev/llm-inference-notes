@@ -4,7 +4,12 @@ Scheduler 已经选好这一轮要计算的 Token，Worker 把它们连同位置
 
 本文用两条 Prefill 请求、合计九个输入 Token 的例子往下追：九行 hidden states 怎样进入 DeepSeek-V4，为什么普通生成最后只需要两行 next-token logits，以及下一轮 Decode 怎样接上。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线采用普通文本生成、非投机推理、PP=1，并以 eager execution 作为最容易观察的代表路径；Decode Graph、Prefill Graph 只解释到 ModelRunner 的分发边界。DeepSeek 案例使用公开源码中的 `DeepseekV4ForCausalLM`。Ascend 部分只追到可确认的 `DeepseekV4AscendAttnBackend` 接口，不把公开源码路径外推成具体部署镜像的底层运行轨迹。源码中的 `cuda_graph` 命名是框架内部接口名，本文不据此把 NPU 图执行等同于 CUDA。
+
+</details>
 
 ## 一、ForwardBatch 描述本次执行
 
@@ -367,7 +372,7 @@ hidden_states, ... = layer(
 )
 ```
 
-这条调用关系非常值得注意：
+把模型计算与位置、缓存元数据放在一起，可以看到它们在 Decoder Layer 中怎样汇合：
 
 ```mermaid
 flowchart TD

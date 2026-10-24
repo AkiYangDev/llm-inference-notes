@@ -4,7 +4,12 @@ PD 分离把输入处理和持续生成交给两组服务。P 端完成 Prompt �
 
 交接里最容易错一位的是首 Token：P 已经采样出它，但它还没有经过下一次模型计算，因此没有自己的 KV。下面从这枚 handoff Token 出发，追踪目标资源预分配、状态传输、完成确认和第一次 Decode，同时说明拆分带来的独立调度能力与传输成本。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线讨论 DeepSeek-V4 + SGLang PD Disaggregation，并重点说明 Ascend NPU 路径。PD 的工程价值主要出现在 P/D 负载不对称明显、Prefill 会扰动 Decode SLO、流量足以分别形成 P/D resource pool，且网络能够承担状态迁移成本的场景。
+
+</details>
 
 ## 一、拆开 Prefill 与 Decode 的动机和成本
 
@@ -184,7 +189,7 @@ Decode 复用已经算好的 Prompt 状态，从 handoff token 的 Forward 继�
 
 ## 三、Bootstrap 与目标资源预分配
 
-理解 PD 最容易犯的第二个错误，是把生命周期画成绝对串行：
+目标地址需要先准备好，才能发送状态。但不能据此把计算也画成下面这样绝对串行的过程：
 
 ~~~text
 Decode 完成全部 prealloc
@@ -611,7 +616,7 @@ BootstrapServer
 
 [`TransferBackend / get_kv_class()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/disaggregation/utils.py#L579-L698)
 
-Ascend path 最容易被误解的地方，是类继承关系里出现了很多 `Mooncake` 名字：
+Ascend 路径继承了多个带有 `Mooncake` 名字的类。阅读时要继续追踪它覆盖了哪些方法，不能仅凭类名判断传输实现：
 
 ~~~python
 class AscendKVManager(MooncakeKVManager):

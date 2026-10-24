@@ -4,15 +4,18 @@ Scheduler 通常把一轮投机解码作为一次 DECODE 工作交给 Spec Worke
 
 开启 Overlap 后，设备已经确定的下一轮输入可能领先于 CPU 完成的结果处理。本文跟随同一条请求说明这种错开如何由序列长度、KV 预留、publish 和 FutureMap 管理，再把 Mixed Tail 的特殊交接放到进阶部分。
 
+<details markdown="1">
+<summary>源码版本与阅读范围</summary>
+
 > **源码基线**：本文基于 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。重点覆盖当前 Spec V2 Scheduler、EAGLE / EAGLE3、DSpark、DFLASH、UNO、NGRAM 及 overlap relay。
 >
 > 本篇关注 **Scheduler ownership、跨轮时钟、KV watermark、forward transaction 与 overlap relay**。
 
+</details>
+
 ## 一、Scheduler 与 Spec Worker 的分工
 
-理解 Speculative Scheduler 最容易犯的错误，是把 Scheduler 状态和 speculative algorithm 状态混成一层。
-
-实际上至少有两层。
+Scheduler 决定请求何时执行、预留多少空间；Spec Worker 决定本轮怎样提出和验证候选。两者维护的状态范围不同，需要分别看。
 
 ### 第一层：Scheduler Macro State
 
@@ -247,7 +250,7 @@ ForwardBatch:
 
 > **这些对象不再保证在任意瞬间都显示同一个 sequence length。**
 
-这不是 bug，而是设计。
+这些长度分别服务于 CPU 结果处理、设备执行和下一轮交接，更新时刻也不同。检查状态时，需要先确认读到的是哪个阶段的进度。
 
 ---
 
@@ -325,9 +328,7 @@ resolve commits the full accepted run uniformly.
 
 ### `ScheduleBatch.seq_lens`：本轮 Device Forward Frontier
 
-这一项最容易和前两个混淆。
-
-Spec V2 的约定是：
+前两个长度描述请求记录，这里的长度用于本轮设备执行。Spec V2 的约定是：
 
 ```text
 batch.seq_lens
