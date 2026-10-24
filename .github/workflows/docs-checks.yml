@@ -12,7 +12,7 @@ permissions:
 jobs:
   docs:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -27,6 +27,9 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r site/requirements.txt
+      - run: npm install -g pnpm@11.25.0
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: sudo apt-get update -qq && sudo apt-get install -y fonts-noto-cjk
       - name: Build and validate reading site
         run: |
           python3 scripts/check_math.py

@@ -1,4 +1,4 @@
-import {rankSearchResults} from './search.mjs';
+import {rankSearchResults, matchesQuery, highlightTerms} from './search.mjs';
 function safeFragment(hash) { try { return decodeURIComponent(hash.slice(1)); } catch { return hash.slice(1); } }
 const base = new URL('../', import.meta.url);
 const $ = selector => document.querySelector(selector);
@@ -13,9 +13,9 @@ const media = matchMedia('(prefers-color-scheme: dark)');
 media.addEventListener('change', event => { try { if (localStorage.getItem('aki-theme')) return; } catch {} document.documentElement.dataset.theme = event.matches ? 'dark' : 'light'; themeLabel(); updateDiagrams(); });
 
 const search = $('#search-dialog'), input = $('#search-input'), results = $('#search-results');
-let indexPromise, searchRevision = 0, searchTimer;
+let indexPromise, searchRevision = 0, searchTimer, searchLimit = 15, searchOpener;
 function highlight(node, value, query) {
-  const terms = [...new Set(query.trim().toLowerCase().split(/\s+/).filter(Boolean))];
+  const terms = highlightTerms(query);
   if (!terms.length) { node.textContent = value; return; }
   const lower = value.toLowerCase();
   let cursor = 0;
@@ -29,7 +29,7 @@ function highlight(node, value, query) {
   }
 }
 async function searchArticles() {
-  const revision = ++searchRevision, query = input.value.trim(), needle = query.toLowerCase();
+  const revision = ++searchRevision, query = input.value.trim();
   try {
     if (!indexPromise) indexPromise = fetch(new URL('search.json', base), {cache:'no-cache'}).then(r => { if (!r.ok) throw Error(); return r.json(); }).catch(error => { indexPromise = null; throw error; });
     const articles = await indexPromise;
@@ -41,21 +41,27 @@ async function searchArticles() {
       const mascot = document.createElement('span'); mascot.className = 'mascot mascot-lost'; mascot.setAttribute('aria-hidden', 'true');
       const message = document.createElement('p'); message.textContent = '还没有找到相关内容，换一个关键词试试。'; empty.append(mascot, message); results.append(empty); return;
     }
-    const count = document.createElement('p'); count.className = 'search-count'; count.textContent = `找到 ${found.length} 篇内容${found.length > 15 ? '，显示前 15 篇；可增加关键词缩小范围' : ''}`; results.append(count);
-    for (const result of found.slice(0, 15)) {
+    const count = document.createElement('p'); count.className = 'search-count'; count.textContent = `找到 ${found.length} 篇内容${found.length > searchLimit ? `，已显示 ${searchLimit} 篇` : ''}`; results.append(count);
+    for (const result of found.slice(0, searchLimit)) {
       const link = document.createElement('a'); link.href = result.article.url + (result.anchor ? '#' + encodeURIComponent(result.anchor) : ''); link.className = 'search-result';
       const title = document.createElement('strong'); highlight(title, result.article.title, query); link.append(title); const type = document.createElement('span'); type.className = 'result-heading'; type.textContent = result.article.kind === 'skill' ? 'Skill · 介绍与使用' : '文章 · ' + result.article.topic; link.append(type);
       if (result.heading) { const heading = document.createElement('span'); heading.className = 'result-heading'; highlight(heading, result.heading + ' ↗', query); link.append(heading); }
-      const excerpt = document.createElement('span'); excerpt.className = 'result-excerpt'; const positions = needle.split(/\s+/).filter(Boolean).map(term => result.text.toLowerCase().indexOf(term)).filter(at => at >= 0); const pos = positions.length ? Math.min(...positions) : 0; const start = Math.max(0, pos - 28); const snippet = (start ? '…' : '') + result.text.slice(start, start + 130) + (result.text.length > start + 130 ? '…' : ''); highlight(excerpt, snippet, query); link.append(excerpt);
+      const excerpt = document.createElement('span'); excerpt.className = 'result-excerpt'; const positions = highlightTerms(query).map(term => result.text.toLowerCase().indexOf(term)).filter(at => at >= 0); const pos = positions.length ? Math.min(...positions) : 0; const start = Math.max(0, pos - 28); const snippet = (start ? '…' : '') + result.text.slice(start, start + 130) + (result.text.length > start + 130 ? '…' : ''); highlight(excerpt, snippet, query); link.append(excerpt);
       link.addEventListener('click', () => search.close()); results.append(link);
     }
-  } catch { if (revision === searchRevision) results.textContent = '搜索暂时无法加载，请稍后重试，或从文章目录浏览。'; }
+    if (found.length > searchLimit) {
+      const more = document.createElement('button'); more.className = 'search-more'; more.textContent = '再显示 15 篇';
+      more.addEventListener('click', async () => { const offset = results.scrollTop, previous = searchLimit; searchLimit += 15; await searchArticles(); results.scrollTop = offset; results.querySelectorAll('.search-result')[previous]?.focus({preventScroll:true}); });
+      results.append(more);
+    }
+  } catch { if (revision === searchRevision) { results.textContent = '搜索暂时无法加载。'; const link = document.createElement('a'); link.href = new URL('articles/', base); link.textContent = '从文章目录浏览 →'; results.append(link); } }
 }
-function openSearch() { if (search.open) return; search.showModal(); input.focus(); searchArticles(); }
-$('.search-trigger').addEventListener('click', openSearch);
-$('.archive-search')?.addEventListener('click', openSearch);
+function openSearch(query) { if (search.open) return; searchOpener = document.activeElement; if (typeof query === 'string') input.value = query; searchLimit = 15; search.showModal(); input.focus(); searchArticles(); }
+$('.search-trigger').addEventListener('click', () => openSearch());
+$('.archive-search')?.addEventListener('click', () => openSearch($('#catalog-query')?.value));
+search.addEventListener('close', () => searchOpener?.focus({preventScroll:true}));
 $('.close-search').addEventListener('click', () => search.close());
-input.addEventListener('input', () => { clearTimeout(searchTimer); searchRevision++; searchTimer = setTimeout(searchArticles, 120); });
+input.addEventListener('input', () => { searchLimit = 15; clearTimeout(searchTimer); searchRevision++; searchTimer = setTimeout(searchArticles, 120); });
 search.addEventListener('keydown', event => {
   const links = [...results.querySelectorAll('a')];
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!links.length) return; const i = links.indexOf(document.activeElement); const next = event.key === 'ArrowDown' ? (i + 1) % links.length : (i <= 0 ? links.length - 1 : i - 1); links[next].focus(); }
@@ -67,6 +73,23 @@ async function copyText(text, button, success) { try { await navigator.clipboard
 $('.copy-link')?.addEventListener('click', event => copyText(location.href, event.currentTarget, '页面链接已复制'));
 for (const block of document.querySelectorAll('.prose pre:not(.mermaid)')) { const button = document.createElement('button'); button.className = 'copy-code'; button.textContent = '复制代码'; button.setAttribute('aria-label', '复制代码'); button.addEventListener('click', () => copyText(block.querySelector('code')?.textContent || '', button, '代码已复制')); block.append(button); }
 for (const link of document.querySelectorAll('.mobile-toc a')) link.addEventListener('click', () => { const panel = link.closest('details'); panel.open = false; });
+const tocDialog = $('#toc-dialog'), tocButton = $('.toc-fab');
+if (tocDialog && tocButton) {
+  tocButton.hidden = false;
+  tocButton.addEventListener('click', () => tocDialog.showModal());
+  $('.close-toc').addEventListener('click', () => tocDialog.close());
+  tocDialog.addEventListener('close', () => tocButton.focus({preventScroll:true}));
+  for (const link of tocDialog.querySelectorAll('a')) link.addEventListener('click', () => tocDialog.close());
+}
+const tableRegions = [...document.querySelectorAll('.table-scroll')];
+function updateTableHints() {
+  for (const region of tableRegions) {
+    const hint = region.parentElement.querySelector('.table-hint');
+    if (hint) hint.hidden = region.scrollWidth <= region.clientWidth + 1;
+  }
+}
+updateTableHints();
+window.addEventListener('resize', updateTableHints);
 // A directory or search link may point into an optional implementation section.
 function revealFragment(hash = location.hash) {
   const target = document.getElementById(safeFragment(hash));
@@ -89,13 +112,12 @@ if ($('.prose')) {
   let scheduled = false;
   const update = () => { const doc = document.documentElement; progress.style.width = (doc.scrollTop / Math.max(1, doc.scrollHeight - doc.clientHeight) * 100) + '%'; let current = headings[0]; for (const heading of headings) { if (!heading.getClientRects().length) continue; if (heading.getBoundingClientRect().top < $('.header').getBoundingClientRect().height + 110) current = heading; else break; } for (const link of links) { const selected = current && decodeURIComponent(link.hash.slice(1)) === current.id; link.classList.toggle('current', !!selected); if (selected) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); } scheduled = false; };
   window.addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, {passive:true}); window.addEventListener('resize', update); update();
-  // Highlighting and diagrams load independently; failure of one does not delay the other.
-  (async () => { try { const {default:hljs} = await import('https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/es/highlight.min.js'); const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/styles/github-dark.min.css'; document.head.append(css); document.querySelectorAll('.prose pre code').forEach(c => hljs.highlightElement(c)); } catch {} })();
+  // Formulas and highlighting are static HTML. Only interactive diagrams need JS.
   (async () => {
     const diagrams = [...document.querySelectorAll('.mermaid')].map(node => ({node, source:node.textContent}));
     if (!diagrams.length) return;
     try {
-      const {default:mermaid} = await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs');
+      const {default:mermaid} = await import(new URL('vendor/mermaid.js', import.meta.url));
       let rendering = false, pending = false, generation = 0;
       updateDiagrams = async () => {
         if (rendering) { pending = true; return; } rendering = true;
@@ -283,25 +305,12 @@ if (document.body.classList.contains('article-page') && !document.body.classList
   window.addEventListener('pagehide',savePosition);
 }
 
-// Load the formula renderer only on pages that contain display mathematics.
-if (document.querySelector('.math-block')) {
-  (async () => {
-    try {
-      const {default: katex} = await import('https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.mjs');
-      const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css'; document.head.append(css);
-      document.querySelectorAll('.math-block').forEach(node => {
-        katex.render(node.textContent, node, {displayMode:true, throwOnError:false, trust:false, output:'htmlAndMathml'});
-      });
-    } catch { /* Preserve readable TeX if the CDN is unavailable. */ }
-  })();
-}
-
 // Progressive enhancements remain optional: all article links work without storage or JS.
 const menu = $('#menu-dialog'), menuButton = $('.menu-toggle');
 menuButton.hidden = false;
 menuButton.addEventListener('click', () => menu.showModal());
 $('.close-menu').addEventListener('click', () => menu.close());
-for (const button of document.querySelectorAll('[data-search-query]')) button.addEventListener('click', () => { input.value = button.dataset.searchQuery; input.focus(); searchArticles(); });
+for (const button of document.querySelectorAll('[data-search-query]')) button.addEventListener('click', () => { input.value = button.dataset.searchQuery; searchLimit = 15; input.focus(); searchArticles(); });
 document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !event.altKey) {
     if (document.querySelector('dialog[open]') && !search.open) return;
@@ -343,12 +352,11 @@ if (catalog) {
   $('.catalog-tools').hidden = false; $('.archive-search').hidden = false;
   function restoreFilters() { const params = new URL(location.href).searchParams; query.value = params.get('q') || ''; sort.value = ['updated','shortest'].includes(params.get('sort')) ? params.get('sort') : 'recommended'; savedOnly = params.get('saved') === '1'; refreshCatalog(); }
   refreshCatalog = () => {
-    const terms = query.value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
     const ordered = [...cards];
     if (sort.value === 'updated') ordered.sort((a,b) => b.dataset.modified.localeCompare(a.dataset.modified));
     if (sort.value === 'shortest') ordered.sort((a,b) => Number(a.dataset.minutes) - Number(b.dataset.minutes));
     let count = 0;
-    for (const card of ordered) { card.hidden = !terms.every(term => card.dataset.search.toLocaleLowerCase().includes(term)) || (savedOnly && bookmarks[card.dataset.url] !== true); if (!card.hidden) count++; catalog.append(card); }
+    for (const card of ordered) { card.hidden = !matchesQuery(card.dataset.search, query.value) || (savedOnly && bookmarks[card.dataset.url] !== true); if (!card.hidden) count++; catalog.append(card); }
     $('[data-catalog-count]').textContent = count + ' / ' + cards.length + ' 篇文章'; $('.catalog-empty').hidden = count !== 0; savedButton.setAttribute('aria-pressed', String(savedOnly));
   };
   function updateFilters() { refreshCatalog(); const url = new URL(location.href); for (const [key,value] of [['q',query.value.trim()],['sort',sort.value === 'recommended' ? '' : sort.value],['saved',savedOnly ? '1' : '']]) { if (value) url.searchParams.set(key,value); else url.searchParams.delete(key); } history.replaceState(null,'',url); }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {rankSearchResults} from '../site/assets/search.mjs';
+import {rankSearchResults, matchesQuery} from '../site/assets/search.mjs';
 
 const articles = JSON.parse(readFileSync(new URL('../_site/search.json', import.meta.url), 'utf8'));
 for (const query of ['KV Cache', 'SGLang TP', 'DSpark', '不存在的关键词987xyz', '']) {
@@ -22,6 +22,13 @@ const ranked = rankSearchResults([longArticle, titleHit], 'KV Cache');
 assert.equal(ranked.length, 2);
 assert.equal(ranked[0].article, titleHit, 'Exact title should outrank section matches');
 assert.equal(ranked[1].anchor, 'section-0', 'Keep the best section deep link');
+for (const [a,b] of [['KVCache','KV Cache'],['KV 缓存','KV Cache'],['PD分离','PD 分离'],['首字延迟','TTFT'],['ALL_TO_ALL','All-to-All'],['投机解码','speculative decoding']]) {
+  assert.deepEqual(rankSearchResults(articles,a).map(r=>r.article.url),rankSearchResults(articles,b).map(r=>r.article.url), `Alias results differ: ${a} / ${b}`);
+}
+assert.equal(matchesQuery('TTFT 和 KV Cache', '首字延迟 KVCache'),true);
+assert.equal(matchesQuery('TPOT', 'ITL'),false, 'Distinct timing metrics must not become aliases');
+assert.equal(matchesQuery('AL', 'acceptance rate'),false, 'Acceptance length is not a measured acceptance rate');
+assert.equal(matchesQuery('updated settings','TTFT'),false);
 console.log(`Search checks passed: ${articles.length} documents, unique results, multi-term matching and section ranking.`);
 
 const redirects = JSON.parse(readFileSync(new URL('../site/redirects.json', import.meta.url), 'utf8'));

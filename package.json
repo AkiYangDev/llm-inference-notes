@@ -1,0 +1,17 @@
+{
+  "name": "llm-inference-notes-site",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "engines": {"node": ">=22.13"},
+  "scripts": {
+    "build": "python site/build.py",
+    "check": "node scripts/check_search.mjs"
+  },
+  "dependencies": {
+    "cheerio": "1.0.0",
+    "esbuild": "0.25.5",
+    "highlight.js": "11.11.1",
+    "katex": "0.16.22",
+    "mermaid": "11.4.1"
+  }
+}
