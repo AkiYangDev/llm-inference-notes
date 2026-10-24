@@ -1,8 +1,8 @@
 # DeepSeek-V4 Attention：Query、缓存写入与历史寻址
 
-一个 batch 可以把多条请求的 Token 放进同一个 Tensor，Attention 却必须让每一行读取自己的历史。这里有两条相互配合的数据流：hidden states 生成 Query，请求索引、位置和页表决定 Query 能访问哪些缓存。
+上一轮模型为 R1、R2 各生成一枚 Token，下一轮把它们打包成 `[T1,T2]` 送入设备。两枚 Token 在各自序列中都位于位置六，Attention 却要分别读取两套历史。理解这一步，需要同时追踪计算出来的 Query，以及让 Query 找到自己历史的请求映射。
 
-下面沿 DeepSeek-V4 的普通 Decode 路径追踪这两条线，先生成 Query 并写入当前状态，再找到请求历史，最后按当前层的配置组合滑窗与压缩信息。
+这里接着 [ModelRunner 的九行输入例子](sglang-modelrunner-source-analysis.md)，观察 DeepSeek-V4 在普通 Decode 中的一层 Attention：先准备当前查询与缓存，再按请求定位历史，最后由该层的压缩配置决定读什么。文中的短序列用于解释坐标，不代表专用前缀缓存可以按任意 Token 数匹配。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -13,144 +13,39 @@
 
 ## 一、为打包的 Token 保留请求坐标
 
-`DeepseekV4DecoderLayer.forward()` 在完成 mHC / norm 准备后，会把当前层的 hidden states、positions 和整份 `ForwardBatch` 一起交给 Attention：
+Prefill 已经为两条请求处理完各自六个位置，采样结果为 T1、T2。它们成为下一轮的模型输入，这轮执行使用 `positions=[6,6]`、`seq_lens=[7,7]`。序列位置从零计数，因此处理位置六后总长度是七。
 
-~~~python
-hidden_states = self.self_attn(
-    x=hidden_states,
-    positions=positions,
-    forward_batch=forward_batch,
-    x_quant=x_quant,
-)
-~~~
+经过 Embedding、mHC 和当前子层的归一化，Attention 收到 `x.shape=[2,H]`，其中 H 是隐藏维度。第一行属于 R1，第二行属于 R2。张量形状只说明有两行数据，不能单独表达哪行该读哪份历史，所以 Decoder Layer 还会传入 positions 与 `ForwardBatch`。固定版本的 `self.self_attn` 是 `MQALayer`。[`DeepseekV4DecoderLayer.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3006-L3189) [构造入口](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2693-L2710)
 
-固定版本入口见 [`DeepseekV4DecoderLayer.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3006-L3189)。
-
-这里的 `self.self_attn` 是 `MQALayer`。[构造入口](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2693-L2710)
-
-继续用前两篇里的两个请求。假设 Prefill 已经为它们各生成第一枚 token：
-
-~~~text
-R1 -> T1
-R2 -> T2
-~~~
-
-下一轮普通 Decode：
-
-~~~text
-input_ids = [T1, T2]
-seq_lens = [7, 7]
-positions = [6, 6]
-~~~
-
-经过 Embedding、mHC 和输入层归一化后，某一层 Attention 收到：`x.shape = [2, H]`
-
-其中 `x[0]` 属于 R1，`x[1]` 属于 R2。问题在于，单看 `x` 自己并没有“请求身份”。把它们区分开的，是继续同行的 `ForwardBatch`：
-
-| 信息 | 回答的问题 |
+| 随输入传递的信息 | 参与解决的问题 |
 | --- | --- |
-| `positions` | 当前 token 在自己的序列中处于哪个逻辑位置？ |
-| `seq_lens` | 这条请求到本轮为止有多长？ |
-| `req_pool_indices` | 这条请求对应 request-token 映射池中的哪一行？ |
-| `out_cache_loc` / DSV4 cache loc | 本轮新缓存应该写到哪个物理位置？ |
-| Attention metadata | 当前 Query 可以读取哪些历史页、每条序列边界在哪里？ |
+| `positions` | 当前 Token 在自己的序列中位于哪里 |
+| `seq_lens` | 每条请求到本轮推进到多长 |
+| `req_pool_indices` | 到请求映射池中找哪一行 |
+| `out_cache_loc` 与 DSV4 专用位置 | 新缓存写入哪些槽位 |
+| Attention metadata | 每条请求的查询边界、历史页表和有效范围 |
 
-因此标题里的“ForwardBatch 变成 Query”更准确的理解是：
+后面会出现三种坐标：打包 Tensor 的行号、请求内部的逻辑位置、设备缓存的物理位置。R1 的 T1 位于打包行零，R2 的 T2 位于打包行一，但它们的逻辑位置都可以是六，物理缓存落点又由分配器决定。把三者分开，才能看清为什么打包没有让请求上下文混到一起。
 
-> hidden states 负责产生 Query；ForwardBatch 负责告诉 Query 它是谁、它在哪里，以及它的过去被存在哪里。
-
-这里还需要先避开一个标准 MHA 的惯性理解。DeepSeek-V4 的 `MqaAttentionBase` 明确要求：
-
-~~~python
-assert config.num_key_value_heads == 1
-~~~
-
-并构造：
-
-~~~python
-self.attn_mqa = RadixAttention(
-    self.n_local_heads,
-    self.head_dim,
-    self.softmax_scale,
-    num_kv_heads=1,
-    ...
-)
-~~~
-
-源码见 [`MqaAttentionBase`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L742-L945) 和 [`MQALayer.__init__()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1041-L1193)。
-
-当前实现有多个 Query Heads，共享一套 KV / latent-cache 表示。后文沿用源码中的 `kv`、`k`、`v` 命名，并在读取缓存时说明它们对应的具体对象。
+DeepSeek-V4 的缓存形式还要对应模型实现。`MqaAttentionBase` 要求 `num_key_value_heads==1`，构造 Attention 参数时也使用 `num_kv_heads=1`。因此，这条路径有多个 Query head，却共享 KV 表示；不能按普通多头 Attention 为每个 Query head 各画一份独立 K/V 缓存。[`MqaAttentionBase`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L742-L945) [`MQALayer.__init__()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1041-L1193)
 
 ## 二、从 hidden states 生成 Query
 
-本节形状描述模型的逻辑 head 维。后端按算子要求补齐 Head 维后，设备实参可能比模型的逻辑 Head 数更大，输出再切回有效部分。
+Query 可以理解为当前输入用于访问历史的查询表示。`MQALayer` 先经过较窄的投影与归一化，再展开到各个本地 Query head；沿逻辑步骤看，形状如下：
 
-`MQALayer` 的 Query 主干采用低秩两阶段投影：
+```text
+x [T,H]
+   → wq_a → q_lora [T,Rq]
+   → q_norm
+   → wq_b → [T,Nlocal × D]
+   → 整理为 Q [T,Nlocal,D]
+```
 
-~~~text
-x
-[T, H]
-   |
-   | wq_a
-   v
-q_lora
-[T, Rq]
-   |
-   | q_norm
-   v
-normalized q_lora
-[T, Rq]
-   |
-   | wq_b
-   v
-Q
-[T, Nlocal * D]
-   |
-   | view
-   v
-[T, Nlocal, D]
-~~~
+T 是本轮新增 Token 行数，本例为二；Rq 是中间投影维度，Nlocal 是当前 Rank 的有效 Query head 数，D 是单个 head 的维度。实际配置可以把前段 Query 与 KV 投影融合为 `wqkv_a`，上图表达数据关系，不要求运行时一定出现相同数量的独立算子。[`_compute_q_a()` / `_compute_q_b()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1291-L1347)
 
-固定版本的辅助函数可以在 [`_compute_q_a()` / `_compute_q_b()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1291-L1347) 找到。实际配置可以把第一阶段 Query 和 KV 投影融合成 `wqkv_a`，因此图中按逻辑步骤画出数据流，融合后的执行入口可合并相邻投影。
+普通 NPU 单流准备路径形成 Q 后，还会对 head 表示做归一化，并将 RoPE 作用到对应的位置编码分量。固定版本的测试矩阵以 448 维非旋转部分、64 维旋转部分组成 512 维 head；这组数字来自对应测试配置，不能据此替代所有 Checkpoint 的参数。[`MQALayer._forward_prepare()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1750-L2095) [DSV4 Attention Capability Matrix](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/test/registered/attention/unittests/dsv4/README.md)
 
-核心维度来自：
-
-~~~python
-self.qk_rope_head_dim = config.qk_rope_head_dim
-self.qk_nope_head_dim = config.head_dim - config.qk_rope_head_dim
-self.head_dim = self.qk_rope_head_dim + self.qk_nope_head_dim
-~~~
-
-固定版本 DSV4 Attention 测试矩阵使用：
-
-~~~text
-qk_nope_head_dim = 448
-qk_rope_head_dim = 64
-head_dim          = 512
-~~~
-
-见 [DSV4 Attention Capability Matrix](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/test/registered/attention/unittests/dsv4/README.md)。
-
-因此一个 Query head 可以理解为：
-
-~~~text
-512 dims
-├── 448 NoPE dims
-└── 64  RoPE dims
-~~~
-
-普通 NPU 单流路径在 `MQALayer._forward_prepare()` 中形成 Q 后，还会对当前 head 表示进行归一化，并把位置编码作用到对应维度。固定源码见 [`MQALayer._forward_prepare()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1750-L2095)。
-
-当前两个 Decode token：`positions = [6, 6]`
-
-并不冲突。position 是“每条请求内部的逻辑位置”，不是 packed batch 的全局行号：
-
-~~~text
-Q[0] -> R1 position 6
-Q[1] -> R2 position 6
-~~~
-
-所以同一个 batch 中可以同时存在多个 position 6。
+两行 Q 使用的 positions 都是六，并不会冲突。RoPE 使用的是各条序列内部的位置，R1 和 R2 的历史边界另由请求映射决定。后端还可能按内核要求补齐 head 维，再把输出切回有效部分；这里的 Nlocal 描述逻辑 head 数，不能直接当作所有设备调用的实参宽度。
 
 ~~~mermaid
 flowchart TD
@@ -166,430 +61,102 @@ flowchart TD
     R --> QR[position-aware Query]
 ~~~
 
-当前 Query 已经准备好，接下来从长期缓存池读取历史。这些状态由此前 Prefill / Decode 逐步写入。
+到这里，当前查询已经形成。下一步要准备它能读取的状态，其中也包含本轮新增 Token 的缓存表示。
 
 ## 三、写入当前 Token 的缓存状态
 
-同一个当前层输入 `x` 还会产生本轮新的共享缓存表示。未融合时，基础投影是：
+同一份 x 还会经过 `wkv` 产生共享缓存表示。未融合时，`wkv` 的输出宽度是 `head_dim`，因此本例的概念形状为 `[2,D]`；NPU 路径继续执行 `kv_norm` 与 RoPE，再通过 `store_cache()` 写入对应层的 SWA 缓存。SWA 指滑窗 Attention，保留近期内容的细粒度表示。[`MQALayer._forward_prepare()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1750-L2095)
 
-~~~python
-kv, _ = self.wkv(x)
-~~~
+在本文限定的普通单流路径中，顺序是：
 
-`wkv` 的输出宽度是 `head_dim`，因此概念 shape 是：
+```text
+当前层输入 x
+  → 生成 Q 与共享缓存表示
+  → 写入本轮 SWA 槽位
+  → 按当前层需要准备 indexer / compressor 状态
+  → 调用主 Attention 后端读取缓存
+```
 
-~~~text
-x
-[T, H]
-   |
-   | wkv
-   v
-new cache representation
-[T, D]
-~~~
+这也适用于理解 Prefill：整个 chunk 的缓存可以先写入池，再由查询边界、有效长度与因果约束限制各行能读哪些位置。“存进去了”和“当前查询能够访问”属于不同条件，不能用写入顺序代替可见范围。
 
-普通 NPU 单流分支会继续对它做 `kv_norm` 和 RoPE，然后调用：
+读 `MQALayer.forward()` 时会遇到一段看起来容易矛盾的代码：准备路径写完缓存后，将局部 `kv` 设为 `None`，后续却仍向统一接口传入 k、v。关键是看后端从哪里取数据。[`MQALayer.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2097-L2585)
 
-~~~python
-attn_backend.store_cache(
-    layer_id=self.layer_id,
-    swa_k=kv_for_cache,
-    forward_batch=forward_batch,
-)
-~~~
-
-也就是说，在本文代表路径里：
-
-> **当前 token / 当前 Prefill chunk 的 SWA 缓存先被写入 pool，随后才调用主 Attention backend。**
-
-源码就在 [`MQALayer._forward_prepare()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1750-L2095)。
-
-Prefill 可以先将整个 Chunk 的缓存写入 Pool，再由 Attention Metadata、序列边界和 Mask 限定每个 Query 的可见范围。存储已经就绪，因果访问仍按各 Query 的位置控制。
-
-在 SWA 写入之后，如果这一层存在 C4 indexer / compressor，相关压缩状态也会在 `_forward_prepare()` 返回之前完成准备；随后 `MQALayer.forward()` 才进入主 Attention。
-
-当前普通 NPU 路径写完缓存后会把局部变量 `kv` 设为 `None`。接下来的代码：
-
-~~~python
+```python
+# 摘录接口交接关系，省略其他参数与平台分支。
 attn_k = kv if kv is not None else q
-~~~
+# 随后向后端传入 k=attn_k、v=attn_k。
+```
 
-然后调用：
+这条普通 NPU 路径已经提前写入缓存，并传入 `save_kv_cache=False`。此时 q 是接口占位对象，主 Attention 从 Cache Pool 读取历史，不是把当前 Query 当成整段历史 K/V。通用 DSV4 后端的 `k is v` 检查描述的是参数对象共享；它也不能单独说明底层缓存怎样存储。[`DeepseekV4AttnBackend._forward_attention()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/attention/deepseek_v4_backend.py#L3715-L3750)
 
-~~~python
-attn_backend.forward(
-    q=attn_q,
-    k=attn_k,
-    v=attn_k,
-    ...
-    save_kv_cache=False,
-)
-~~~
-
-固定入口见 [`MQALayer.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2285-L2375)。
-
-这里需要同时看参数对象与后端读取位置。
-
-源码确实把同一个对象同时传给 `k` 和 `v`。通用 DSV4 backend 甚至有：
-
-~~~python
-assert k is v, "DeepseekV4 shares k and v"
-~~~
-
-见 [`DeepseekV4AttnBackend._forward_attention()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/attention/deepseek_v4_backend.py#L3715-L3750)。
-
-普通 NPU 路径已提前把缓存写入 Pool，并设置 `save_kv_cache=False`。此时 `attn_k=q` 用作统一接口的 sentinel，主 Attention 从 Cache Pool 读取历史。
-
-因此，这里的 `k is v` 描述接口对象共享。理解其数据含义时，继续追踪后端访问的缓存表示和 Pool。
-
-~~~mermaid
-flowchart TD
-    X[current hidden states] --> Q[build Query]
-    X --> C[build current cache representation]
-    C --> W[write SWA cache]
-
-    W --> P[prepare optional C4/C128 state]
-    P --> A[Attention backend]
-    Q --> A
-
-    H[historical cache pool] --> A
-
-    W -. physical write timing .-> N[logical visibility still comes from metadata and masks]
-~~~
+因此，分析这一步应同时确认两处：谁负责写缓存，主 Attention 又从哪个池读取。只沿局部变量名 k、v 追踪，容易错过真正的数据来源。下面继续沿请求索引找到这些历史位置。
 
 ## 四、用请求映射和页表找到历史
 
-写入缓存解决的是“当前 token 的状态放在哪里”。读取历史还需要反方向回答：
+`req_pool_indices` 把当前 batch 中的请求指向 request-token 映射池。元数据准备阶段再从对应请求行取得 Token 到缓存槽位的映射，构造 Attention 使用的页表。映射池保存关系，KV Pool 保存实际表示，两者共同把逻辑位置接到物理存储。[`AscendAttnBackend.init_forward_metadata()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py#L479-L540)
 
-> 当前 Query 属于哪个请求？这个请求之前的 token 被放在缓存池的哪些物理页？
+例如，请求池索引可以是 `req_pool_indices=[5,9]`。那么打包行零的 Q 沿请求行五定位 R1 历史，打包行一的 Q 沿请求行九定位 R2 历史。五和九是教学用索引，与当前 batch 的零、一行号无须相同，也不是物理页地址。
 
-这条映射从 `ForwardBatch.req_pool_indices` 开始。
+```text
+Q[0] → R1 → 请求映射行 5 → R1 的历史页 → R1 的缓存表示
+Q[1] → R2 → 请求映射行 9 → R2 的历史页 → R2 的缓存表示
+```
 
-Ascend backend 在 forward 前构造 metadata 时，会读取 request-token pool：
-
-~~~python
-self.forward_metadata.block_tables = (
-    self.req_to_token_pool.req_to_token[
-        forward_batch.req_pool_indices,
-        :seq_lens_max
-    ][:, :: self.page_size]
-    // self.page_size
-)
-~~~
-
-固定源码见 [`AscendAttnBackend.init_forward_metadata()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py#L479-L540)。
-
-可以把两层 pool 的职责分开：
-
-~~~text
-ReqToTokenPool
-回答：
-“请求 R1 的逻辑 token 0、1、2... 映射到哪些 cache slot？”
-
-TokenToKVPool / DSV4 pools
-回答：
-“这些 slot 上真正保存的 Attention cache bytes / tensors 是什么？”
-~~~
-
-因此历史读取链是：
-
-~~~text
-req_pool_index
-      ↓
-req_to_token[row, logical_position]
-      ↓
-physical token/cache locations
-      ↓
-block / page tables
-      ↓
-SWA / compressed cache pools
-~~~
-
-假设教学示例中：
-
-~~~text
-R1 req_pool_index = 3
-R2 req_pool_index = 8
-~~~
-
-那么即使当前：`input_ids = [T1, T2]`
-
-两个 token 在同一个 packed Tensor 中，backend 仍会分别沿：
-
-~~~text
-req_to_token[3, ...]
-req_to_token[8, ...]
-~~~
-
-构造两套历史映射。
-
-~~~text
-Q0 -> R1 page table -> R1 cache pages
-Q1 -> R2 page table -> R2 cache pages
-~~~
-
-而不会变成：`Q0 / Q1 -> 同一整块历史`
-
-这就是 packed batching 不会导致请求上下文串线的关键原因。
+即使两条请求同在一个打包 Tensor，后端仍按各自映射与有效范围访问历史。相邻存储只改变输入组织方式，不会取消请求边界。对于 DeepSeek-V4，后续还要结合滑窗及对应压缩缓存的页表，不能把基础请求映射当成全部寻址过程。
 
 ### Prefill 与 Decode 的 metadata 差异
 
-`DeepseekV4AscendAttnBackend.init_forward_metadata()` 会进一步构造 DSV4 所需的 Query / KV 长度 metadata。[固定源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L1837-L1930)
+除了找到历史，后端还需要知道每条请求在本轮占多少 Query 行。这个数量与请求当前总长度不同：此前 Prefill 中 R1 新增六行，R2 新增三行，两条请求的总长度却都是六。`DeepseekV4AscendAttnBackend.init_forward_metadata()` 为 Query 与 KV 分别准备长度信息。[`DeepseekV4AscendAttnBackend.init_forward_metadata()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L1837-L2045)
 
-继续用前文普通、无 speculative / CP / padding 的两个请求。
+普通 Prefill 先对本轮新增长度 `[6,3]` 累计，得到 Query 结束位置 `[6,9]`，再在前面补零得到 `[0,6,9]`。这组边界把九行 Q 划成两段。下一轮普通 Decode 每请求只有一行，边界就变成 `[0,1,2]`。
 
-Prefill 时：
-
-~~~text
-extend_seq_lens = [6, 3]
-seq_lens        = [6, 6]
-~~~
-
-源码首先计算累计 Query 结束位置：
-
-~~~text
-actual_seq_lengths_q
-=
-[6, 9]
-~~~
-
-再在前面补 0：
-
-~~~text
-actual_seq_lengths_q_pa
-=
-[0, 6, 9]
-~~~
-
-而 KV 有效长度是：
-
-~~~text
-actual_seq_lengths_kv
-=
-[6, 6]
-~~~
-
-三者的语义不要混淆：
-
-~~~text
-actual_seq_lengths_q      = 每条请求 Query 的累计结束位置
-actual_seq_lengths_q_pa   = 带 leading 0 的 Query 边界
-actual_seq_lengths_kv     = 每条请求当前可用 KV 长度
-~~~
-
-~~~text
-Query rows 0..5 -> R1
-Query rows 6..8 -> R2
-~~~
-
-到了下一轮普通 Decode：
-
-~~~text
-batch_size = 2
-seq_lens   = [7, 7]
-~~~
-
-源码直接构造：
-
-~~~text
-actual_seq_lengths_q
-=
-[1, 2]
-
-actual_seq_lengths_q_pa
-=
-[0, 1, 2]
-
-actual_seq_lengths_kv
-=
-[7, 7]
-~~~
-
-于是同一个 backend 面对的是：
-
-| | Prefill | Decode |
+| 后端元数据 | 普通 Prefill | 下一轮普通 Decode |
 | --- | --- | --- |
-| packed Query rows | 9 | 2 |
-| 每请求新 Query 数 | R1=6, R2=3 | R1=1, R2=1 |
+| 本轮打包 Query 行数 | 9 | 2 |
+| 每请求新 Query 数 | R1=6，R2=3 | R1=1，R2=1 |
+| `actual_seq_lengths_q` | `[6,9]` | `[1,2]` |
 | `actual_seq_lengths_q_pa` | `[0,6,9]` | `[0,1,2]` |
 | `actual_seq_lengths_kv` | `[6,6]` | `[7,7]` |
 
-这张表比“Prefill 处理 prompt、Decode 处理一个 token”更接近真实算子视角：Prefill 有较多 Query rows；Decode 的 Query 很少，但历史 KV 长度会持续增长。
-
-~~~mermaid
-flowchart TD
-    F[ForwardBatch] --> R[req_pool_indices]
-    F --> L[seq_lens]
-
-    R --> RT[ReqToTokenPool]
-    L --> RT
-    RT --> B[Block / Page Tables]
-    B --> C[Physical Cache Pools]
-
-    F --> M[Query / KV length metadata]
-
-    Q[current Query] --> A[DSV4 Attention Backend]
-    B --> A
-    C --> A
-    M --> A
-
-    A --> O[Attention Output]
-~~~
+表中 Query 行数回答“这轮算多少”，KV 有效长度回答“各请求已经推进到哪里”，缓存池容量回答“设备上还能放多少”。它们不能互换。这里采用普通、无投机、无 CP 和额外 padding 的示例；Target Verify 等模式的查询组织另有分支，不直接套用每请求一行。
 
 ## 五、按层选择 SWA、C4 与 C128
 
-每层按压缩配置选择 SWA、SWA+C4 或 SWA+C128，后端再组织对应的访问。
-
-每个 `MQALayer` 都有自己的：
-
-~~~python
-self.compress_ratio = config.compress_ratios[layer_id]
-~~~
-
-对于本文 DeepSeek-V4 + Ascend backend 主线，主 Attention 接口接受：`compress_ratio = 0 / 4 / 128`
-
-源码见 [`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2075)。
-
-因此应该画成“每层选择一条结构”：
-
-~~~mermaid
-flowchart TD
-    L[One MQALayer] --> R{compress_ratio}
-
-    R -->|0| S0[SWA only]
-
-    R -->|4| S4[SWA plus C4 compressed history]
-    S4 --> I[C4 Indexer selects Top-K compressed positions]
-
-    R -->|128| S128[SWA plus C128 compressed history]
-~~~
-
-~~~text
-Layer A: ratio 0
--> SWA only
-
-Layer B: ratio 4
--> SWA + C4
-
-Layer C: ratio 128
--> SWA + C128
-~~~
+有了请求边界和历史位置，还要确定当前层使用哪种历史表示。本文固定版本的 Ascend DSV4 主 Attention 接口接受 `compress_ratio=0/4/128`：每层按自己的配置选择一类路径，而不是每层都把三类依次执行一遍。[`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189)
 
 ### ratio = 0：只读取 SWA
 
-当 `compress_ratio == 0`，Ascend backend 进入 `_forward_swa()`。
-
-它从 pool 获取当前层的 SWA buffer，并把：
-
-~~~text
-actual_seq_lengths_q_pa
-actual_seq_lengths_kv
-swa_page_table
-kernel_metadata
-~~~
-
-一起交给 NPU sparse attention operator。[源码：`_forward_swa()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2077-L2116)
-
-固定版本 backend 在模型没有显式 sliding-window 配置时使用 128 作为 DSV4 fallback window。这一窗口保留近期高分辨率历史；模型显式提供 sliding-window 配置时，使用相应配置值。
+比例为零时进入 `_forward_swa()`，从池中取当前层 SWA buffer，连同查询边界、KV 有效长度、滑窗页表及窗口参数交给 NPU Attention 算子。近期历史保留在这个滑窗路径中。固定版本在模型未显式提供 sliding-window 配置时使用 128 作为 DSV4 fallback window；模型提供配置时以相应值为准。[源码：`_forward_swa()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2077-L2116)
 
 ### ratio = 4：SWA + C4，且 C4 有两套不同职责的压缩状态
 
-当 `compress_ratio == 4`，`MQALayer.__init__()` 会创建：
+C4 层既有主 Attention 使用的 core Compressor，也有 `C4Indexer`，后者内部还包含自己的 Compressor。主缓存压缩与索引器压缩服务于不同的数据用途，不能看到两个 Compressor 就把它们算成同一份状态。[源码：MQALayer](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1115-L1173) [源码：C4Indexer](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/attention/dsv4/indexer.py#L1125-L1240)
 
-~~~text
-core Compressor
-+
-C4Indexer
-~~~
+core Compressor 产生 C4 压缩历史，Indexer 则为当前查询选择要访问的压缩位置。普通单流路径在主 Attention 之前准备这些状态，索引结果写入 `forward_metadata.c4_topk_indices`；后端将其作为 `cmp_sparse_indices`，限制压缩侧的读取位置。SWA 历史仍同时参与 Attention。[`forward_c4_indexer()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L875-L901) [源码：`_forward_compressed()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2118-L2189)
 
-而 `C4Indexer` 内部还拥有**自己的 Compressor**。[源码：MQALayer](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1115-L1173) [源码：C4Indexer](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/attention/dsv4/indexer.py#L1125-L1240)
-
-所以 C4 更准确的准备链是：
-
-~~~text
-当前 hidden states
-      |
-      +--> indexer compressor
-      |       |
-      |       v
-      |   indexer key/history
-      |       |
-      |       v
-      |   C4 Indexer scoring
-      |       |
-      |       v
-      |   c4_topk_indices
-      |
-      +--> core compressor
-              |
-              v
-         C4 Attention compressed history
-~~~
-
-普通 NPU 单流路径中，这些工作都在主 Attention 调用之前完成。Indexer 最终把选择结果写入：
-
-~~~python
-self.forward_metadata.c4_topk_indices
-~~~
-
-见 [`forward_c4_indexer()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L875-L901)。
-
-主 C4 Attention 随后既读取 SWA 历史，也读取 core compressor 产生的 C4 压缩历史；其中压缩侧通过：
-
-~~~python
-cmp_sparse_indices = c4_topk_indices
-~~~
-
-只访问 Indexer 选出的 compressed positions。[源码：`_forward_compressed()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2118-L2189)
-
-C4 Indexer 为主 Attention 选择要读取的压缩历史位置：
-
-> 给 C4 compressed history 生成稀疏读取索引的侧路检索器。
+这层的 TopK 选择的是压缩历史位置，与 MoE Router 选择专家是两套不同机制。把它放回本轮请求中看：当前 Q 已经确定，Indexer 帮助定位它需要读取的部分压缩历史，主 Attention 再消费这些表示。
 
 ### ratio = 128：SWA + C128，但没有 C4 Top-K 索引
 
-`compress_ratio == 128` 同样会创建 core Compressor，却不会创建 `C4Indexer`。
+C128 层同样构造 core Compressor，保留压缩历史，但不创建 C4Indexer。后端同时传入 SWA 与 C128 缓存，将 `cmp_sparse_indices` 设为 `None`，因此没有 C4 的 TopK 位置筛选步骤。读取仍受请求、长度和相应算子规则约束，不是访问其他请求的压缩缓存。[源码：`_forward_compressed()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2118-L2189)
 
-主 Attention 仍然同时拿：
-
-~~~text
-SWA history
-+
-C128 compressed history
-~~~
-
-但源码把：
-
-~~~python
-cmp_sparse_indices = None
-~~~
-
-因此没有 C4 那条 Top-K 稀疏索引路径。[源码：`_forward_compressed()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2118-L2189)
-
-所以三类层的区别可以压缩成：
-
-| 层类型 | 近期历史 | 压缩历史 | 额外 Indexer |
+| 当前层类型 | 近期历史 | 压缩历史 | 额外索引器 |
 | --- | --- | --- | --- |
 | ratio 0 | SWA | 无 | 无 |
-| ratio 4 | SWA | C4 | C4 Top-K Indexer |
-| ratio 128 | SWA | C128 | 无 C4 Top-K |
+| ratio 4 | SWA | C4 | C4 TopK |
+| ratio 128 | SWA | C128 | 无 C4 TopK |
 
-计算 DeepSeek-V4 的缓存容量时，分别核算 SWA Pool、Compressed Pool、Compressor State、C4 Indexer State 和页表，再结合各自布局与 dtype 求和。
+压缩比例描述历史表示方式，不表示每生成一枚 Token 就必定增加一条完整压缩记录。计算缓存占用时，还要分别核算 SWA、压缩池、Compressor State、C4 Indexer State 和页表，结合实际布局、dtype 与分配情况求和。仅用序列长度乘上一份普通多头 KV 大小，无法覆盖这里的状态。
 
 ## 六、把请求坐标与 Attention 输出连起来
 
-回到 R1、R2 的普通 Decode：`input_ids=[T1,T2]`，`positions=[6,6]`，`seq_lens=[7,7]`。两行 hidden states 可以在同一 Tensor 中计算，读取历史时则分别使用各自的请求映射。
+回到本轮的 T1、T2：它们形成两行当前查询，分别在各自请求的逻辑位置六写入新增状态，再通过请求映射、有效长度与当前层页表读取历史。比例为零的层走 SWA；C4 层还读取 Indexer 选中的压缩历史；C128 层读取相应压缩表示。
 
-| 当前对象 | 本轮发生的变化 | 保持请求隔离的依据 |
-| --- | --- | --- |
-| hidden states | 投影成当前 Query 与缓存表示 | Token 行仍与请求对应 |
-| 当前缓存 | 写入各自的 SWA 槽位，并更新该层需要的压缩状态 | 本轮写入位置 |
-| 历史寻址 | 查到 SWA 及当前层需要的压缩条目 | 请求映射、页表和有效长度 |
-| Attention 输出 | 经过输出投影，回到 token-major hidden states | 每行输出对应原输入 Token |
+Attention 结果随后经过 inverse-RoPE 及 `wo_a`、`wo_b` 等输出处理，回到 Token 对应的 hidden states，再交给后续子层。输出行的对应关系仍与输入一致：R1 的结果回到 R1，R2 的结果回到 R2。[Attention 后的 inverse-RoPE、`wo_a`、`wo_b`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2360-L2585)
 
-`compress_ratio=0/4/128` 分别选择 SWA、SWA 加选中的 C4 历史、SWA 加 C128 历史。它们是不同层的配置选择。[Attention 后的 inverse-RoPE、`wo_a`、`wo_b`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L2360-L2585) 将结果送回 Decoder Layer，继续下一子层。
+Prefix Cache 的匹配发生在更上层，到当前 Attention 执行时，复用结果已经体现在请求映射、页表和相关状态里。这里不需要每算一次 Query 就重新搜索 Radix Tree。排查历史访问问题时，可以沿本轮写入位置、请求映射、Query 边界和层压缩类型检查，逐步确认读到的是哪条请求的哪种历史。
 
-Prefix Cache 的匹配发生在更上层。到 Attention 执行时，可复用前缀已经落实为请求映射与页表，后端消费这些结果，不在每次 Query 计算时重新搜索 Radix Tree。
+下一步看 [MoE 的路由与专家计算](deepseek-v4-moe-source-analysis.md)：Attention 仍按请求历史组织访问，MoE 则根据专家选择把当前 Token 送往不同计算位置，再将贡献合回原行。
 
 ### 源码阅读入口
 
