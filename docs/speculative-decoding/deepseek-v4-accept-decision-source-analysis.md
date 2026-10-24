@@ -1,8 +1,8 @@
 # 投机解码 Accept：从 Verify 行到最终输出路径
 
-Target Verify 为候选位置算出 logits 后，系统还要决定哪些候选可以成为正式输出。Greedy 路径沿 Target 的预测寻找匹配前缀；Sampling 路径则按各自的概率与接受规则推进。
+Target Verify 可以一次算完多条候选分支，但一次请求最终只能沿一条历史继续。Accept 的工作就是从这些结果中选出有效路径，并把同一个决定交给输出、缓存和下一轮 Draft。Greedy 按 Target 的预测寻找匹配前缀；Sampling 则按对应的概率规则接受候选。
 
-本文用输入 R、A、C 对应输出 A、C、X 的小例子追踪接受结果：`accept_index` 保存的是 Verify 行索引，输出中的新 bonus X 与这些行已经计算出的 KV 相差一位。先讲清这个映射，再展开树遍历、不同 Sampling 算法和 DSpark 的链式接受。
+最容易看错的是输入与输出相差一位：输入 `R、A、C` 的三行预测，可能产生输出 `A、C、X`。`accept_index` 记录这三条 Verify 输入行，不能把它直接当作输出 token 的下标。下面用这个教学例子走完树遍历，再看概率采样和 DSpark 链式接受如何交接同样的状态边界。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -31,20 +31,18 @@ Target(A) = C
 Target(C) = X
 ~~~
 
-最终这一轮对外输出的是：`A → C → X`
+忽略请求结束与输出截断等后续处理，这轮得到的新输出是 `A → C → X`。其中 `A、C` 是 Draft 提出、被 Target 接受的候选；`X` 来自输入节点 `C` 的 Target 预测，称为本轮的 terminal bonus。`R` 已经在上一轮成为正式输出，这一轮用它作输入，不会再向用户输出一次。
 
-其中 `A、C` 是 Draft 提出且被 Target 接受的候选，`X` 是 Target 在最后一个 accepted input node `C` 上直接产生的新 token，也就是这一轮的 terminal bonus。
+Draft 的 path score 决定哪些候选能进入这轮验证，作用到这里就结束了。EAGLE rollout 用累计 Draft probability 给候选排序，把有限的 Verify token budget 分给较有希望的节点；进入 Verify 后，接受路径由 Target 结果、树的连接关系和当前采样规则共同决定。Draft 给 `B` 的分数即使很高，只要 Greedy Target 在 `R` 上选择 `A`，也不会沿 `B` 继续。
 
-这里首先要和 Draft 阶段的 path score 分开。EAGLE 在 rollout 时会用累计 Draft probability 给候选未来排序，从有限 token budget 中决定“哪些 node 值得进入 Target Verify”；进入 Verify 后，**Target 的 prediction / probability、Tree topology 与当前 sampling policy** 共同决定接受路径。
-
-因此可以把两层职责写得很清楚：
+两层职责可以这样对照：
 
 | 阶段 | 决定什么 | 主要依据 |
 | --- | --- | --- |
 | Draft search | 哪些未来值得花 Verify budget | Draft score / candidate pruning |
 | Accept decision | 哪些未来真的成为历史 | Target result + topology + sampling rule |
 
-候选排序分配验证预算，最终接受则按 Target 结果与当前采样规则决定。
+因此，Draft score 高只表示值得验证，不表示已经通过验证。后面的索引结构负责把 Target 的选择落到实际候选行上。
 
 ## 二、接受前先把父节点关系变成可遍历结构
 
@@ -58,7 +56,7 @@ retrieve_next_token
 retrieve_next_sibling
 ~~~
 
-它们可以近似理解为：
+先把 Tree node 的局部编号与整个 batch 中的 Verify 行号分开。这几组数组分别回答“这一节点存在哪一行”和“下一步能走到谁”：
 
 ~~~text
 retrieve_index[node]
@@ -103,11 +101,9 @@ child
 ...
 ~~~
 
-而不是先知道叶子是谁，再向上找 parent。换句话说，所谓 Parent Tree Recovery 更准确地说是：
+在小树的 `R` 上，Accept 先检查 child `A`；不匹配才沿 sibling 找 `B`。一旦匹配 `A`，就转去检查 `A` 的 children `C、D`。它不需要先猜最终叶子，再沿父指针倒查。
 
-> **先把 Draft search 的 parent metadata 恢复成面向 Verify / Accept 的 forward-traversal topology，然后 Target 从 root 开始一层层选择真实路径。**
-
-`parent_list` 与 `selected_index` 用于重建树，`accept_index` 再从 Verify 行中选出接受路径。这三组索引按各自的输入、输出空间衔接。
+Parent Tree Recovery 在这里指把 Draft search 的 parent metadata 转成这种向前遍历结构。`parent_list` 与 `selected_index` 是重建树的输入，`retrieve_*` 是遍历时使用的结构，最后的 `accept_index` 才记录选中的 Verify 行。读代码时把这三个阶段分开，可以避免把“候选在 Draft 数组里的位置”当成“接受后在输出里的位置”。
 
 ## 三、Greedy Accept 的行索引与输出
 
@@ -117,7 +113,7 @@ Greedy 路径最适合把这个索引语义看透。`eagle_sample()` 先对 Targ
 
 [`VerifyTreeGreedy`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/jit/include/sgl_kernel/speculative/eagle.cuh)
 
-核心逻辑可以压缩成：
+下面是省略 batch 维度、容量限制和无效值填充的伪代码，用于说明遍历顺序；其中 `row(...)` 表示节点对应的 Verify 行：
 
 ~~~python
 current = root
@@ -150,11 +146,7 @@ row 3 → C
 row 4 → D
 ~~~
 
-Target 依次希望 `A、C、X`。Kernel 的结果不是：`accept_index = [1, 3]`
-
-而是：`accept_index = [0, 1, 3]`
-
-同时：
+Kernel 先记录 root 行 `0`，再根据 Target 在 `R` 上的预测 `A`，把匹配的 `A` 行 `1` 接入路径；在 `A` 上预测 `C`，再接入行 `3`。因此，有效的 `accept_index` 是 `[0, 1, 3]`，不是只记录 Draft 候选的 `[1, 3]`。这三行保存的预测分别是：
 
 ~~~text
 predict[row 0] = A
@@ -166,13 +158,9 @@ predict[row 3] = X
 predict[accept_index] == [A, C, X]
 ~~~
 
-这说明 `accept_index` 最准确的心智模型不是“被接受的 Token 下标”，而是：
+`accept_index` 可以读成“哪些 Verify 输入行产生了本轮的有效输出”。它同时包含 root 和被接受的候选行；root 虽然不是本轮新接受的 Draft token，却提供了第一个输出 `A` 的预测。多请求 batch 中这些值还要指向对应请求的 flattened 行，例子里的 `0、1、3` 只针对这一棵树。
 
-> **accepted-output-producing Verify row indices。**
-
-也就是“最终线性输出由哪些 Verify input row 的 prediction 产生”。
-
-这一点会直接解释 `accept_lens` 的 `+1`。`VerifyTreeGreedy` 内部的 `accept_token_num` 只统计匹配成功的 Draft nodes；`eagle_sample()` 返回前再执行语义上的：`accept_lens = num_correct_drafts + 1`
+这也解释了 `accept_lens` 的 `+1`。`VerifyTreeGreedy` 内部的 `accept_token_num` 只统计匹配成功的 Draft nodes；`eagle_sample()` 返回的长度则包括末尾 Target token，即 `accept_lens = num_correct_drafts + 1`。前者数被接受的候选，后者数这一轮产生的有效输出，不能混作同一种计数。
 
 例子里：
 
@@ -182,6 +170,8 @@ accept_lens        = 3    # A, C, X
 ~~~
 
 固定源码在 [`eagle_utils.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/eagle_utils.py) 中明确保留了“`num_correct_drafts` 在函数内部始终只表示 drafts-only，返回值才 +1”的注释。
+
+如果 root 的预测没有匹配任何 child，`num_correct_drafts=0`，有效的 `accept_index` 仍包含 root，输出长度为 1，输出就是 root 的 Target 预测。反过来，即使一路候选全部匹配，最后一个输入行仍会产生一个 terminal token。因此这个 `+1` 来自输入行提供的预测，与是否在中途遇到拒绝无关。
 
 ### 最容易写错的一格：输出 `[A, C, X]`，本轮新物化 KV 的却是 `[R, A, C]`
 
@@ -199,9 +189,9 @@ C                     X                        C 的 KV 已物化
 下一轮 root：          X
 ~~~
 
-也就是说，terminal bonus `X` 是本轮 Target logits 的输出，但还没有作为模型输入跑过，因此 **本轮并不存在 `X` 的 KV**。它会在下一轮成为 root，再被送入模型并物化 KV。
+这里的 KV 指相应 token 位置作为模型输入时计算出的缓存。`X` 目前只是从 `C` 这一行 logits 得到的 token ID，还没有作为输入执行，因此这一轮没有 `X` 的 KV。请求继续生成时，它在下一轮成为 root，才会计算自己的 KV。与此同时，Verify 可能已经算出了 `B、D` 分支的临时状态；这些行没有进入接受路径，不能当作正式历史继续使用。
 
-这也是为什么同一个 `accept_index=[row(R), row(A), row(C)]` 可以同时服务两个看似“错一位”的世界：
+同一个 `accept_index=[row(R), row(A), row(C)]` 可以用于两次 gather，但所读取的数组不同：读预测数组得到新输出，读输入行或 KV 数组得到已经执行过的输入状态。
 
 ~~~text
 用于 output gather：
@@ -211,7 +201,7 @@ predict[accept_index] → [A, C, X]
 rows[accept_index]    → [R, A, C]
 ~~~
 
-上一篇 KV 文章中的 accepted-path relocation 正是依赖这个映射，而不是去寻找一个并不存在的 `row(X)`。
+accepted-path relocation 搬移的是已经计算好的 `R、A、C` 状态，不需要寻找尚不存在的 `row(X)`。如果把输出 token 列表直接用于缓存搬移，就会漏掉 root，并错误地要求提交 `X` 的缓存。
 
 `run_eagle_verify()` 随后做：
 
@@ -219,7 +209,7 @@ rows[accept_index]    → [R, A, C]
 accept_tokens = predict[accept_index]
 ~~~
 
-再由 `fill_bonus_tokens()` 取每个 request 的 `accept_len - 1` 位置作为下一轮 bonus：
+`accept_index` 的 buffer 还可能带有无效填充，只有 `accept_lens` 指定的前缀有效。`fill_bonus_tokens()` 从每个 request 的有效前缀末尾，也就是 `accept_len - 1` 位置，取出下一轮 bonus：
 
 [`fill_bonus_tokens()`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/ops/speculative/eagle.py)
 
@@ -239,9 +229,9 @@ flowchart TD
 
 ## 四、区分两类 Sampling 接受规则
 
-Greedy 只需要问“candidate 是否等于 Target argmax”。一旦开启 temperature、top-k 或 top-p，Accept 就必须处理概率分布。
+前面的 Greedy 路径比较 candidate 与 Target argmax。进入概率采样分支后，`eagle_sample()` 先按 temperature 计算 Target softmax，再按需要做 top-k、top-p 过滤和重新归一化。下面的 `p` 指实际送进 Accept 的 Target 分布，不能直接拿原始 logits 代替。
 
-这里当前源码存在两套容易被混写的路径。
+固定版本中有两套容易混淆的概率接受规则。具体是否进入这些分支还受平台与策略分流影响，不能只看到请求带了采样参数，就认定一定执行了某个 sampler。
 
 ### Classic Rejection Sampling 的 Draft 概率 `q`
 
@@ -267,7 +257,7 @@ $$
 r(y) \propto \max(p(y)-q(y),0)
 $$
 
-采样。这样才能把 Draft 多分配的概率质量纠正回 Target 分布。
+采样。这个校正与前面的接受概率是一套规则：Draft 在某个 token 上提出得过多，就在拒绝分支中把这部分质量扣掉。分布保持的推导要求 `q` 确实是提出该候选时使用的概率分布，且与 `p` 对齐到同一上下文、同一词表；形状相同本身还不够。
 
 例如：
 
@@ -287,9 +277,9 @@ B: 0.1
 C: 0.2
 ~~~
 
-归一化后再采，所以刚刚被判定“Draft 给得过多”的 `A` 不会从 residual branch 又被原样抽回来。
+归一化后，拒绝分支在 `B、C` 上的概率分别是 `1/3、2/3`，`A` 的概率为 0。只看第一个候选位置，接受分支给 `A、B、C` 的概率质量分别为 `0.3、0.3、0.1`，剩余 `0.3` 的拒绝质量再补给 `B、C` 各 `0.1、0.2`，合起来正好回到 Target 的 `0.3、0.4、0.3`。这是算法教学算例，不是一次模型测量。
 
-这也是为什么开启 classic rejection sampling 后，SGLang 会检查 `draft_probs` 是否存在、词表维度是否与 Target 一致：没有 proposal `q`，就无法执行 `p/q` 语义。
+开启 classic rejection sampling 后，SGLang 会检查 `draft_probs` 是否存在、词表维度是否与 Target 一致，因为没有 proposal `q` 就无法执行这套校正。若整条候选链都被接受，末尾 bonus 则直接从最后位置的 Target 分布 `p` 采样，不再扣除一个并不存在的下一步 Draft proposal。
 
 ### Target-only Tree Sampling：沿 sibling 累加 Target mass，但不是 classic `p/q` rejection
 
@@ -302,13 +292,13 @@ EAGLE tree 还有另一套 sampler：
 ~~~text
 prob_acc += target_prob(candidate)
 
-accept if:
-coin < prob_acc / threshold_acc
-OR
-target_prob(candidate) >= threshold_single
+accept if target_prob(candidate) > 0 AND (
+    coin < prob_acc / threshold_acc
+    OR target_prob(candidate) >= threshold_single
+)
 ~~~
 
-这不是 `u × q(x) < p(x)`。
+这里还有 `target_prob(candidate) > 0` 的保护条件，避免阈值设置让零概率候选被接受。每接受一个 child，kernel 会切到该 child 的 Target 分布，清空累计量并换用对应的随机数，再扫描下一层 siblings。它累加的是当前层候选的 Target mass，没有使用 classic 规则中的 proposal `q`。
 
 还有一个很容易被变量名骗到的细节。非 classic-rejection 分支进入这个 sampler 前，`eagle_sample()` 会传入：
 
@@ -316,9 +306,7 @@ target_prob(candidate) >= threshold_single
 draft_probs = torch.zeros_like(target_probs)
 ~~~
 
-在 Target-only kernel 内，一个 sibling 没被接受时，会把对应 candidate 的 Target probability 写到这个 buffer；最后再对：`relu(target_probs - draft_probs)`
-
-做 terminal sampling。此时这个名为 `draft_probs` 的 buffer **并不是 Draft proposal distribution `q`**，更接近“记录已经被排除 candidate probability mass 的工作缓冲区”。源码旁边也保留了 `FIXME: leverage draft probs`。
+在 Target-only kernel 内，一个 sibling 没被接受时，会把它的 Target probability 写进对应行的这个 buffer。结束遍历后，terminal sampling 使用 `relu(target_probs - draft_probs)`，排除终止位置上已经被拒绝的候选质量。这里的 `draft_probs` 是工作缓冲区，并不是提出候选时的 Draft distribution `q`；源码旁的 `FIXME: leverage draft probs` 也提示了这个差别。不能仅凭两种实现都做一次减法，就把它们认作同一套 rejection sampling。
 
 所以阅读当前实现时最好直接把四类路径分开：
 
@@ -335,7 +323,7 @@ Ascend NPU 分支从 `sgl_kernel_npu.sample` 导入 Tree / Chain Sampling Op。�
 
 ## 五、DSpark 链式接受的 correct_len
 
-回到当前 DeepSeek-V4 DSpark。这里和 EAGLE `topk>1` tree 最大的区别不是“算法名字不同”，而是 **layout 本身是 chain**。
+本文固定版本的 DeepSeek-V4 DSpark 使用 chain layout：每个位置只有一个后继候选。一棵树可能有多条同样长的路径，长度无法区分它们；一条链的前缀则只用长度就能唯一确定。这个布局差别决定了 DSpark 为什么可以使用 `correct_len`，而不必再携带树路径索引。
 
 `DSparkWorkerV2` 在 state commit 处直接写明：
 
@@ -351,7 +339,7 @@ would need the accept-index mapping
 
 [`dspark_worker_v2.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-Chain 的好处是路径天然由 prefix length 唯一确定。假设：
+用一条候选链看具体计数。假设：
 
 ~~~text
 Draft:   A → B → C
@@ -365,15 +353,13 @@ correct_len = 2
 bonus       = X
 ~~~
 
-就已经知道最终有效输出是：`A, B, X`
-
-不需要再保存 `root → A → B` 的 tree mapping。
+就能确定有效输出 `A, B, X`。第三个 Draft 候选 `C` 与 Target 的 `X` 不符，接受在这里停止；即使链上更后面某个 token 恰好匹配，也不能跳过这个分歧继续接受。缓存侧保留的输入路径仍然是 `root → A → B`，与新输出保持前面解释过的一位偏移。
 
 DSpark Greedy 通过 `compute_dflash_correct_drafts_and_bonus()` 得到 `correct_len` 与 `bonus`；Sampling 则复用 chain rejection sampler。入口集中在：
 
 [`dspark_accept.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py)
 
-随后 `TargetVerifyExecutor.accept_and_finalize()` 会先在 TP group 内同步 Accept 结果，再执行：
+`TargetVerifyExecutor.accept_and_finalize()` 的 Eager 路径通过 `_tp_sync` 同步 `correct_len`、`bonus` 与 `cap_trim_lens`，再交给 `FinalizeAcceptLens` 计算下面两个长度；若 Accept 已折叠进 Verify graph，则直接读取该路径准备好的结果。同步是否执行由对应的策略控制，长度计算不等于无条件插入一次通信。
 
 ~~~python
 commit_lens = correct_len + 1
@@ -392,9 +378,9 @@ accepted Draft tokens
 one terminal Target token
 ~~~
 
-这些变量分别描述不同阶段，映射时按其计数单位转换。
+例如已缓存前缀长度为 10，`correct_len=2`，则本轮提交 3 个输入位置，`new_seq_lens=13`；新输出也是 3 个 token，但最后的 `X` 要到下一轮才有自己的缓存。`commit_lens` 因而不能解释成“本轮新输出的所有 token 都已经有 KV”。
 
-DSpark 还会用 `BuildOutTokens` 构造固定宽度输出 buffer：先放 Draft tokens，再把 `bonus` scatter 到 `correct_len` 位置。消费时由 `commit_lens` 告诉下游哪些位置有效：
+DSpark 用 `BuildOutTokens` 构造固定宽度输出 buffer：先放 Draft tokens，再把 `bonus` scatter 到 `correct_len` 位置。在 `correct_len=2` 的例子中，零起始位置 2 原本放 `C`，现在被 `X` 覆盖；只有前 `commit_lens=3` 格有效，其余格即使有旧候选也不能作为正式输出。若实际 Verify 窗口受限，接受长度还会先按可验证范围裁剪，不能仅从 buffer 宽度推算有效输出：
 
 [`dspark_verify_window.py`](https://github.com/sgl-project/sglang/blob/791c7850d0960fd768102f71e7d999b036bb75ba/python/sglang/kernels/ops/speculative/dspark/dspark_verify_window.py)
 
@@ -421,13 +407,11 @@ correct_len
 commit_lens = correct_len + 1
 ~~~
 
-两者最终都在做同一件事：**给系统确定新的 committed sequence boundary。**
+两者都确定了本轮可提交的序列边界。Tree 还需要告诉后续模块具体选中了哪些行，Chain 则可以由长度还原这些行。
 
 ## 六、接受结果怎样交给输出与缓存
 
-到这里，Accept Decision 可以重新理解成一个系统状态收敛问题。
-
-在 Target Verify 之前，系统允许同时存在：
+接受决策完成后，输出与缓存必须使用同一条路径。Verify 阶段可以暂时保留多种未来：
 
 ~~~text
 多个 candidate
@@ -436,7 +420,7 @@ commit_lens = correct_len + 1
 尚未确定的未来
 ~~~
 
-在 Accept 之后，这些状态必须共同收敛到一条线：
+Accept 选出路径与长度后，输出侧读取这些行的预测，缓存侧提交这些行已经计算出的状态，下一轮则从末尾 bonus 继续。三者按下面的关系衔接：
 
 ~~~mermaid
 flowchart TD
@@ -486,7 +470,7 @@ new_seq_lens
 = prefix_lens + commit_lens
 ~~~
 
-如果这几组关系对不上，后面的 KV、hidden state、Mamba/recurrent state 或下一轮 Draft 都可能从错误边界继续。
+排查时先核对接受路径和有效长度，再检查状态搬移。若输出 `[A,C,X]` 正确，但缓存仍混入 `B` 分支，问题已经发生在 Accept 结果的消费阶段；若 `accept_index` 自身就走到了错误 child，则应向前检查拓扑和判定。KV、hidden state 或具体模型使用的 recurrent state 都必须与所选路径对齐，不应仅凭最终输出长度正确就结束检查。
 
 ### 源码阅读顺序
 
