@@ -1,0 +1,306 @@
+{
+  "model": "DeepSeek-V4-Flash W8A8",
+  "hardware": "Ascend 910C",
+  "physical_cards": {
+    "P": 8,
+    "D": 8,
+    "throughput_divisor": 16
+  },
+  "source_scope": "Frozen SGLang Ascend runtime adaptation, Oct 20-21 2026; hashes identify actual source. Not universal upstream defaults.",
+  "source_sha256": {
+    "schedule_policy": "de11a37e44db56a1aeb47c2308f783fe4f6a0e4b8b224051e4d2894e748f6625",
+    "parallel_hook": "b3b2cd96b91ffb5633038566f02f26939dbe07ff36fca5005b5eac9abc5a7d07",
+    "native_normal_capacity": "148454437a314f0a99627284bb0807da8504eb5438aca3c4a5ffd949a6861484",
+    "normal_dispatch": "afece7699f372657926327db98705daa6be8230ceaeb9d6580de0c31bc0f8c0f"
+  },
+  "source_functions": {
+    "parallel_hook": "_handle_data_parallelism: chunked_prefill_size // dp_size",
+    "schedule_policy": [
+      "PrefillAdder.add_one_req",
+      "PrefillAdder.add_chunked_req",
+      "PrefillAdder._select_prefill_admission"
+    ],
+    "native_normal_capacity": "MIN_TOKENS_PER_ROUND=32, MAX_TOKENS_PER_ROUND=8192; real rounds ceil(num_tokens/per_round)"
+  },
+  "noCP_page128_cap1_CPU_geometry": [
+    {
+      "global_CLI": 131072,
+      "effective_chunk": 8192,
+      "rows": [
+        {
+          "step": 1,
+          "raw_extend": 8192,
+          "start": 0,
+          "end": 8192,
+          "page_charged": 8192,
+          "remaining_compute_budget": 0,
+          "method": "add_one_req"
+        },
+        {
+          "step": 2,
+          "raw_extend": 8192,
+          "start": 8192,
+          "end": 16384,
+          "page_charged": 8192,
+          "remaining_compute_budget": 0,
+          "method": "add_chunked_req"
+        },
+        {
+          "step": 3,
+          "raw_extend": 4,
+          "start": 16384,
+          "end": 16388,
+          "page_charged": 128,
+          "remaining_compute_budget": 8064,
+          "method": "add_chunked_req"
+        }
+      ],
+      "max_raw_physical_rows": 8192,
+      "max_page_charge": 8192
+    },
+    {
+      "global_CLI": 132096,
+      "effective_chunk": 8256,
+      "rows": [
+        {
+          "step": 1,
+          "raw_extend": 8192,
+          "start": 0,
+          "end": 8192,
+          "page_charged": 8192,
+          "remaining_compute_budget": 64,
+          "method": "add_one_req"
+        },
+        {
+          "step": 2,
+          "raw_extend": 8196,
+          "start": 8192,
+          "end": 16388,
+          "page_charged": 8320,
+          "remaining_compute_budget": -64,
+          "method": "add_chunked_req"
+        }
+      ],
+      "max_raw_physical_rows": 8196,
+      "max_page_charge": 8320
+    },
+    {
+      "global_CLI": 133120,
+      "effective_chunk": 8320,
+      "rows": [
+        {
+          "step": 1,
+          "raw_extend": 8320,
+          "start": 0,
+          "end": 8320,
+          "page_charged": 8320,
+          "remaining_compute_budget": 0,
+          "method": "add_one_req"
+        },
+        {
+          "step": 2,
+          "raw_extend": 8068,
+          "start": 8320,
+          "end": 16388,
+          "page_charged": 8192,
+          "remaining_compute_budget": 128,
+          "method": "add_chunked_req"
+        }
+      ],
+      "max_raw_physical_rows": 8320,
+      "max_page_charge": 8320
+    }
+  ],
+  "CPU_geometry_scope": "Existing actual admission method fixture, generous allocator; no GPU or full memory proof.",
+  "packing_CPU": [
+    {
+      "cap": 1,
+      "passes": 960,
+      "first8": [
+        [
+          8192
+        ],
+        [
+          8192
+        ],
+        [
+          4
+        ],
+        [
+          8192
+        ],
+        [
+          8192
+        ],
+        [
+          4
+        ],
+        [
+          8192
+        ],
+        [
+          8192
+        ]
+      ],
+      "max_tokens": 8192,
+      "total_tokens": 5244160,
+      "completed": 320
+    },
+    {
+      "cap": 2,
+      "passes": 645,
+      "first8": [
+        [
+          8192
+        ],
+        [
+          8192
+        ],
+        [
+          4,
+          8064
+        ],
+        [
+          8192
+        ],
+        [
+          132,
+          7936
+        ],
+        [
+          8192
+        ],
+        [
+          260,
+          7808
+        ],
+        [
+          8192
+        ]
+      ],
+      "max_tokens": 8192,
+      "total_tokens": 5244160,
+      "completed": 320
+    }
+  ],
+  "comparison_groups": {
+    "chunk8320_round2": {
+      "N": 320,
+      "C": 128,
+      "rate": 6,
+      "chat": 16388,
+      "output": 1024,
+      "prefix_cache_pct": 0,
+      "Pcap": 1,
+      "delta": "effective8192/global131072/normalround1 -> effective8320/global133120/normalround2",
+      "fixed": "same P layout and D8be static; G5 verify6; IndexCache2; before later P7804/Compact state",
+      "native_gain_pct": -0.9671827967032587,
+      "whole_gain_pct": -0.6586993391260898,
+      "native_acceptance": "NOT_OBSERVED",
+      "draft_verify_phase_wall": "NOT_COLLECTED",
+      "paired_cost_candidate_s": 764.8086639000103
+    },
+    "CP4_DP4_vs_CP2_DP8_round2": {
+      "matching": {
+        "N": 480,
+        "C": 88,
+        "rate_req_s": 4,
+        "body_input": 16384,
+        "actual_chat_input": 16388,
+        "output": 1024,
+        "actual_cache_pct": 0,
+        "prefix": null,
+        "PD_physical_cards": 16,
+        "D_physical_cards": 8,
+        "dataset_SHA256": "749b3ec63f9cfd117ce0eb9f7a4f78adb68661e35d3c132d4d233f2c1a3eff92",
+        "original640_SHA256": "0c175681d5d37224ba8fab7f158372a430d797e8b76511eaba88ea0b9ca3c643",
+        "sources_and_D_configuration_matched": true
+      },
+      "geometry_candidate": {
+        "P_CP": 2,
+        "P_DP": 8,
+        "Pcap": 1,
+        "effective_chunk": 16512,
+        "global_CLI_chunked_prefill_size": 132096,
+        "normal_per_round_tokens": 8192,
+        "normal_round": 2
+      },
+      "geometric_reason": {
+        "formalactual": 16388,
+        "page128_admission_charge": 16512,
+        "CP2_logical": 8194,
+        "align8_physical": 8200,
+        "normal_real_rounds": 2,
+        "last_round_rows": 8
+      },
+      "native_and_whole_windows_s": {
+        "baseline": {
+          "stable": 136.3333486,
+          "total": 186.5513418
+        },
+        "candidate": {
+          "stable": 139.72073379999998,
+          "total": 189.6525392
+        }
+      },
+      "gains_pct": {
+        "stable": -0.907677187583833,
+        "total": -1.6352011201581917
+      },
+      "strict_draft_AR": "NOT_OBSERVED",
+      "AL_kind": "whole proxy only",
+      "candidate_lifecycle_s": 1329.429596
+    },
+    "cap2_fixed8192": {
+      "N": 640,
+      "C": 128,
+      "rate": 6,
+      "chat": 16388,
+      "output": 1024,
+      "prefix_cache_pct": 0,
+      "delta": "Pcap1->2 only; effective8192 normalround1",
+      "fixed": "P7804/D8be static; Compact6/automatic SPS/G5 verify6/IndexCache2",
+      "native_gain_pct": 32.272910156834996,
+      "whole_gain_pct": 30.26229664498292,
+      "strict_generated_proposal_AR": "NOT_OBSERVED",
+      "verified_budget_acceptance_candidate": 0.9616132055249774
+    }
+  },
+  "prefix_cache_geometry": {
+    "chat_tokens": 131076,
+    "observed_cached_tokens": 118784,
+    "observed_hit_ratio": 0.9062223442888095,
+    "uncached_tokens": 12292,
+    "derived_single_request_warm_chunks_at8192": [
+      8192,
+      4100
+    ],
+    "derived_cold_chunks_at8192": [
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      8192,
+      4
+    ],
+    "scope": "Arithmetic from observed lengths; not new measured batch trace; other budgets may truncate earlier."
+  },
+  "warnings": [
+    "Different groups have different model state, layouts or workload; do not rank their absolute rates.",
+    "CPU scheduling pass count does not measure NPU execution time.",
+    "Small negative single-run deltas are not repeated statistical regression evidence.",
+    "Whole acceptance counts cannot substitute native window counts.",
+    "Page charge may exceed raw input length; admission and continuation have distinct code paths."
+  ]
+}

@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批](deepseek-v4-prefill-chunk-size-selection.md)：用8192→8320与CP2负例，解释有效chunk、页预算、通信分轮和跨请求合批怎样共同决定吞吐。
+
 - [DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么](deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md)：沿c4层调度、compressor更新和Graph共享存储，解释同负载native吞吐提升5.41%的来源与精度边界。
 
 - [Ascend 910C上的P端场景静态EPLB：从路由计数、专家布局到实测收益](ascend-910c-prefill-scenario-static-eplb.md)：沿逻辑专家、副本分发、循环计数与离线拟合，解释16K方案whole提升14.18%的归因边界和128K小收益。

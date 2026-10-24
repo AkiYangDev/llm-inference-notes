@@ -546,5 +546,20 @@
     "role": "advanced",
     "seo_title": "DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么",
     "seo_summary": "DeepSeek-V4 IndexCache freq2源码与Ascend 910C实测：按c4层跨层复用TopK，保留compressor状态，native吞吐提高5.41%，同时明确精度未评测与Graph存储边界。"
+  },
+  "docs/performance/deepseek-v4-prefill-chunk-size-selection.md": {
+    "summary": "从DP折算后的有效chunk、page128接纳预算和CP执行行数，解释8320分块更少却没提速，以及保持8192、调整Pcap为何有效。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "Prefill",
+      "Chunked Prefill",
+      "性能调优"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批",
+    "seo_summary": "DeepSeek-V4 / Ascend 910C 的Prefill chunk选择实录：8192与8320、CP2/DP8负例、页对齐与DeepEP通信轮次，结合128K前缀缓存和尾块合批分析调优方法。"
   }
 }

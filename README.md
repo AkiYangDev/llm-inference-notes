@@ -33,6 +33,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ### 进阶
 
+- [Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批](docs/performance/deepseek-v4-prefill-chunk-size-selection.md)：用8192→8320与CP2负例，解释有效chunk、页预算、通信分轮和跨请求合批怎样共同决定吞吐。
+
 - [DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么](docs/performance/deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md)：解释freq2按c4层复用历史位置选择，结合源码与同负载对照说明少算了什么、为何仍需质量验收。
 
 - [Ascend 910C上的P端场景静态EPLB：从路由计数、专家布局到实测收益](docs/performance/ascend-910c-prefill-scenario-static-eplb.md)：从P端路由计数生成固定专家布局，区分放置、副本分发与在线重排，并用16K/128K对照解释收益。
