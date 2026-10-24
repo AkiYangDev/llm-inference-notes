@@ -1,0 +1,288 @@
+{
+  "historical_source": {
+    "AISBench_commit": "e00d1f758310c45580576af291a3126919776c89",
+    "local_timeout_change_seconds": 300,
+    "current_example_has_no_timeout_patch": true,
+    "later_telemetry_extensions_separately_bound": true
+  },
+  "workload": {
+    "model": "DeepSeek-V4-Flash",
+    "hardware": "Ascend 910C",
+    "P_cards": 8,
+    "D_cards": 8,
+    "body_tokens": 131072,
+    "chat_tokens": 131076,
+    "actual_output_tokens": 1024,
+    "N": 640,
+    "C": 90,
+    "request_rate": 6,
+    "favorable_copy_showcase": true,
+    "cached_tokens_each": 118784,
+    "cache_token_ratio": 0.9062223442888095
+  },
+  "stages": {
+    "whole": {
+      "common": {
+        "Benchmark Duration": "179576.5827 ms",
+        "Total Requests": 640,
+        "Failed Requests": 0,
+        "Success Requests": 640,
+        "Concurrency": 82.8179,
+        "Max Concurrency": 90,
+        "Request Throughput": "3.5639 req/s",
+        "Total Input Tokens": 83888640,
+        "Total Generated Tokens": 655360,
+        "Input Token Throughput": "467146.8782 token/s",
+        "Output Token Throughput": "3649.4736 token/s",
+        "Total Token Throughput": "470796.3519 token/s"
+      },
+      "statistics": [
+        {
+          "Performance Parameters": "E2EL",
+          "Stage": "total",
+          "Average": "23237.7 ms",
+          "Min": "17552.7 ms",
+          "Max": "30375.0 ms",
+          "Median": "22757.0 ms",
+          "P75": "24293.7 ms",
+          "P90": "25322.9 ms",
+          "P99": "29593.1 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "TTFT",
+          "Stage": "total",
+          "Average": "12681.9 ms",
+          "Min": "5286.6 ms",
+          "Max": "20012.6 ms",
+          "Median": "11972.5 ms",
+          "P75": "13733.0 ms",
+          "P90": "14325.9 ms",
+          "P99": "18923.3 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "TPOT",
+          "Stage": "total",
+          "Average": "10.3 ms",
+          "Min": "8.1 ms",
+          "Max": "15.0 ms",
+          "Median": "10.3 ms",
+          "P75": "10.6 ms",
+          "P90": "10.9 ms",
+          "P99": "12.0 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "ITL",
+          "Stage": "total",
+          "Average": "58.2 ms",
+          "Min": "0.0 ms",
+          "Max": "1385.5 ms",
+          "Median": "69.1 ms",
+          "P75": "71.5 ms",
+          "P90": "76.4 ms",
+          "P99": "471.7 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "InputTokens",
+          "Stage": "total",
+          "Average": "131076.0",
+          "Min": "131076.0",
+          "Max": "131076.0",
+          "Median": "131076.0",
+          "P75": "131076.0",
+          "P90": "131076.0",
+          "P99": "131076.0",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "OutputTokens",
+          "Stage": "total",
+          "Average": "1024.0",
+          "Min": "1024.0",
+          "Max": "1024.0",
+          "Median": "1024.0",
+          "P75": "1024.0",
+          "P90": "1024.0",
+          "P99": "1024.0",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "OutputTokenThroughput",
+          "Stage": "total",
+          "Average": "44.361 token/s",
+          "Min": "33.712 token/s",
+          "Max": "58.3387 token/s",
+          "Median": "44.9972 token/s",
+          "P75": "46.6724 token/s",
+          "P90": "47.7704 token/s",
+          "P99": "52.5813 token/s",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "PrefillTokenThroughput",
+          "Stage": "total",
+          "Average": "10587.1879 token/s",
+          "Min": "6549.6775 token/s",
+          "Max": "24793.9542 token/s",
+          "Median": "10948.1041 token/s",
+          "P75": "11361.6033 token/s",
+          "P90": "11763.7778 token/s",
+          "P99": "17602.2758 token/s",
+          "N": "640"
+        }
+      ]
+    },
+    "native": {
+      "common": {
+        "Benchmark Duration": "143493.5254 ms",
+        "Total Requests": 549,
+        "Failed Requests": 0,
+        "Success Requests": 549,
+        "Concurrency": 87.4978,
+        "Max Concurrency": 90,
+        "Request Throughput": "3.826 req/s",
+        "Total Input Tokens": 71960724,
+        "Total Generated Tokens": 562176,
+        "Input Token Throughput": "501491.0869 token/s",
+        "Output Token Throughput": "3917.7796 token/s",
+        "Total Token Throughput": "505408.8665 token/s"
+      },
+      "statistics": [
+        {
+          "Performance Parameters": "E2EL",
+          "Stage": "stable",
+          "Average": "22869.5 ms",
+          "Min": "17552.7 ms",
+          "Max": "29309.6 ms",
+          "Median": "22540.8 ms",
+          "P75": "23999.5 ms",
+          "P90": "24576.6 ms",
+          "P99": "26180.0 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "TTFT",
+          "Stage": "stable",
+          "Average": "12250.2 ms",
+          "Min": "5292.5 ms",
+          "Max": "15871.5 ms",
+          "Median": "11854.7 ms",
+          "P75": "13505.4 ms",
+          "P90": "13927.3 ms",
+          "P99": "14599.2 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "TPOT",
+          "Stage": "stable",
+          "Average": "10.4 ms",
+          "Min": "9.2 ms",
+          "Max": "15.0 ms",
+          "Median": "10.3 ms",
+          "P75": "10.7 ms",
+          "P90": "11.0 ms",
+          "P99": "12.1 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "ITL",
+          "Stage": "stable",
+          "Average": "58.6 ms",
+          "Min": "0.0 ms",
+          "Max": "1385.5 ms",
+          "Median": "69.3 ms",
+          "P75": "71.7 ms",
+          "P90": "76.7 ms",
+          "P99": "470.7 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "InputTokens",
+          "Stage": "stable",
+          "Average": "131076.0",
+          "Min": "131076.0",
+          "Max": "131076.0",
+          "Median": "131076.0",
+          "P75": "131076.0",
+          "P90": "131076.0",
+          "P99": "131076.0",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "OutputTokens",
+          "Stage": "stable",
+          "Average": "1024.0",
+          "Min": "1024.0",
+          "Max": "1024.0",
+          "Median": "1024.0",
+          "P75": "1024.0",
+          "P90": "1024.0",
+          "P99": "1024.0",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "OutputTokenThroughput",
+          "Stage": "stable",
+          "Average": "44.9347 token/s",
+          "Min": "34.9373 token/s",
+          "Max": "58.3387 token/s",
+          "Median": "45.4287 token/s",
+          "P75": "46.7578 token/s",
+          "P90": "47.7185 token/s",
+          "P99": "51.8906 token/s",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "PrefillTokenThroughput",
+          "Stage": "stable",
+          "Average": "10853.7535 token/s",
+          "Min": "8258.6011 token/s",
+          "Max": "24766.5637 token/s",
+          "Median": "11056.8399 token/s",
+          "P75": "11381.7803 token/s",
+          "P90": "11737.8483 token/s",
+          "P99": "17598.8884 token/s",
+          "N": "549"
+        }
+      ]
+    }
+  },
+  "example_validation": {
+    "mmengine_lite_version": "0.10.7",
+    "Config_read_dump_fresh_reload": "PASS",
+    "retry_source_CPU_check": {
+      "retry0_attempts": 0,
+      "retry1_attempts": 1,
+      "transport": "mock; no HTTP"
+    },
+    "AISBench_registry_build": "NOT_EXECUTED",
+    "real_HTTP_example_run": "NOT_EXECUTED",
+    "new_model_requests": 0
+  },
+  "whole_acceptance": {
+    "coverage": 640,
+    "expected": 640,
+    "AL_output": 5.775979834836026,
+    "verify_calls": 113463,
+    "accepted_drafts_before_output_stop": 543675,
+    "correct_drafts_histogram": [
+      1028,
+      1130,
+      1901,
+      3027,
+      2223,
+      104154
+    ],
+    "verified_draft_slots": 563907,
+    "verified_slot_acceptance": 0.9641217434789779,
+    "strict_actual_proposal_AR": "NOT_OBSERVED",
+    "actual_generated_proposals": "NOT_OBSERVED",
+    "actual_emitted_bonus": "NOT_OBSERVED",
+    "native_acceptance": "NOT_OBSERVED",
+    "scope": "Whole640 output/verify includes first-token/output-stop effects. Verified slots from actual Compact cap histogram are not actual generated proposals.",
+    "output_tokens": 655360
+  }
+}

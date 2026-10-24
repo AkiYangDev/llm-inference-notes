@@ -222,5 +222,17 @@
         "description": "沿HCCL故障、CPU归约与循环槽位理解统计的完整生命周期"
       }
     ]
+  },
+  {
+    "id": "sglang-aisbench-practice",
+    "title": "SGLang与AISBench压测实战",
+    "topic": "performance",
+    "items": [
+      {
+        "path": "docs/performance/aisbench-sglang-first-request-to-report.md",
+        "label": "从第一条请求开始",
+        "description": "独立配置、小测、正式负载和原始结果"
+      }
+    ]
   }
 ]

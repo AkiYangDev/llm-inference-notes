@@ -619,5 +619,18 @@
     "role": "advanced",
     "seo_title": "CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？",
     "seo_summary": "Ascend 910C上CP2替代CP4的真实对照：native吞吐-0.91%、whole-1.64%，TPOT降低而TTFT升高；解析CP/DP布局、zigzag补齐、DeepEP分轮与阶段指标。"
+  },
+  "docs/performance/aisbench-sglang-first-request-to-report.md": {
+    "summary": "从一条请求接通SGLang，到独立配置、JSONL、N/C/r和原生稳态后处理。附小样例，讲清retry的版本语义、实际token长度和原始结果怎样保留。",
+    "category": "压测实践",
+    "tags": [
+      "AISBench",
+      "SGLang",
+      "压测方法",
+      "性能指标"
+    ],
+    "topic": "performance",
+    "role": "entry",
+    "seo_title": "用AISBench压测SGLang：从第一条请求到一份可信报告"
   }
 }

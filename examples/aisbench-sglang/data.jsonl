@@ -1,0 +1,4 @@
+{"question":"请求编号A001。请用三句话解释大模型推理中的Prefill阶段。","answer":""}
+{"question":"请求编号B002。请用三句话解释大模型推理中的Decode阶段。","answer":""}
+{"question":"请求编号C003。请用三句话解释KV Cache保存了什么。","answer":""}
+{"question":"请求编号D004。请用三句话解释流式输出和完整回包的区别。","answer":""}

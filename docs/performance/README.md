@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [用 AISBench 压测 SGLang：从第一条请求到一份可信报告](aisbench-sglang-first-request-to-report.md)：附可运行配置、JSONL与脚本，解释模型名、tokenizer、N/C/r、retry及whole/native结果保存。
+
 - [CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？](ascend-910c-cp2-vs-cp4-prefill-throughput.md)：沿CP/DP重组、每rank行数与normal分轮，解释TPOT下降但同负载native/whole吞吐未提高，以及阶段计时的归因边界。
 
 - [专家计数都采到了，为什么导出还会失败？](expert-count-export-hccl-gloo.md)：从storage.cpu暴露的HcclAllreduce内存申请失败，走到同成员CPU/Gloo导出和有效统计文件验收。
