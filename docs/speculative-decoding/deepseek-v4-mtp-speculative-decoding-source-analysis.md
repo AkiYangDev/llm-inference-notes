@@ -1,8 +1,8 @@
 # DeepSeek-V4 MTP：NextN 怎样逐步生成候选
 
-DeepSeek-V4 的 NextN 路径先通过 Draft Extend 产生第一枚候选，再用轻量 forward 逐步生成后续候选。它仍保留自回归依赖，只是把连续猜测交给较轻的 Draft，随后由 Target 一次验证。
+DeepSeek-V4 的 NextN 不会一次并行给出所有未来 token。Draft Extend 先准备第一枚候选与 hidden seed，后面的候选仍沿自回归依赖逐步生成；变化在于这些连续计算交给单层 Draft，再由完整 Target 一次验证候选窗口。
 
-下面以三个 Draft 候选为例，追踪 Target hidden、边界 Token、Draft Extend 和 NextN rollout 的衔接，算清一轮里有哪些输入、多少次 forward，以及哪些缓存要留给下一轮。它与 DSpark 的块式提议是不同的 Draft 实现。
+下面以三个 Draft 候选为例，追踪边界 token、Target hidden 与 NextN 自己的 hidden 怎样交接。重点是算清第一枚候选从哪里来、一次循环实际调用几次模型，以及输出已经确认但 KV 尚未写入时怎样继续。它与 DSpark 的块式提议是不同的 Draft 实现，不能用同一种候选生成成本来估算。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -21,7 +21,7 @@ MTP、NextN 和 EAGLE 出现在同一条路径上，分别指向权重能力、�
 | NextN | SGLang draft architecture | SGLang 把这组权重装进 `DeepseekV4ForCausalLMNextN`，当前只物化 1 个 NextN decoder layer |
 | EAGLE | speculative runtime algorithm | SGLang 用 `EAGLEWorkerV2 / EagleDraftWorker` 驱动 Draft Extend、多步 Draft、Target Verify 与状态推进 |
 
-因此，在当前 DeepSeek-V4 场景里可以写成：
+这三个名字可以同时出现在一条执行链中：
 
 ~~~text
 DeepSeek-V4 MTP weights
@@ -51,9 +51,7 @@ if speculative_algorithm == "NEXTN"         or speculative_algorithm == "EAGLE":
 
 [`_resolve_speculative_algorithm_alias()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/arg_groups/speculative_hook.py#L74-L111)
 
-因此：`--speculative-algorithm NEXTN`
-
-对这条常规路径来说是用户侧命名；进入 Runtime 后，`SpeculativeAlgorithm` 使用的是 `EAGLE`。
+因此，在这条常规路径上指定 `--speculative-algorithm NEXTN`，进入 Runtime 后仍会看到 `SpeculativeAlgorithm.EAGLE`。这不是运行时偷偷换了一套 Draft 权重，而是参数别名解析与模型架构选择分属不同层。以下片段用于说明分支与数据关系，均省略了周围代码，不是可独立执行的完整程序。
 
 这里还有一个模型相关例外：Gemma4 assistant draft 可以把 NEXTN/EAGLE 继续解析成 `FROZEN_KV_MTP`。这恰好说明“NextN”和“EAGLE”本来也不是全局同义词。
 
@@ -61,9 +59,7 @@ if speculative_algorithm == "NEXTN"         or speculative_algorithm == "EAGLE":
 
 DeepSeek-V4 checkpoint 可能同时带不同 speculative head。当前 `ModelConfig` 会根据最终选择的算法决定 Draft architecture。
 
-如果明确使用 DSpark：`DeepseekV4ForCausalLMDSpark`
-
-而普通 EAGLE / NextN 路径则改写成：
+明确选择 DSpark 时，Draft architecture 是 `DeepseekV4ForCausalLMDSpark`；EAGLE / NextN 路径则改成下面的 NextN 类，并设置预测层数：
 
 ~~~python
 self.hf_config.architectures[0] = "DeepseekV4ForCausalLMNextN"
@@ -84,9 +80,7 @@ assert num_nextn_layers == 1, "Only 1 nextn layer is supported"
 
 [`DeepseekV4ForCausalLM.load_weights()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L5363-L5377)
 
-所以这篇文章研究的是：
-
-> **DeepSeek-V4 checkpoint 中的 MTP 权重，如何被 SGLang 物化成一个单层 NextN Draft Model，并由 EAGLE Runtime 反复调用，形成一条未来 Token 候选链。**
+固定版本只物化一个 NextN decoder layer，并不意味着只能提出一枚候选。EAGLE 可以反复调用同一层，每次消费上一枚候选与前一步特征，逐步形成更长的候选链。候选深度由 Runtime 的步数控制，不是每多猜一步就再加载一层 NextN。
 
 ## 二、NextN 怎样组合 Token 与 Target hidden
 
@@ -101,9 +95,7 @@ DeepseekV4ModelNextN
 DeepseekV4ForCausalLMNextN
 ~~~
 
-它和“单独跑一个小 LLM 当 Draft Model”最大的区别，是 NextN 不需要只依赖自己的 Token 历史重新理解上下文。
-
-它直接使用 Target Model 已经算好的 hidden representation。
+NextN 的输入除了 token，还带有上一步的多路 hidden feature。Draft Extend 从 Target 计算过的状态起步，后续 rollout 再沿 NextN 自己的输出特征递推；它不需要为了每枚候选重新执行完整 Target。先看模型怎样把这两种输入合起来。
 
 一边是当前 candidate token：
 
@@ -115,7 +107,7 @@ e_proj_hidden_states, _ = self.e_proj(
 )
 ~~~
 
-另一边是 Target hidden：
+另一边是 `spec_info.hidden_states` 携带的前一步特征。Draft Extend 时它来自 Target，rollout 中则会换成上一轮 NextN 的输出；模型本身按同一输入契约读取它：
 
 ~~~python
 hc_flat = forward_batch.spec_info.hidden_states.view(
@@ -158,11 +150,7 @@ flowchart TD
     LM --> L[Next candidate logits]
 ~~~
 
-NextN 使用 Target 提供的 Hidden Feature，与输入 Token 一起生成候选。
-
-它更接近：
-
-> **Target 已经把上下文压成高质量 feature，NextN 在这个 feature 上做更便宜的未来 rollout。**
+图中 Target confirmed hidden 表示 Draft Extend 的起点。进入 `draft_forward()` 后，Worker 会在每次 NextN forward 前把当前 `hidden_states` 放进 `spec_info`，执行后再用 `logits_output.hidden_states` 更新它。因此第二、第三枚候选依赖前面 Draft 的 token 与特征，不是每一步都重新向 Target 索取一份已确认的未来 hidden。
 
 ### Target 到 Draft 的多路 Hidden Feature
 
@@ -193,9 +181,7 @@ if hidden_states_to_store_before_norm is not None:
 
 [`LogitsProcessor._get_hidden_states_to_store()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L785-L836)
 
-所以对当前 DeepSeek-V4 EAGLE/NextN 路径，Target→Draft 边界传递的核心 feature shape 是：`[selected_token_rows, hc_mult × hidden_size]`
-
-而不是普通的：`[selected_token_rows, hidden_size]`
+因此，当前 DeepSeek-V4 Target→Draft 边界传递的 feature shape 是 `[selected_token_rows, hc_mult × hidden_size]`。它保留 mHC 的多路特征，不是普通的 `[selected_token_rows, hidden_size]`；读取方不能只因为行数相同，就按一个 hidden 向量解释整行。
 
 NextN 收到后再：
 
@@ -206,13 +192,7 @@ spec_info.hidden_states.view(
 )
 ~~~
 
-经过 `h_proj` 后恢复成：`[n_tokens, hc_mult, hidden_size]`
-
-当前 Token Embedding 经 `e_proj` 是：`[n_tokens, hidden_size]`
-
-再变成：`[n_tokens, 1, hidden_size]`
-
-与 Target feature 广播相加。
+代码先把各路特征临时排成 `[n_tokens × hc_mult, hidden_size]` 做归一化与 `h_proj`，再恢复为 `[n_tokens, hc_mult, hidden_size]`。Token Embedding 经 `e_proj` 得到 `[n_tokens, hidden_size]`，插入一维后成为 `[n_tokens,1,hidden_size]`，向各路广播相加。这里是保留 stream 维度做融合，不是先把多路特征平均成一条。
 
 如果用一个教学 shape：
 
@@ -246,13 +226,13 @@ Token embedding
 [2, M, 8]
 ~~~
 
-上面的形状对应当前 DeepSeek-V4 NextN 实际接收的 Draft feature。
+这个教学例子把 hidden_size 缩到 8，M 代表 `hc_mult`，不是在声称模型实际维度为 8。示意图展示逻辑上的 `[2,M,8]`，实现做投影时会先临时展平为 `[2×M,8]`。NextN 的 decoder 输出也会保留 `pre_hc_head`，作为后续可捕获的多路特征；用于 LM Head 的则是聚合、归一化后的 hidden。
 
 ## 三、Draft Extend 产生第一枚候选
 
 生成第一枚 Draft 候选前，先看这一轮从哪里起步。上一轮 Target Verify 或 Prefill 完成后，会得到一枚 **Target 已确认的 Token**。
 
-在 EAGLE 数据结构里，它叫：`bonus_tokens`
+在 EAGLE 数据结构里，这枚边界 token 叫 `bonus_tokens`。它是 Target 已经决定的输出，尚不等于它自己的 Target KV 已经算完。
 
 `EagleDraftInput` 的源码注释也把它定义为：
 
@@ -265,15 +245,11 @@ Per-req bonus token
 
 [`EagleDraftInput`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_info.py#L143-L180)
 
-它是：`Target confirmed boundary token`
-
-不是：`Draft candidate 1`
+bonus 属于已经确认的边界，candidate1 属于 NextN 接下来提出的未来。两者如果混为一谈，后面的候选数量和 Verify 窗口都会少算一位。
 
 ### Target 状态先进入 Draft Extend
 
-Prefill 后，EAGLE 会运行：`_draft_extend_for_prefill()`
-
-Verify 后，则运行：`_draft_extend_for_decode()`
+Prefill 后通过 `_draft_extend_for_prefill()` 建立第一轮 Draft 状态；Verify 后则通过 `_draft_extend_for_decode()` 把新确认的历史送给 Draft。下面讨论后者，也就是稳态轮次之间的交接。
 
 以 Decode 稳态为例，Draft Extend 输入里有：
 
@@ -283,7 +259,9 @@ hidden_states=batch_result.logits_output.hidden_states
 
 也就是刚刚 Target Verify 捕获的 mHC hidden。
 
-同时，NextN 的 input token 来自已经接受的 Target token path；最终边界 token 会保留为下一轮的 `bonus_tokens`。
+NextN 的有效 input token 来自 Target 这轮产生的输出路径，hidden 则来自产生这些预测的 Target 输入行，两者相差一个位置。例如前一轮 Verify 输入 `R、A、C`、输出 `A、C、X`，Draft Extend 将有效 token `A、C、X` 与对应的 Target hidden `h(R)、h(A)、h(C)` 配对。最后一组用 `X` 的 Embedding 加 `h(C)`，为 `X` 后面的第一枚 Draft 候选提供起点。
+
+这个例子只列有效路径；Decode Draft Extend 的实际 buffer 按固定窗口组织，还可能包含无效尾部。Worker 用每请求 block 起点加 `accept_lens-1` 的 `select_index` 选择最后有效位置，不能把数组末行直接当成每条请求的边界。
 
 Draft Extend 执行一次：
 
@@ -313,9 +291,7 @@ next_draft_input.hidden_states = ret_hidden_states
 
 [`EagleDraftWorker._draft_extend_for_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py#L1127-L1276)
 
-这里的：`topk_index`
-
-才是下一轮 `draft_forward()` 开始时已经准备好的第一枚 Draft candidate。
+这里写回的 `topk_index` 才是下一轮 `draft_forward()` 开始时已经准备好的第一枚 Draft candidate；对应的 `ret_hidden_states` 则来自这次 NextN 执行，成为后续 rollout 的 seed。
 
 因此准确时序是：
 
@@ -335,9 +311,7 @@ flowchart TD
     DH --> F
 ~~~
 
-按输入与产出对应起来：
-
-> **bonus 是 Target→Draft 的边界输入；candidate1 是 Draft Extend 对这个边界状态做一次 NextN forward 后得到的 proposal。**
+所以从 Target 到 Draft 的交接不是仅传一个 token ID。边界 token、对齐的 Target feature、接受长度与 Draft 缓存共同决定 Extend 从哪里继续；它产出的 proposal 与 Draft feature 再一起进入后续循环。
 
 ### 为什么 Verify Window 里又会看到 bonus
 
@@ -354,11 +328,11 @@ draft_tokens = torch.cat(
 
 [`build_tree_kernel_efficient()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py)
 
-这一步是为了构造 Target Verify 的因果窗口，不意味着 bonus 是 Draft 生成的 Token。
+Target 下一次验证候选时，仍要把旧 bonus 当作 root 输入。以 `X` 为边界，窗口从 `[X,d1,d2,d3]` 开始；Target 在这一轮才计算 `X` 自己的 KV，并检查后面的 Draft 候选。prepend 是在补齐因果窗口，不是把 `X` 重新归类为 Draft 生成的 token。
 
 ## 四、算清候选数与 NextN Forward 次数
 
-这一组数字如果不拆开，很容易把 MTP 的执行成本理解错。
+下面按 Eager 控制流统计 NextN 执行次数。Graph capture/replay 仍需保留相同的数据依赖，但一次 replay 的提交次数要另计，不能与 Python 层的 forward 调用数混用。
 
 假设：
 
@@ -367,7 +341,7 @@ speculative_num_steps = 3
 speculative_eagle_topk = 1
 ~~~
 
-固定源码会要求 topk=1 时：
+固定源码在 `topk=1` 且窗口宽度不一致时，会记录 warning，并将 `speculative_num_draft_tokens` 调整为：
 
 ~~~python
 speculative_num_draft_tokens
@@ -388,11 +362,7 @@ num_draft_tokens = 4
 
 ### `draft_forward()` 里只有 3 枚 Draft candidate
 
-进入 `EagleDraftWorker.draft_forward()` 时：`topk_index`
-
-已经由前一阶段 Draft Extend 准备好。
-
-对 topk=1，它就是：`candidate1`
+进入 `EagleDraftWorker.draft_forward()` 时，`topk_index` 已由前一阶段 Draft Extend 准备好。对 `topk=1`，它只包含每条请求的 `candidate1`；循环开始前并不需要再运行一次模型来产生它。
 
 源码随后进入：
 
@@ -400,9 +370,7 @@ num_draft_tokens = 4
 for i in range(self.speculative_num_steps):
 ~~~
 
-当：`i = 0`
-
-先把已有 `topk_index` 记成 candidate1，然后运行一次 NextN：
+`i=0` 时先记录已有 candidate1，再以它和当前 Draft hidden 为输入，运行一次 NextN，得到 candidate2：
 
 ~~~text
 candidate1
@@ -440,9 +408,7 @@ draft_runner.forward() = 2 次
 
 [`EagleDraftWorker.draft_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py#L778-L951)
 
-但如果从“上一轮 Target 刚确认完状态”开始计算 candidate-generation 成本，还需要把前面的：`1 × Draft Extend forward`
-
-算进去。
+只看这个循环会得到 2 次 NextN forward；若从上一轮 Target 刚确认完状态开始计算，还要计入前面产生 candidate1 的 `1 × Draft Extend forward`。后者通常按多行窗口执行，不能因为两种工作都记作一次 forward，就认为它们耗时相同。
 
 因此稳态下，从上一轮 Target Verify 结束，到下一轮 3 枚 candidate 全部准备完成，NextN 模型总共执行：
 
@@ -454,15 +420,11 @@ draft_runner.forward() = 2 次
 3 × NextN forward
 ~~~
 
-只是它们跨在两个 Runtime 阶段里，不都写在 `draft_forward()` 里。
+这个等式统计的是 Eager 路径上的模型调用次数，不是每 token 的算子数或设备耗时。三个调用跨在 Draft Extend 与 Draft Decode 两个阶段；Graph replay 可以改变提交方式，却不把这些先后依赖变成一次无依赖的块式提议。
 
 ### 为什么 Target Verify 是 4 个 Token
 
-`draft_forward()` 得到：`[draft1, draft2, draft3]`
-
-构建 Verify Input 时，再 prepend：`bonus`
-
-最终：
+`draft_forward()` 得到 `[draft1,draft2,draft3]`，构建 Verify Input 时在前面补上旧 bonus，最终窗口为：
 
 ~~~text
 Verify Window:
@@ -480,11 +442,7 @@ Verify Window:
 | 从上一轮 Target 状态算起的 NextN forward 总数 | 3 | 1 次 Draft Extend + 2 次 Draft Decode |
 | Target Verify window | 4 | `[bonus, d1, d2, d3]` |
 
-`num_draft_tokens` 描述整个 Verify 窗口，计数时包含旧 bonus 所占的位置。
-
-在 EAGLE 里，它更接近：
-
-> **这一轮 Target Verify 需要处理的 speculative tree/window 宽度。**
+`num_draft_tokens` 在这里计数的是整个 Verify 窗口，包含旧 bonus。三个候选全部接受时，本轮最多输出三个 accepted drafts 加一个新 Target bonus；若第一个候选就不匹配，本轮仍可能只输出一个 Target token。因此窗口 4 行不是保证产出 4 枚 token，更不是接受长度的实测值。
 
 ## 五、NextN 的 SWA 缓存
 
@@ -516,9 +474,7 @@ DeepseekV4DecoderLayer(
 
 [`deepseek_v4_nextn.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_nextn.py)
 
-`compress_ratio=0` 选择 SWA 路径：
-
-> **这个 NextN Layer 不使用 C4/C128 compressed extra-cache path，而使用 DSV4 的 SWA path。**
+这里的 `compress_ratio=0` 选择 SWA 路径，不为这个 NextN layer 使用 C4/C128 compressed extra-cache。它没有把 Attention 或 KV Cache 关掉；仍需要保存 NextN 继续 rollout 所用的 SWA 状态。
 
 ### Memory Pool 侧：ratio 0 没有 compressed pool，但 SWA pool 仍然存在
 
@@ -540,7 +496,7 @@ compress_ratio = 0
 compress_kv_pool = None
 ~~~
 
-但这并不会影响它使用 SWA cache。
+ratio 0 对应的 compressed pool 为 None，与 SWA storage 是否存在是两件事。排查 Draft 缓存时，如果只检查 compressed pool，就会误把“没有压缩池”当成“没有缓存”。
 
 固定源码：
 
@@ -578,9 +534,7 @@ no C4 extra cache
 no C128 extra cache
 ~~~
 
-这是源码事实。
-
-还有一个额外佐证：`DeepseekV4AscendAttnBackend` 如果发现自己运行在 draft worker，会把 Target checkpoint 中原本的 compression-ratio list 清空：
+Backend 初始化还有一个对应分支：若当前 runner 是 draft worker，就清空从 Target 配置读取的 compression-ratio list，避免按 Target 的层表构造 Draft compressed metadata：
 
 ~~~python
 if model_runner.is_draft_worker:
@@ -593,23 +547,11 @@ if model_runner.is_draft_worker:
 
 ### NextN 缓存配置的适用范围
 
-可以写：
-
-> **当前 DeepSeek-V4 NextN Draft Layer 的 attention/cache path 是 SWA-only。**
-
-不要写：
-
-> **DeepSeek-V4 开启 MTP 后就只使用 SWA。**
-
-Target Model 仍然是 Target 自己的：`SWA / C4 / C128`
-
-混合结构。
-
-“SWA-only”只是在描述：`NextN Draft Layer`
+SWA-only 只描述当前 NextN Draft layer。完整 Target 仍按自身层配置使用 `SWA / C4 / C128`，开启 MTP 并没有把 Target 的压缩历史路径改成 SWA。性能分析也应分别看 Draft 的 SWA 成本与 Target Verify 的混合缓存成本。
 
 ## 六、Ascend 上的模型、Worker 与 Backend
 
-到这里可以把理论和你关心的 Ascend 部署接起来。
+把模型输入、候选计数与缓存路径对齐后，再看 Ascend 910C 上由哪些执行对象承接这些阶段。
 
 固定版本的 DeepSeek-V4-Flash Ascend 官方文档给出的 speculative 配置就是：
 
@@ -628,7 +570,7 @@ Target Model 仍然是 Target 自己的：`SWA / C4 / C128`
 
 [DeepSeek-V4-Flash Ascend Tutorial](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/docs/docs/hardware-platforms/ascend-npus/model-deployment/tutorials/deepseek_v4_flash.mdx)
 
-也就是说，Ascend 上官方生产示例走的是：
+该固定教程的部署示例串起的是下面这条路径：
 
 ~~~text
 MTP checkpoint
@@ -638,17 +580,11 @@ EAGLE algorithm
 DeepseekV4ForCausalLMNextN
 ~~~
 
-而不是 DSpark。
+这里选择的是 MTP / NextN。Checkpoint 中存在其他 head，并不意味着这次示例同时执行了 DSpark。上面的 CLI 只是相关参数节选，尚不包含模型路径等完整启动条件。
 
 ### Draft Model 层
 
-在 EAGLE 模式下，DeepSeek-V4 draft architecture 是：`DeepseekV4ForCausalLMNextN`
-
-内部只有当前受支持的：`1 × NextN DeepseekV4DecoderLayer`
-
-ModelSlim 权重路径也有专门处理；`deepseek_v4_nextn.py` 在 ModelSlim 配置下把 decoder prefix 对到：`mtp.0`
-
-所以 NPU W8A8 MTP checkpoint 并不是先转成 DSpark model 再运行。
+EAGLE 模式下，DeepSeek-V4 Draft architecture 是 `DeepseekV4ForCausalLMNextN`，内部物化一个 NextN `DeepseekV4DecoderLayer`。ModelSlim 配置会把 decoder 的权重 prefix 对到 `mtp.0`，这属于 MTP 权重加载路径，不是先转成 DSpark model 再运行。
 
 ### Draft Decode Attention 层
 
@@ -665,9 +601,7 @@ device = npu
 
 [`DraftBackendFactory._create_dsv4_decode_backend()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/draft_utils.py#L426-L453)
 
-这个 multi-step container 会为每个 speculative step 建立一个：`DeepseekV4AscendAttnBackend`
-
-并维护各 step 自己的 KV location / metadata view。
+这个 multi-step container 为不同 speculative step 组织 `DeepseekV4AscendAttnBackend`，维护各 step 的 KV location 和 metadata view。它是 Attention 执行组织，不是又加载多个 NextN decoder layer；模型层数与 step 后端对象数不能混算。
 
 固定源码：
 
@@ -712,9 +646,7 @@ flowchart TD
 
 如果启用 NPU graph，EAGLE 还有对应的 NPU Draft / Draft-Extend graph runner；那是执行优化层，不改变上面的算法状态机。
 
-这几层共同组成 Ascend 上的 MTP 执行路径：
-
-> **MTP 权重被装进单层 NextN Draft Model，EAGLE Worker 用 Ascend DSV4 Draft Extend + Multi-Step Draft Backend 迭代构造候选，再交给完整 DeepSeek-V4 Target 做 Verify。**
+模型类负责用 MTP 权重计算，Worker 决定先 Extend 再 rollout 的执行顺序，Attention Backend 则承接各阶段的缓存与 metadata。区分这三层，才能解释为什么日志里既有 NextN、EAGLE，也有 Multi-Step Draft Backend，而它们并不是三套并行运行的 Draft 算法。
 
 ## 七、少跑 Target 的收益与 Draft 成本
 
@@ -729,7 +661,7 @@ NextN 仍按候选顺序推进：Draft Extend 给出第一枚候选，后续 rol
 | Target Verify | 为候选窗口计算预测与 hidden states |
 | Accept 与提交 | 确定有效输出，整理已计算的输入状态，并保留下一轮 bonus |
 
-接受率下降时，后半段 rollout 可能成为无效工作；窗口过宽时，Verify 与缓存整理也会变贵。读懂这条执行链之后，再结合 [投机解码性能分析](../performance/deepseek-v4-speculative-performance-analysis.md) 选择要测量的窗口和并发。
+接受率下降时，后半段 rollout 可能成为无效工作；窗口过宽时，Verify 与缓存整理也会变贵。计数上，AL 若包含 bonus，就要与只统计 Draft 的严格接受率分开，并用同一测量窗口的实际提出、接受数计算后者，不能仅凭窗口宽度倒推。比较性能时继续对齐批次、资源、输入输出长度与缓存条件，同时观察 TPOT、E2E、输出吞吐和 Draft/Verify 耗时。读懂这条执行链之后，再结合 [投机解码性能分析](../performance/deepseek-v4-speculative-performance-analysis.md) 选择要测量的窗口和并发。
 
 ### 源码阅读入口
 
