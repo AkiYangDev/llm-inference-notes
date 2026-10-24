@@ -487,5 +487,20 @@
     "role": "advanced",
     "seo_title": "Ascend 910C推理调优复盘：有效优化、失败假设与实验成本",
     "seo_summary": "用DeepSeek-V4-Flash真实PD实验解释P端尾块合批为何提高32.27%稳态吞吐，以及IndexCache、静态EPLB和Compact的收益边界。"
+  },
+  "docs/performance/ascend-910c-inference-tuning-negative-results-and-stop-rules.md": {
+    "summary": "从真实PD实验分析CP与chunk调整、请求速率、Compact与固定SPS预算、静态专家布局的负例和小收益，解释窗口差异、逻辑验证槽与端到端吞吐，以及何时停止投入。",
+    "category": "性能调优",
+    "tags": [
+      "Ascend 910C",
+      "SGLang",
+      "性能调优",
+      "投机解码",
+      "工程复盘"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "Ascend 910C调优负例分析：Compact、静态EPLB与实验取舍",
+    "seo_summary": "为什么TPOT更低却没提高吞吐？用DeepSeek-V4-Flash实测拆解CP/chunk、请求速率、Compact逻辑槽与SPS预算的负例，以及静态EPLB小收益和停止条件。"
   }
 }

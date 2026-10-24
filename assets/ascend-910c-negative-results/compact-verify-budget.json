@@ -1,0 +1,32 @@
+{
+  "scope": "Whole320 request-level verify width counts; logical slots are not device work or elapsed time",
+  "N": 320,
+  "C": 128,
+  "configured_req_s": 6,
+  "maximum_verify_width": 6,
+  "verify_calls": 59371,
+  "verify_width_histogram": [
+    0,
+    6,
+    102,
+    534,
+    1087,
+    1266,
+    56376
+  ],
+  "full_width_fraction": 0.9495544963029088,
+  "observed_logical_verify_slots": 350746,
+  "uniform6_logical_slots": 356226,
+  "logical_slot_reduction_fraction": 0.015383492501951035,
+  "verified_draft_slots": 291375,
+  "actual_generated_proposals": "NOT_OBSERVED",
+  "strict_actual_proposal_AR": "NOT_OBSERVED",
+  "full_draft_verify_device_phase_wall": "NOT_OBSERVED",
+  "budget_break_even_model": {
+    "scope": "Illustrative single-request A/T model, not measured device stage timing",
+    "baseline_AL": 5.7645485891211035,
+    "candidate_AL": 5.3203442117226825,
+    "new_to_old_AL_ratio": 0.9229420360448125,
+    "required_cycle_time_reduction_fraction": 0.07705796395518749
+  }
+}
