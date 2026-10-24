@@ -22,6 +22,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 文章按主要阅读角色组织；专题、标签与系列阅读仍在网站中并行保留。
 
+- [128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？](docs/performance/128k-prefix-cache-remaining-costs.md)：解释前缀命中之后的新输入计算、压缩历史访问、PD状态交接和持续生成成本。
+
 - [用 AISBench 压测 SGLang：从第一条请求到一份可信报告](docs/performance/aisbench-sglang-first-request-to-report.md)：从现有服务和一条请求开始，沿独立配置、小测、正式负载与原生稳态后处理读懂报告。
 
 - [专家计数都采到了，为什么导出还会失败？](docs/performance/expert-count-export-hccl-gloo.md)：沿一次HCCL导出故障，解释异步错误、CPU/Gloo整数归约、真实多worker验证和循环计数的使用边界。

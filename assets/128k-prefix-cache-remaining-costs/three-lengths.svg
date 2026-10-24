@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="450" viewBox="0 0 1120 450" role="img" aria-labelledby="title desc">
+  <title id="title">90.6222% 前缀命中之后，三个长度仍然不同</title>
+  <desc id="desc">实际输入131076位置，其中118784位置复用前缀，12292位置是新输入。Prefill推进新输入，后续输出的逻辑位置仍位于长历史之后。条形按输入位置比例绘制，不代表时间或物理内存。</desc>
+  <rect width="1120" height="450" rx="18" fill="#f5f8fc"/>
+  <g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#15334d">
+    <text x="42" y="52" font-size="27" font-weight="700">命中后，新的 Query 仍然接在长历史之后</text>
+    <text x="42" y="87" font-size="18">实际 Chat 输入 L = 131076；长条仅表示输入位置比例</text>
+    <rect x="42" y="123" width="938.22" height="74" fill="#c3dfea"/>
+    <rect x="980.22" y="123" width="97.78" height="74" fill="#eac170"/>
+    <text x="68" y="154" font-size="21" font-weight="700">复用前缀 P = 118784</text>
+    <text x="68" y="182" font-size="17">省去这些历史位置的重复模型计算</text>
+    <path d="M1028 200 V225 H794" stroke="#a16a15" stroke-width="2" fill="none"/>
+    <text x="530" y="250" font-size="20" font-weight="700">新输入 U = 12292</text>
+    <text x="530" y="278" font-size="17">仍需计算，并按各层规则访问历史</text>
+    <path d="M42 305 H1078 M42 298 V312 M1078 298 V312" stroke="#496b86" stroke-width="2"/>
+    <text x="42" y="341" font-size="21" font-weight="700">逻辑上下文仍为 131076，随后再生成 1024 token</text>
+    <text x="42" y="379" font-size="18">90.6222% 是 token 命中比例，不是时间节省比例，也不是 KV 字节节省比例。</text>
+    <text x="42" y="410" font-size="16" fill="#496b86">DeepSeek-V4 的历史访问取决于 SWA、C4 / C128 压缩及相应索引路径。</text>
+  </g>
+</svg>

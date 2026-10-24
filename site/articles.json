@@ -632,5 +632,20 @@
     "topic": "performance",
     "role": "entry",
     "seo_title": "用AISBench压测SGLang：从第一条请求到一份可信报告"
+  },
+  "docs/performance/128k-prefix-cache-remaining-costs.md": {
+    "summary": "沿真实128K/1K请求区分复用前缀、新Query和逻辑上下文，解释DeepSeek-V4的SWA/C4/C128历史访问、PD状态交接，以及90%命中之后仍然存在的生成与排队成本。",
+    "category": "性能分析",
+    "tags": [
+      "DeepSeek-V4",
+      "Ascend 910C",
+      "Prefix Cache",
+      "PD 分离",
+      "KV Cache"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？",
+    "seo_summary": "沿真实128K/1K请求区分复用前缀、新Query和逻辑上下文，解释DeepSeek-V4的SWA/C4/C128历史访问、PD状态交接，以及90%命中之后仍然存在的生成与排队成本。"
   }
 }

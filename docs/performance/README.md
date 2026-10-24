@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？](128k-prefix-cache-remaining-costs.md)：区分token命中、计算量、状态驻留和传输，结合真实128K实验解释剩余开销。
+
 - [用 AISBench 压测 SGLang：从第一条请求到一份可信报告](aisbench-sglang-first-request-to-report.md)：附可运行配置、JSONL与脚本，解释模型名、tokenizer、N/C/r、retry及whole/native结果保存。
 
 - [CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？](ascend-910c-cp2-vs-cp4-prefill-throughput.md)：沿CP/DP重组、每rank行数与normal分轮，解释TPOT下降但同负载native/whole吞吐未提高，以及阶段计时的归因边界。
