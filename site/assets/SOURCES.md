@@ -62,3 +62,13 @@
 - 完整生成结果先保留原生像素，再仅转换网页编码；桌面以顶部对齐，手机以右侧人物为焦点。
 - 提示词摘要：保留蓝发鲸尾女仆身份、微笑蓝眼、蓝白服装、伸手姿势与海洋科技背景；清晰二维动漫线稿；左侧为标题留白；完整头饰，上方约 10% 天空；无文字和水印。
 - v2 保留用于历史记录，新首页使用 v3。
+
+
+## 办公桌场景看板（2026-10-24）
+
+`whale-workspace-v1.jpg`：取自 [AATINF/deepseek-whale-girl-assets · featured/C77.jpg](https://github.com/AATINF/deepseek-whale-girl-assets/blob/main/featured/C77.jpg)，素材名“成熟·办公桌场景壁纸”。社区通过 wan2.7-image 生成，不是手绘原作。本站直接保存原 JPEG（2048 × 1152），未重绘人物；首页通过 CSS 渐变与响应式裁切适配标题区域。原有 v3 保留为历史素材。
+
+- 素材发布与生成：AATINF；[使用说明](https://github.com/AATINF/deepseek-whale-girl-assets#授权与署名)。
+- 角色参考：TreapGoGo/deepseek-whale-girl，Copyright (c) 2026 TreapGoGo；参考仓库按 MIT License 提供。许可原文保存在 [TREAPGOGO-LICENSE.txt](TREAPGOGO-LICENSE.txt)。此记录仅说明上游声明，不对其他角色图或整个社区形象追加授权。
+
+- 上游固定版本：a7e58d261885e12a7652d4677e1412edbab557e8；图片 SHA-256：18dc5a1d5f16e6383d01c9b79ca9bfad15cbba1b661d2a0cc82916e51b0cb783。
