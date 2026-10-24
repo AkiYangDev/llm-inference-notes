@@ -33,6 +33,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ### 进阶
 
+- [Ascend 910C上的P端场景静态EPLB：从路由计数、专家布局到实测收益](docs/performance/ascend-910c-prefill-scenario-static-eplb.md)：从P端路由计数生成固定专家布局，区分放置、副本分发与在线重排，并用16K/128K对照解释收益。
 - [Ascend 910C推理调优负例分析：为什么合理的优化没有带来吞吐收益](docs/performance/ascend-910c-inference-tuning-negative-results-and-stop-rules.md)：从TPOT降低却吞吐不增、whole升高但native不变等对照，分析负例能支持什么结论、何时应停止试验。
 - [一次Ascend 910C推理调优复盘：真正有效的优化、失败假设与实验成本](docs/performance/ascend-910c-inference-tuning-effective-optimizations-and-costs.md)：复盘P合批带来的32.27%稳态吞吐提升，以及Compact、静态布局与实验成本的取舍。
 从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。

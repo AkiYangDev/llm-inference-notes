@@ -516,5 +516,20 @@
     "role": "advanced",
     "seo_title": "Decode已经很快了，吞吐为什么上不去？一次Prefill尾块合批优化",
     "seo_summary": "DeepSeek-V4-Flash在Ascend 910C上的真实PD调优：从4-token尾块、128-token页预算和Pcap1到2，解释低TPOT与系统吞吐的区别及同负载实测收益。"
+  },
+  "docs/performance/ascend-910c-prefill-scenario-static-eplb.md": {
+    "summary": "拆解DeepSeek-V4-Flash P端场景静态EPLB的计数、冗余专家放置、理想均分估计和运行验收，解释同320请求whole提升14.18%的组合归因，以及128K两端布局仅约0.81%的边界。",
+    "category": "性能调优",
+    "tags": [
+      "Ascend 910C",
+      "SGLang",
+      "MoE",
+      "EPLB",
+      "PD分离"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "Ascend 910C P端静态EPLB：路由计数、专家布局与实测收益",
+    "seo_summary": "P端静态EPLB如何采集和拟合？区分逻辑专家、物理副本、static分发与在线重排，解释14.18%组合收益、理想均分模型和场景边界。"
   }
 }

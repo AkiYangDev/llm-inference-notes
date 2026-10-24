@@ -1,0 +1,91 @@
+{
+  "scope": "Offline logical-count model, not device execution time or measured speedup",
+  "ring_capacity": 512,
+  "count_shape": [
+    512,
+    43,
+    256
+  ],
+  "already_allreduced": true,
+  "equal_replica_load_split": "ASSUMED_NOT_OBSERVED",
+  "source_rank_temporal_affinity": "NOT_RETAINED",
+  "slot_split_is_chronological_or_independent": false,
+  "retained_layout_algorithm_SHA256": "11cbb47b611b672f8869160e1af7f8c798a1b8429b0157fc9e599bd1eb3e1608",
+  "scenarios": {
+    "copy16k": {
+      "active_ring_slots": 34,
+      "fit_slots": 17,
+      "check_slots": 17,
+      "logical_experts": 256,
+      "physical_slots": 272,
+      "per_EP_rank_slots": 17,
+      "redundant_slots": 16,
+      "candidate_SHA256": "7804d09686530364b2642fb33756c07b2c9e4cf88abbaff161bf2dad22c39d4f",
+      "layer4_ideal_estimate": {
+        "layer": 4,
+        "holdout_old_ideal_equal_replica_split": 1.9174847468375427,
+        "holdout_candidate_ideal_equal_replica_split": 1.0056011766743598
+      },
+      "median_old_ideal_estimate": 1.6131613964232598,
+      "median_new_ideal_estimate": 1.0068261542433012
+    },
+    "prefix128k90": {
+      "active_ring_slots": 26,
+      "fit_slots": 13,
+      "check_slots": 13,
+      "logical_experts": 256,
+      "physical_slots": 272,
+      "per_EP_rank_slots": 17,
+      "redundant_slots": 16,
+      "candidate_SHA256": "730c49ade2bb874bb2a054260da94ed72d104a8fd97ff00cbb1e691ce374d6ca",
+      "layer4_ideal_estimate": {
+        "layer": 4,
+        "holdout_old_ideal_equal_replica_split": 2.4649421157996403,
+        "holdout_candidate_ideal_equal_replica_split": 1.0175787300620365
+      },
+      "median_old_ideal_estimate": 1.3867606975781572,
+      "median_new_ideal_estimate": 1.0134486071085496
+    }
+  },
+  "toy_example": {
+    "scope": "Teaching example, not measured workload",
+    "logical_weights": [
+      80,
+      60,
+      10,
+      10
+    ],
+    "old_mapping": [
+      [
+        0,
+        2,
+        3
+      ],
+      [
+        1,
+        2,
+        3
+      ]
+    ],
+    "new_mapping": [
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        0,
+        1,
+        3
+      ]
+    ],
+    "old_ideal_rank_loads": [
+      90,
+      70
+    ],
+    "new_ideal_rank_loads": [
+      80,
+      80
+    ]
+  }
+}

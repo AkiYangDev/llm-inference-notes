@@ -4,6 +4,7 @@
 
 ## 调优实践
 
+- [Ascend 910C上的P端场景静态EPLB：从路由计数、专家布局到实测收益](ascend-910c-prefill-scenario-static-eplb.md)：沿逻辑专家、副本分发、循环计数与离线拟合，解释16K方案whole提升14.18%的归因边界和128K小收益。
 - [Decode 已经很快了，吞吐为什么上不去？](decode-fast-throughput-limited-by-prefill.md)：沿请求供给、分块接纳和页对齐，解释 Pcap1→2 为何提高吞吐而 TPOT 略高。
 - [Ascend 910C推理调优负例分析：为什么合理的优化没有带来吞吐收益](ascend-910c-inference-tuning-negative-results-and-stop-rules.md)：逐项分析CP/chunk、到达速率、Compact与SPS预算、静态EPLB的小收益和负例，区分瓶颈假设、窗口差异与停止条件。
 - [一次Ascend 910C推理调优复盘：真正有效的优化、失败假设与实验成本](ascend-910c-inference-tuning-effective-optimizations-and-costs.md)：从P端尾块合批、IndexCache与静态布局的实测收益，讲到Compact负例、缓存口径和实验成本。
