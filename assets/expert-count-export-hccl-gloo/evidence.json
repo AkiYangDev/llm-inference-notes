@@ -1,0 +1,140 @@
+{
+  "scope": "Historical 2026-10-21 DeepSeek-V4-Flash/Ascend 910C manual stat observer, not online EPLB or a performance comparison",
+  "workload": {
+    "physical_cards": {
+      "prefill": 8,
+      "decode": 8
+    },
+    "body_tokens": 16384,
+    "chat_tokens": 16388,
+    "output_tokens": 1024,
+    "N": 160,
+    "C": 128,
+    "arrival_rate_req_s": 6,
+    "prefix_cache": 0,
+    "draft_tokens": 5,
+    "verify_width": 6,
+    "indexcache_freq": 2
+  },
+  "source_binding": {
+    "base_source_SHA256": "2f03346990be421b36047216156b7285a263f6d3957b8cf0669b06521803a15c",
+    "candidate_SHA256": "6e255a3151be722bf15630a989136a5799a5b18f6f5596296a368d31cb697e22",
+    "cpu_group_source_SHA256": "b82a0ef4f13eacd650b97e4137d0a7541c9f81cffc5f4d293494758ad3c80d82",
+    "required_runtime_scope": {
+      "expert_distribution_recorder_mode": "stat",
+      "expert_balancedness_report_mode": "off",
+      "enable_eplb": false,
+      "default_world_membership": "same as existing Gloo world CPU group",
+      "new_HCCL_groups": false
+    }
+  },
+  "failure": {
+    "AIS_exit": 0,
+    "success_requests": 160,
+    "allocation_failed_bytes": 2517630976,
+    "reported_operator": "HcclAllreduce",
+    "surfaced_at": "torch.save -> torch_npu serialization -> storage.cpu",
+    "asynchronous_stack_warning": true,
+    "scheduler_exit": -3,
+    "health_status": 503,
+    "partial_pt_bytes": 1949,
+    "dump_request": "timed out; no retry",
+    "start_stop_status": [
+      200,
+      200
+    ],
+    "raw_recovered": false,
+    "failed_requests": 0,
+    "all_output_1024": true
+  },
+  "two_rank_CPU_check": {
+    "status": "ACTUAL_TWO_RANK_CPU_GLOO_PASSED",
+    "candidate_SHA256": "6e255a3151be722bf15630a989136a5799a5b18f6f5596296a368d31cb697e22",
+    "first_dump_true": true,
+    "ranks": [
+      {
+        "rank": 0,
+        "status": "PASS",
+        "backend": "gloo",
+        "count_math_equal": true,
+        "CPU_output": true,
+        "NPU_calls": 0
+      },
+      {
+        "rank": 1,
+        "status": "PASS",
+        "backend": "gloo",
+        "count_math_equal": true,
+        "CPU_output": true,
+        "NPU_calls": 0
+      }
+    ],
+    "integer_dtypes_covered": [
+      "int32",
+      "int64"
+    ],
+    "invalid_membership_and_float_rejected": true,
+    "actual_16_worker_D2H_covered": false
+  },
+  "real_D_capture": {
+    "success_requests": 160,
+    "failed_requests": 0,
+    "API_events": [
+      {
+        "action": "start",
+        "completed": true,
+        "status": 200,
+        "wall_s": 0.008211479987949133
+      },
+      {
+        "action": "stop",
+        "completed": true,
+        "status": 200,
+        "wall_s": 0.008205360034480691
+      },
+      {
+        "action": "dump",
+        "completed": true,
+        "status": 200,
+        "wall_s": 0.07151292997878045
+      }
+    ],
+    "worker_count": 16,
+    "same_worker_identity_before_after": true,
+    "completion_scope": "FanOut DP16 protocol aggregate acknowledgements, not 16 separately traced spans",
+    "raw_validation": {
+      "bytes": 22546433,
+      "logical_count_shape": [
+        512,
+        43,
+        256
+      ],
+      "dtype": "torch.int32",
+      "device": "cpu",
+      "sum": 45597888,
+      "rank": 0,
+      "torch_load_CPU_complete": true
+    },
+    "raw_pt_SHA256": "0ab4de472de420f9729ec5f3ff8273f9bf43d7c14af33c1dc2e9c26c86d95e47",
+    "already_allreduced": true,
+    "buffer_scope": "512 circular slots, rank0 already-allreduced logical assignments; not all160 coverage or chronological order if wrapped",
+    "new_service_starts_for_this_window": 0,
+    "native_status": "NOT_COLLECTED_LAYOUT_DIAGNOSTIC",
+    "ordinary_uninstrumented_performance": false
+  },
+  "CPU_fit": {
+    "status": "CURRENT16K_G5_RETAINED_COUNTS_CPU_FIT_COMPLETE",
+    "active_slots": 512,
+    "train_slot_count": 256,
+    "holdout_slot_count": 256,
+    "temporal_independence_established": false,
+    "new_model_requests": 0,
+    "throughput_gain_from_fit": "NOT_MEASURED_BY_THIS_ARTIFACT"
+  },
+  "publication": {
+    "raw_tensor_and_requests_remain_private": true,
+    "new_model_requests": 0,
+    "new_SSH": 0,
+    "new_capture_or_fit": 0
+  }
+}

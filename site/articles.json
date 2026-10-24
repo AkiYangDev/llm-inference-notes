@@ -590,5 +590,19 @@
     "role": "advanced",
     "seo_title": "NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？",
     "seo_summary": "Ascend 910C NPU trace中的19%空隙为何不等于19%可回收加速：跨stream区间并集、跨rank等待、Graph端点、DSpark元数据小拷贝与Profiler扰动的真实案例。"
+  },
+  "docs/performance/expert-count-export-hccl-gloo.md": {
+    "summary": "160条推理完成，专家统计却在dump时触发HCCL内存申请失败。从storage.cpu的异步错误栈，追到同成员CPU/Gloo整数SUM与真实16worker导出验证。",
+    "category": "故障排查",
+    "tags": [
+      "Ascend",
+      "MoE",
+      "EPLB",
+      "分布式通信"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "专家计数都采到了，为什么导出还会失败？",
+    "seo_summary": "DeepSeek-V4-Flash/Ascend 910C专家统计导出排障：HcclAllreduce内存申请失败、CPU/Gloo归约修复、循环缓冲与有效文件验收。"
   }
 }

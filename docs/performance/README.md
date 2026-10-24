@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [专家计数都采到了，为什么导出还会失败？](expert-count-export-hccl-gloo.md)：从storage.cpu暴露的HcclAllreduce内存申请失败，走到同成员CPU/Gloo导出和有效统计文件验收。
+
 - [NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？](npu-timeline-gaps-and-recoverable-speedup.md)：用真实rank0/1区间统计与小拷贝定位，区分记录空隙、跨rank等待、采集扰动与可回收关键路径时间。
 
 - [128K 输入、90% 前缀缓存：怎样把压测场景真正跑准](128k-prefix-cache-benchmark-calibration.md)：沿真实 tokenizer 核长、共享区与独立后缀、seed/check 和正式 usage，解释预测前缀与实际命中的差别。

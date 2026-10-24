@@ -1,0 +1,32 @@
+# Historical source excerpts, abbreviated for the article; not a standalone runner.
+# Base and candidate SHA256 are recorded in evidence.json.
+
+# Before: _StatAccumulator.dump (surrounding conversion/output code omitted)
+if self._first_dump:
+    self._first_dump = False
+    torch.get_device_module().empty_cache()
+torch.distributed.all_reduce(logical_count_of_buffered_step,
+                             op=torch.distributed.ReduceOp.SUM)
+# rank 0 later serializes output containing that device tensor.
+
+# After: same physical-to-logical conversion, then existing CPU group.
+def _stat_logical_count_cpu_world_sum(logical_count, world_group):
+    """Sum observer integers on the existing same-membership CPU Gloo group."""
+    cpu_group = world_group.cpu_group
+    if not torch.distributed.is_initialized() or cpu_group is None:
+        raise RuntimeError("D-stat CPU export requires an existing world CPU group")
+    if str(torch.distributed.get_backend(cpu_group)).lower() != "gloo":
+        raise RuntimeError("D-stat CPU export requires the existing Gloo backend")
+    expected_ranks = list(range(torch.distributed.get_world_size()))
+    if list(world_group.ranks) != expected_ranks:
+        raise RuntimeError("D-stat CPU group would change default-world SUM membership")
+    if torch.distributed.get_process_group_ranks(cpu_group) != expected_ranks:
+        raise RuntimeError("D-stat CPU process group membership mismatch")
+    if logical_count.dtype not in (torch.int32, torch.int64):
+        raise TypeError("D-stat CPU export requires integer logical counts")
+    cpu_count = logical_count.detach().cpu().contiguous()
+    torch.distributed.all_reduce(
+        cpu_count, op=torch.distributed.ReduceOp.SUM, group=cpu_group
+    )
+    return cpu_count
+
