@@ -604,5 +604,20 @@
     "role": "advanced",
     "seo_title": "专家计数都采到了，为什么导出还会失败？",
     "seo_summary": "DeepSeek-V4-Flash/Ascend 910C专家统计导出排障：HcclAllreduce内存申请失败、CPU/Gloo归约修复、循环缓冲与有效文件验收。"
+  },
+  "docs/performance/ascend-910c-cp2-vs-cp4-prefill-throughput.md": {
+    "summary": "复盘CP4/DP4切到CP2/DP8的N480同负载负例：单rank行数、page预算、EP16通信轮次与请求驻留时间，解释TPOT改善却没有吞吐收益。",
+    "category": "性能分析",
+    "tags": [
+      "Ascend 910C",
+      "DeepSeek-V4",
+      "Context Parallelism",
+      "PD分离",
+      "性能调优"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？",
+    "seo_summary": "Ascend 910C上CP2替代CP4的真实对照：native吞吐-0.91%、whole-1.64%，TPOT降低而TTFT升高；解析CP/DP布局、zigzag补齐、DeepEP分轮与阶段指标。"
   }
 }

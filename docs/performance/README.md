@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？](ascend-910c-cp2-vs-cp4-prefill-throughput.md)：沿CP/DP重组、每rank行数与normal分轮，解释TPOT下降但同负载native/whole吞吐未提高，以及阶段计时的归因边界。
+
 - [专家计数都采到了，为什么导出还会失败？](expert-count-export-hccl-gloo.md)：从storage.cpu暴露的HcclAllreduce内存申请失败，走到同成员CPU/Gloo导出和有效统计文件验收。
 
 - [NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？](npu-timeline-gaps-and-recoverable-speedup.md)：用真实rank0/1区间统计与小拷贝定位，区分记录空隙、跨rank等待、采集扰动与可回收关键路径时间。

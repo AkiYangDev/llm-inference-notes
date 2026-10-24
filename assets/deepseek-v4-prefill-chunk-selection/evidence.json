@@ -11,7 +11,8 @@
     "schedule_policy": "de11a37e44db56a1aeb47c2308f783fe4f6a0e4b8b224051e4d2894e748f6625",
     "parallel_hook": "b3b2cd96b91ffb5633038566f02f26939dbe07ff36fca5005b5eac9abc5a7d07",
     "native_normal_capacity": "148454437a314f0a99627284bb0807da8504eb5438aca3c4a5ffd949a6861484",
-    "normal_dispatch": "afece7699f372657926327db98705daa6be8230ceaeb9d6580de0c31bc0f8c0f"
+    "normal_dispatch": "afece7699f372657926327db98705daa6be8230ceaeb9d6580de0c31bc0f8c0f",
+    "cp_padding.py": "9ee71e9795699fd5063d4b0c158132ebd1624858e75f6c3f261bf97c30e1a9f1"
   },
   "source_functions": {
     "parallel_hook": "_handle_data_parallelism: chunked_prefill_size // dp_size",
@@ -229,9 +230,11 @@
         "formalactual": 16388,
         "page128_admission_charge": 16512,
         "CP2_logical": 8194,
-        "align8_physical": 8200,
         "normal_real_rounds": 2,
-        "last_round_rows": 8
+        "last_round_rows": 4,
+        "physical_rows_source_derived": 8196,
+        "padding_alignment": 4,
+        "correction": "2026-10-24: old align8/8200 arithmetic superseded by bound zigzag2*CP alignment. No benchmark replay."
       },
       "native_and_whole_windows_s": {
         "baseline": {
