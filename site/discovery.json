@@ -1,0 +1,52 @@
+{
+  "featured": [
+    "docs/fundamentals/prefill-vs-decode-performance.md",
+    "docs/sglang/sglang-ascend-request-lifecycle.md",
+    "docs/performance/decode-fast-throughput-limited-by-prefill.md"
+  ],
+  "guides": [
+    {
+      "id": "start",
+      "title": "刚接触大模型推理",
+      "description": "先分清推理阶段和多卡分工，再跟随一次请求进入 SGLang。",
+      "items": [
+        "docs/fundamentals/prefill-vs-decode-performance.md",
+        "docs/distributed/why-large-models-need-multi-card-tp-dp-ep.md",
+        "docs/sglang/sglang-ascend-request-lifecycle.md"
+      ]
+    },
+    {
+      "id": "source",
+      "title": "想读懂 SGLang 源码",
+      "description": "从一枚 Token 的执行视图，走到调度、模型执行与 Attention。",
+      "items": [
+        "docs/fundamentals/sglang-decode-source-reading-primer.md",
+        "docs/sglang/sglang-scheduler-source-analysis.md",
+        "docs/sglang/sglang-modelrunner-source-analysis.md",
+        "docs/sglang/deepseek-v4-attention-source-analysis.md"
+      ]
+    },
+    {
+      "id": "performance",
+      "title": "服务能跑，速度却不理想",
+      "description": "先把压测口径对齐，再结合吞吐案例和 NPU 时间线定位瓶颈。",
+      "items": [
+        "docs/performance/aisbench-sglang-first-request-to-report.md",
+        "docs/performance/aisbench-whole-native-tpot-itl.md",
+        "docs/performance/decode-fast-throughput-limited-by-prefill.md",
+        "docs/performance/npu-timeline-gaps-and-recoverable-speedup.md"
+      ]
+    },
+    {
+      "id": "speculative",
+      "title": "正在研究投机解码",
+      "description": "先走完 Draft、Verify 与 Accept，再理解 KV 提交和真实收益边界。",
+      "items": [
+        "docs/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md",
+        "docs/speculative-decoding/deepseek-v4-accept-decision-source-analysis.md",
+        "docs/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md",
+        "docs/performance/deepseek-v4-speculative-performance-analysis.md"
+      ]
+    }
+  ]
+}

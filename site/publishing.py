@@ -31,19 +31,18 @@ def evidence_panel(source, dates, repo, path):
     bits.append(f'<a href="{repo}/commits/main/{path}">文章修改记录 ↗</a>')
     return '<div class="publication-meta">'+''.join(bits)+'</div>'
 
-def metadata(title, description, kind, route, origin, base, dates=None, indexable=True):
+def metadata(title, description, kind, route, origin, base, dates=None, indexable=True, social_image=None):
     dates=dates or {};url=origin+base+route
     article=kind=='article-page'
     data={'@context':'https://schema.org','@type':'BlogPosting' if article else ('WebSite' if not route else 'WebPage'),'name':title,'description':description,'url':url,'inLanguage':'zh-CN'}
-    image=origin+base+'assets/social-cover.png'
+    image=origin+base+(social_image or 'assets/social-cover.png')
     if article:
         data.update(headline=title,author={'@type':'Person','name':'AkiYang','url':'https://github.com/AkiYangDev'},mainEntityOfPage=url)
         for k,f in [('published','datePublished'),('modified','dateModified')]:
             if dates.get(k):data[f]=dates[k]
     data['image']=image
     fields={'og:title':title+' · AkiYang','og:description':description,'og:url':url,'og:type':'article' if article else 'website','og:locale':'zh_CN','og:site_name':'AkiYang · 推理工程手记'}
-    # Shared cover with article-specific titles and descriptions.
-    fields.update({'og:image':image,'og:image:alt':'AkiYang 推理工程手记，蓝色鲸尾与金色细线'})
+    fields.update({'og:image':image,'og:image:alt':title+' · 推理工程手记', 'og:image:width':'1200', 'og:image:height':'630'})
     for k,f in [('published','article:published_time'),('modified','article:modified_time')]:
         if article and dates.get(k):fields[f]=dates[k]
     tags=''.join(f'<meta property="{k}" content="{html.escape(v,quote=True)}">' for k,v in fields.items())
