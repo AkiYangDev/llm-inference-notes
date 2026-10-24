@@ -676,5 +676,20 @@
     "role": "deep",
     "seo_title": "静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？",
     "seo_summary": "动态EPLB怎样搬运专家权重而不破坏路由？结合Ascend W8A8/NZ、ND staging、HCCL和原位metadata更新，解释迁移顺序、验证证据与收益边界。"
+  },
+  "docs/performance/aisbench-whole-native-tpot-itl.md": {
+    "summary": "TPOT 10.4ms、ITL 58.6ms为何同时成立？沿固定AISBench源码解释请求时间线、事件加权、whole/native选样边界、并发封顶与两种输出token/s。",
+    "category": "压测实践",
+    "tags": [
+      "AISBench",
+      "性能指标",
+      "SGLang",
+      "流式输出",
+      "压测方法"
+    ],
+    "topic": "performance",
+    "role": "entry",
+    "seo_title": "AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？",
+    "seo_summary": "用真实PD报告和离线算例，讲清AISBench的whole、native、TTFT、TPOT、ITL、E2E、系统并发与输出吞吐，以及原生稳定段的窗口边界。"
   }
 }

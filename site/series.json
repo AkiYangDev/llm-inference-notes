@@ -244,6 +244,11 @@
         "description": "独立配置、小测、正式负载和原始结果"
       },
       {
+        "path": "docs/performance/aisbench-whole-native-tpot-itl.md",
+        "label": "读懂whole与native指标",
+        "description": "时间线、事件间隔、样本权重与稳定段分母"
+      },
+      {
         "path": "docs/performance/sglang-stream-acceptance-cache-timing.md",
         "label": "保留流式计数与原计时",
         "description": "从SSE字段到附加结果、计数分母和窗口匹配"

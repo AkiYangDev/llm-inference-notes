@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="415" viewBox="0 0 1000 415" role="img" aria-labelledby="title desc">
+<title id="title">native 选样区间与完整请求时间线</title>
+<desc id="desc">教学构造，C等于2。A从0到10秒，B从1到3秒，C从3.1到5秒，D从5.1到7秒，E从7.1到12秒。选择区间从3.1到7.1秒，但E的完整输出被计入。</desc>
+<rect width="1000" height="415" rx="14" fill="#f7f9fc"/>
+<g font-family="system-ui,'Microsoft YaHei',sans-serif" fill="#192d46">
+<text x="36" y="39" font-size="23" font-weight="700">native 按开始时间选请求，输出保留完整结果</text>
+<text x="36" y="67" font-size="15" fill="#52657b">教学构造 · C=2 · 稳定区间 [3.1, 7.1] s · 分母 4 s</text>
+<rect x="313.75" y="92" width="250" height="239" fill="#e4edfb"/>
+<g stroke="#d9e0ea" stroke-width="1">
+<path d="M120 92v239 M245 92v239 M370 92v239 M495 92v239 M620 92v239 M745 92v239 M870 92v239"/>
+</g>
+<g stroke="#477ec6" stroke-width="2" stroke-dasharray="5 4">
+<path d="M313.75 90v245 M563.75 90v245"/>
+</g>
+<g font-size="17">
+<text x="46" y="125">A</text><text x="46" y="168">B</text><text x="46" y="211">C</text><text x="46" y="254">D</text><text x="46" y="297">E</text>
+</g>
+<g stroke-linecap="round" stroke-width="13">
+<path d="M120 119h625 M182.5 162h125" stroke="#9aabba"/>
+<path d="M313.75 205h118.75 M438.75 248h118.75 M563.75 291H870" stroke="#2578b9"/>
+</g>
+<g font-size="14" fill="#52657b" text-anchor="middle">
+<text x="120" y="352">0</text><text x="245" y="352">2</text><text x="370" y="352">4</text><text x="495" y="352">6</text><text x="620" y="352">8</text><text x="745" y="352">10</text><text x="870" y="352">12 s</text>
+</g>
+<text x="890" y="210" font-size="15" fill="#2578b9">入选</text><text x="890" y="253" font-size="15" fill="#2578b9">入选</text><text x="890" y="296" font-size="15" fill="#2578b9">入选</text>
+<text x="36" y="392" font-size="16">C / D / E 各输出 100 token：原生结果 300 ÷ 4 = 75 token/s，E 的结束时间超出选样区间。</text>
+</g></svg>
+

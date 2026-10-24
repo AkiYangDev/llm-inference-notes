@@ -22,6 +22,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 文章按主要阅读角色组织；专题、标签与系列阅读仍在网站中并行保留。
 
+- [AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？](docs/performance/aisbench-whole-native-tpot-itl.md)：从单请求时间线、事件间隔到原生稳定段选择，讲清延迟、并发和吞吐的样本与分母。
+
 - [静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？](docs/distributed/ascend-dynamic-eplb-weight-migration.md)：从专家槽位、W8A8/NZ暂存和通信等待，讲到逐层路由提交、验证范围与迁移成本。
 
 - [SGLang 流式压测：怎样保留接受率和缓存计数，又不改坏计时](docs/performance/sglang-stream-acceptance-cache-timing.md)：沿真实缺字段诊断、原SSE计时与observer写盘链，说明计数来源、事件扰动和统计窗口怎样对应。

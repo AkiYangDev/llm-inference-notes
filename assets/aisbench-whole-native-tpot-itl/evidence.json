@@ -1,0 +1,321 @@
+{
+  "AISBench_commit": "e00d1f758310c45580576af291a3126919776c89",
+  "source_scope": "Historical numeric reports; no new requests, traces or service operations.",
+  "device": "Ascend 910C",
+  "model": "DeepSeek-V4-Flash",
+  "quantization": "W8A8",
+  "physical_cards": {
+    "prefill": 8,
+    "decode": 8,
+    "throughput_divisor": 16
+  },
+  "C90_128K": {
+    "N": 640,
+    "C": 90,
+    "offered_req_s": 6,
+    "body_tokens": 131072,
+    "actual_chat_tokens": 131076,
+    "actual_output_each": 1024,
+    "cached_each": 118784,
+    "cache_fraction": 0.9062223442888095,
+    "workload": "favorable verbatim-copy; Compact6/G5; metadata ON",
+    "whole": {
+      "common": {
+        "Benchmark Duration": "179576.5827 ms",
+        "Total Requests": 640,
+        "Failed Requests": 0,
+        "Success Requests": 640,
+        "Concurrency": 82.8179,
+        "Max Concurrency": 90,
+        "Request Throughput": "3.5639 req/s",
+        "Total Input Tokens": 83888640,
+        "Total Generated Tokens": 655360,
+        "Input Token Throughput": "467146.8782 token/s",
+        "Output Token Throughput": "3649.4736 token/s",
+        "Total Token Throughput": "470796.3519 token/s"
+      },
+      "AIS_statistics": [
+        {
+          "Performance Parameters": "E2EL",
+          "Stage": "total",
+          "Average": "23237.7 ms",
+          "Min": "17552.7 ms",
+          "Max": "30375.0 ms",
+          "Median": "22757.0 ms",
+          "P75": "24293.7 ms",
+          "P90": "25322.9 ms",
+          "P99": "29593.1 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "TTFT",
+          "Stage": "total",
+          "Average": "12681.9 ms",
+          "Min": "5286.6 ms",
+          "Max": "20012.6 ms",
+          "Median": "11972.5 ms",
+          "P75": "13733.0 ms",
+          "P90": "14325.9 ms",
+          "P99": "18923.3 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "TPOT",
+          "Stage": "total",
+          "Average": "10.3 ms",
+          "Min": "8.1 ms",
+          "Max": "15.0 ms",
+          "Median": "10.3 ms",
+          "P75": "10.6 ms",
+          "P90": "10.9 ms",
+          "P99": "12.0 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "ITL",
+          "Stage": "total",
+          "Average": "58.2 ms",
+          "Min": "0.0 ms",
+          "Max": "1385.5 ms",
+          "Median": "69.1 ms",
+          "P75": "71.5 ms",
+          "P90": "76.4 ms",
+          "P99": "471.7 ms",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "InputTokens",
+          "Stage": "total",
+          "Average": "131076.0",
+          "Min": "131076.0",
+          "Max": "131076.0",
+          "Median": "131076.0",
+          "P75": "131076.0",
+          "P90": "131076.0",
+          "P99": "131076.0",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "OutputTokens",
+          "Stage": "total",
+          "Average": "1024.0",
+          "Min": "1024.0",
+          "Max": "1024.0",
+          "Median": "1024.0",
+          "P75": "1024.0",
+          "P90": "1024.0",
+          "P99": "1024.0",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "OutputTokenThroughput",
+          "Stage": "total",
+          "Average": "44.361 token/s",
+          "Min": "33.712 token/s",
+          "Max": "58.3387 token/s",
+          "Median": "44.9972 token/s",
+          "P75": "46.6724 token/s",
+          "P90": "47.7704 token/s",
+          "P99": "52.5813 token/s",
+          "N": "640"
+        },
+        {
+          "Performance Parameters": "PrefillTokenThroughput",
+          "Stage": "total",
+          "Average": "10587.1879 token/s",
+          "Min": "6549.6775 token/s",
+          "Max": "24793.9542 token/s",
+          "Median": "10948.1041 token/s",
+          "P75": "11361.6033 token/s",
+          "P90": "11763.7778 token/s",
+          "P99": "17602.2758 token/s",
+          "N": "640"
+        }
+      ]
+    },
+    "native": {
+      "common": {
+        "Benchmark Duration": "143493.5254 ms",
+        "Total Requests": 549,
+        "Failed Requests": 0,
+        "Success Requests": 549,
+        "Concurrency": 87.4978,
+        "Max Concurrency": 90,
+        "Request Throughput": "3.826 req/s",
+        "Total Input Tokens": 71960724,
+        "Total Generated Tokens": 562176,
+        "Input Token Throughput": "501491.0869 token/s",
+        "Output Token Throughput": "3917.7796 token/s",
+        "Total Token Throughput": "505408.8665 token/s"
+      },
+      "AIS_statistics": [
+        {
+          "Performance Parameters": "E2EL",
+          "Stage": "stable",
+          "Average": "22869.5 ms",
+          "Min": "17552.7 ms",
+          "Max": "29309.6 ms",
+          "Median": "22540.8 ms",
+          "P75": "23999.5 ms",
+          "P90": "24576.6 ms",
+          "P99": "26180.0 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "TTFT",
+          "Stage": "stable",
+          "Average": "12250.2 ms",
+          "Min": "5292.5 ms",
+          "Max": "15871.5 ms",
+          "Median": "11854.7 ms",
+          "P75": "13505.4 ms",
+          "P90": "13927.3 ms",
+          "P99": "14599.2 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "TPOT",
+          "Stage": "stable",
+          "Average": "10.4 ms",
+          "Min": "9.2 ms",
+          "Max": "15.0 ms",
+          "Median": "10.3 ms",
+          "P75": "10.7 ms",
+          "P90": "11.0 ms",
+          "P99": "12.1 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "ITL",
+          "Stage": "stable",
+          "Average": "58.6 ms",
+          "Min": "0.0 ms",
+          "Max": "1385.5 ms",
+          "Median": "69.3 ms",
+          "P75": "71.7 ms",
+          "P90": "76.7 ms",
+          "P99": "470.7 ms",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "InputTokens",
+          "Stage": "stable",
+          "Average": "131076.0",
+          "Min": "131076.0",
+          "Max": "131076.0",
+          "Median": "131076.0",
+          "P75": "131076.0",
+          "P90": "131076.0",
+          "P99": "131076.0",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "OutputTokens",
+          "Stage": "stable",
+          "Average": "1024.0",
+          "Min": "1024.0",
+          "Max": "1024.0",
+          "Median": "1024.0",
+          "P75": "1024.0",
+          "P90": "1024.0",
+          "P99": "1024.0",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "OutputTokenThroughput",
+          "Stage": "stable",
+          "Average": "44.9347 token/s",
+          "Min": "34.9373 token/s",
+          "Max": "58.3387 token/s",
+          "Median": "45.4287 token/s",
+          "P75": "46.7578 token/s",
+          "P90": "47.7185 token/s",
+          "P99": "51.8906 token/s",
+          "N": "549"
+        },
+        {
+          "Performance Parameters": "PrefillTokenThroughput",
+          "Stage": "stable",
+          "Average": "10853.7535 token/s",
+          "Min": "8258.6011 token/s",
+          "Max": "24766.5637 token/s",
+          "Median": "11056.8399 token/s",
+          "P75": "11381.7803 token/s",
+          "P90": "11737.8483 token/s",
+          "P99": "17598.8884 token/s",
+          "N": "549"
+        }
+      ]
+    },
+    "whole_acceptance": {
+      "output_AL": 5.775979834836026,
+      "verify_count": 113463,
+      "output_tokens": 655360,
+      "strict_actual_proposal_AR": "NOT_OBSERVED",
+      "native_acceptance": "NOT_OBSERVED",
+      "phase_wall": "NOT_COLLECTED"
+    },
+    "source_report_SHA256": "2b264b1471931774aee2af079ff122024468e161e8f55b8893ff18a956c67b06"
+  },
+  "C128_16K_cap1_to_cap2": {
+    "workload": {
+      "label": "favorable verbatim-copy showcase",
+      "body_tokens": 16384,
+      "actual_chat_tokens": 16388,
+      "actual_output_each": 1024,
+      "requests": 640,
+      "concurrency_cap": 128,
+      "offered_req_s": 6,
+      "whole_observed_cache_percent": 0,
+      "data_sha256": "fc42162e708ce4a9462b841f6eeabfb7da76edccd8c55c16c5049f137b6e5762"
+    },
+    "fixed_configuration": {
+      "quantization": "W8A8",
+      "P_attention_cp": 1,
+      "P_DP": 16,
+      "P_global_chunk_cli": 131072,
+      "P_effective_chunk": 8192,
+      "page_size": 128,
+      "D_draft_gamma": 5,
+      "D_verify_width": 6,
+      "D_compact": true,
+      "D_SPS": "automatic",
+      "IndexCache_frequency": 2,
+      "P_D_expert_layouts": "identical scene-specific static layouts in both arms"
+    },
+    "changed_parameter": {
+      "P_prefill_max_requests": [
+        1,
+        2
+      ]
+    },
+    "native": {
+      "cap1": {
+        "requests_included": 496,
+        "duration_s": 177.29711189999998,
+        "TPOT_mean_ms": 8.8,
+        "output_per_PD16_card_tok_s": 179.0440875
+      },
+      "cap2": {
+        "requests_included": 493,
+        "duration_s": 133.2281513,
+        "TPOT_mean_ms": 9.4,
+        "output_per_PD16_card_tok_s": 236.826825
+      }
+    },
+    "source_evidence_SHA256": "252ff1719d00d035b5962aeda06b9ad7ac9010574cf6720a3772b6ca7e0ef4de"
+  },
+  "scope_notes": [
+    "native is the unmodified StablePerfMetricCalculator, not server emission timestamps",
+    "native selects starts in a closed interval and divides full selected outputs by selector duration",
+    "Concurrency is a client request-lifetime ratio; stable version caps it at configured C",
+    "ITL pools event gaps; displayed ITL N counts requests with nonzero decode gaps",
+    "Whole AL is not copied to native; AL is not measured strict acceptance"
+  ],
+  "AISBench_source_git_blobs": {
+    "calculators/base_perf_metric_calculator.py": "c0eadda244df80b51550ad656052d32d2963ae1c",
+    "calculators/default_perf_metric_calculator.py": "f1485c92e1720b269177bc0e807cfb6243848609",
+    "calculators/stable_perf_metric_calculator.py": "2225521161d174eb5c5882ee69aac1968c51b37f",
+    "summarizers/default_perf.py": "80c596dee510de028b9f02b42739dad968eda4ae"
+  }
+}
