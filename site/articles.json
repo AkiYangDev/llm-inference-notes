@@ -502,5 +502,19 @@
     "role": "advanced",
     "seo_title": "Ascend 910C调优负例分析：Compact、静态EPLB与实验取舍",
     "seo_summary": "为什么TPOT更低却没提高吞吐？用DeepSeek-V4-Flash实测拆解CP/chunk、请求速率、Compact逻辑槽与SPS预算的负例，以及静态EPLB小收益和停止条件。"
+  },
+  "docs/performance/decode-fast-throughput-limited-by-prefill.md": {
+    "summary": "TPOT已经低至8.7ms，吞吐却没跟上。沿16388-token输入的4-token尾块，追到P端合批与页对齐，再用同640请求对照解释32.27%的native收益。",
+    "category": "性能分析",
+    "tags": [
+      "PD 分离",
+      "Chunked Prefill",
+      "性能调优",
+      "Ascend 910C"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "Decode已经很快了，吞吐为什么上不去？一次Prefill尾块合批优化",
+    "seo_summary": "DeepSeek-V4-Flash在Ascend 910C上的真实PD调优：从4-token尾块、128-token页预算和Pcap1到2，解释低TPOT与系统吞吐的区别及同负载实测收益。"
   }
 }

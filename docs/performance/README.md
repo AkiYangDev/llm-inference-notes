@@ -4,6 +4,7 @@
 
 ## 调优实践
 
+- [Decode 已经很快了，吞吐为什么上不去？](decode-fast-throughput-limited-by-prefill.md)：沿请求供给、分块接纳和页对齐，解释 Pcap1→2 为何提高吞吐而 TPOT 略高。
 - [Ascend 910C推理调优负例分析：为什么合理的优化没有带来吞吐收益](ascend-910c-inference-tuning-negative-results-and-stop-rules.md)：逐项分析CP/chunk、到达速率、Compact与SPS预算、静态EPLB的小收益和负例，区分瓶颈假设、窗口差异与停止条件。
 - [一次Ascend 910C推理调优复盘：真正有效的优化、失败假设与实验成本](ascend-910c-inference-tuning-effective-optimizations-and-costs.md)：从P端尾块合批、IndexCache与静态布局的实测收益，讲到Compact负例、缓存口径和实验成本。
 - [让 AI 连续调优几天后，我发现实验流程也有瓶颈](inference-tuning-workflow-postmortem.md)：沿真实时间账与几次返工，讨论脚本复制、检查错位、多代理协作和跨会话接续。

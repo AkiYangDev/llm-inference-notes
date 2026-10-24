@@ -205,6 +205,11 @@
         "path": "docs/performance/inference-tuning-workflow-postmortem.md",
         "label": "回看走过的弯路",
         "description": "从脚本复制、重复检查和多代理等待追到工具层面的改法"
+      },
+      {
+        "path": "docs/performance/decode-fast-throughput-limited-by-prefill.md",
+        "label": "跟一次吞吐瓶颈实战",
+        "description": "从低TPOT追到4-token尾块与Prefill合批"
       }
     ]
   }

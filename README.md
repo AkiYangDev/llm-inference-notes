@@ -37,6 +37,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 - [一次Ascend 910C推理调优复盘：真正有效的优化、失败假设与实验成本](docs/performance/ascend-910c-inference-tuning-effective-optimizations-and-costs.md)：复盘P合批带来的32.27%稳态吞吐提升，以及Compact、静态布局与实验成本的取舍。
 从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
 
+- [Decode 已经很快了，吞吐为什么上不去？](docs/performance/decode-fast-throughput-limited-by-prefill.md)：从 8.7ms TPOT 和 4-token 尾块追到 P 端合批，展开同负载 native 吞吐提高 32.27% 的实测过程。
 - [让 AI 连续调优几天后，我发现实验流程也有瓶颈](docs/performance/inference-tuning-workflow-postmortem.md)：回看复制脚本、反复检查、采集失败和多代理等待，追问为什么忙了很久，正式实验还没发出。
 - [把性能目标交给 AI 之后：大模型推理的全自动调优闭环](docs/performance/ai-driven-inference-autotuning-decision-loop.md)：沿 P 端尾块合批与并发取舍，讲清下一轮实验怎么选、什么结果值得保留。
 - [一轮实验什么时候算完成：全自动调优的状态、证据与恢复](docs/performance/ai-driven-inference-autotuning-execution-and-evidence.md)：跟着配置、进程、缓存和原始统计走完整条执行链，讨论出错后从哪里接。
