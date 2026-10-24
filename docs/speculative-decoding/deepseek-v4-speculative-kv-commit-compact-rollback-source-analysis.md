@@ -1,8 +1,8 @@
 # 投机解码 KV 管理：接受路径怎样提交、整理与回收
 
-Target 验证过一批候选后，候选 KV 已经写进缓存，但只有接受路径可以成为后续请求的历史。系统需要把这条路径对应的 Verify 行映射到正式序列位置，再决定多余的预留空间何时复用或释放。
+Target 验证过一批候选后，候选 KV 可能都已写进缓存，但单条请求只能沿接受路径继续。接受结果既要选对输入行，也要写到正确的物理槽位；被拒绝的尾部还可能保留为预留空间，不能看到显存没降就认定回收失败。
 
-本文用旧 root R、接受的 A/C 和新 bonus X 说明三个动作：Commit 确认有效历史，Compact 整理布局，Rollback 撤销候选对后续状态的影响。输出追加 A/C/X 时，已经物化的输入 KV 对应 R/A/C；这个错位关系贯穿后面的地址映射。
+下面用旧 root R、接受的 A/C 和新 bonus X，逐步核对索引、地址和释放边界。Commit 确认有效输入历史，Compact 把选中行整理成后续模块可消费的布局，Rollback 则要阻止未接受状态影响下一轮；它不总是恢复旧快照或立即 free。输出追加 A/C/X 时，已计算的输入 KV 对应 R/A/C，这个偏移关系会一直带到物理地址映射。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -21,15 +21,11 @@ Target 验证过一批候选后，候选 KV 已经写进缓存，但只有接受
 KV Cache 第 4096 行
 ~~~
 
-真实 SGLang 并不是这样。
+token ID、逻辑位置和物理 KV slot 是不同对象。下面的数字只用于推演地址，不是一次运行的内存快照；后续代码也只保留关键调用与关系，不能当作完整可执行脚本。
 
 ### Logical Sequence Position
 
-假设当前请求已经提交：`seq_len = 4096`
-
-那么下一段正式 continuation 的逻辑位置是：`4096, 4097, 4098, ...`
-
-这是 request 语义上的 sequence position。
+假设请求当前已缓存的有效输入前缀长为 `seq_len=4096`，按零起始编号，下一个待执行输入位于逻辑位置 `4096`，后续是 `4097、4098、...`。长度 4096 是位置边界，不能理解成 token 的词表编号，也不能直接当成池中的物理行号。
 
 ### `req_to_token`：Logical Position → Physical KV Slot
 
@@ -51,7 +47,7 @@ logical pos     physical KV slot
 req_to_token[req_pool_idx, logical_position]
 ~~~
 
-得到的是物理 KV slot，而不是 token id。
+读取结果是物理 KV slot。示意中，位置 4096 对应 slot 42080，前一位置 4095 却在 slot 18321；同一条逻辑序列跨到了另一段物理存储。
 
 这也是 Paged KV 能做到：
 
@@ -108,7 +104,7 @@ Target Model
          out_cache_loc
 ~~~
 
-候选是否最终被接受，是 Forward **之后** 才决定的。
+这些行要先经过 Target Forward，Accept 才能根据结果决定保留哪条路径。因此缓存里“写过这个候选”不等于请求已经“接受这个候选”。前者是一次物理写入，后者决定下一轮允许读取的有效历史。
 
 ### `accept_index`：不是 KV slot，而是 accepted verify-row path
 
@@ -163,9 +159,7 @@ req_to_token
 destination physical KV slot
 ~~~
 
-索引在下面几层之间转换：
-
-> **不要把 `accept_index`、logical token position、`out_cache_loc` 和 physical KV slot 当成同一个索引空间。**
+`accept_index` 先选 Verify 行，`out_cache_loc[row]` 再给出该行的源 KV slot，`req_to_token` 则按正式逻辑位置查目标 slot。要判断搬移是否正确，至少要保留这三步转换；只看到一个整数相同，不能证明它们指向同一个对象。
 
 固定源码入口：
 
@@ -176,7 +170,7 @@ destination physical KV slot
 
 这里先固定接受索引与预测行的对应关系。
 
-很多文章会把 accepted output 画成：
+如果只列本轮新增输出，通常会写成：
 
 ~~~text
 draft1
@@ -185,7 +179,7 @@ draft3
 bonus
 ~~~
 
-然后自然猜测：
+由此容易误把接受索引写成：
 
 ~~~text
 accept_index
@@ -193,7 +187,7 @@ accept_index
 [draft1_node, draft2_node, draft3_node, bonus_node]
 ~~~
 
-这个说法不够准确。
+问题在最后一格：新 bonus 来自某个已执行输入行的预测，本轮不必额外构造一条以它为输入的 Verify 行。
 
 ### Greedy Tree Verify 的真实写法
 
@@ -219,11 +213,7 @@ for accepted_draft in path:
 predicts[last_row] = bonus
 ~~~
 
-因此如果正确 draft 是：`d1, d2, d3`
-
-最终不是：`accept_index = [d1_node, d2_node, d3_node, bonus_node]`
-
-而更准确是：
+若接受的 Draft 是 `d1、d2、d3`，有效索引先包含 root，再包含这些候选对应的输入行：
 
 ~~~text
 accept_index valid prefix
@@ -239,9 +229,7 @@ predict[accept_index[:4]]
 [d1, d2, d3, bonus]
 ~~~
 
-也就是说：
-
-> **bonus 占据 accepted output 的最后一格，但它复用了“最后一个 accepted verify row”作为承载位置，并没有额外创造一个 bonus tree node。**
+最后一行有两种读法：读取它保存的 KV，得到最后一个有效输入节点的状态；读取它的 `predict`，得到这个输入节点预测出的新 bonus。`accept_index` 选的是承载这些结果的 Verify 行，不是输出 token 身份的列表。
 
 ### `accept_lens` 为什么等于 correct drafts + 1
 
@@ -265,7 +253,7 @@ num_correct_drafts + 1
 
 其中 `+1` 就是 terminal target/bonus token。
 
-更重要的是，`fill_bonus_tokens` 的 kernel 明确使用：
+取得 bonus 时，`fill_bonus_tokens` 按每请求 block 的 stride 定位，再取有效长度的末尾：
 
 ~~~text
 bonus_token_idx
@@ -277,9 +265,7 @@ accept_len
 1
 ~~~
 
-也就是：
-
-> **`accept_index` 的有效前缀长度就是 `accept_lens`，最后一个有效位置对应的 `predict` 值就是 bonus。**
+有效的 `accept_index` 前缀长为 `accept_lens`，最后一项对应的 `predict` 值是 bonus。buffer 宽度可能更大，尾部还可能填有无效索引；消费方必须按有效长度读取，不能把固定宽度等同于本轮真实产出。
 
 ### Rejection Sampling 也保持相同契约
 
@@ -322,7 +308,7 @@ bonus_node_indices = sim_accept_index[:, simulate_acc_len - 1]
 predict[bonus_node_indices] = target_predict[...]
 ~~~
 
-所以 simulated path 没有另外定义一套语义。
+模拟路径也维持同一索引与输出布局，但这里的长度由模拟参数指定，不是模型实际接受长度。它可以帮助检查数据契约，不能据此报告真实接受率或生成质量。
 
 ### NPU Sampling 的输入与结果消费
 
@@ -364,7 +350,7 @@ move_accept_tokens_to_target_kvcache(
 )
 ~~~
 
-这里有两个非常容易误读的点。
+接下来把输入行、源 slot 和目标 slot 对到同一条接受路径上，先核对长度，再核对搬移方向。
 
 ### 输出增加多少 Token，和哪些 Token 已经有 KV，是两件事
 
@@ -380,7 +366,7 @@ move_accept_tokens_to_target_kvcache(
 
 本轮输出追加 `[A, C, X]`，KV 则提交 `[R, A, C]`。两者长度都是 `accept_lens=3`，Token 身份相差一位。`accept_index` 选中的是 Verify 行；用它取 `predict` 得到输出，用它搬缓存得到这些行的输入 KV。
 
-因此，`accept_lens - 1` 先转换为正确 Draft 数，函数再补上旧 Root 对应的输入 KV。新输出 X 留到下一轮 Forward 才生成 KV。
+调用方减 1 时排除新输出 X，KV mover 加 1 时补上旧输入 R。两次运算数值上相消，对应的 token 却不同；若把这两个 1 当成同一枚 bonus，就会要求搬移一个本轮尚不存在的 X 的 KV。
 
 ### `move_kv_cache()` 的参数方向已经从实现确认
 
@@ -462,7 +448,7 @@ tgt_cache_loc
 committed KV
 ~~~
 
-不是反过来。
+延续前面的地址教学例子，假设 Verify 输入 `[R,A,B,C]` 的 `out_cache_loc` 是 `[42080,42081,42082,42083]`，接受行是 `[0,1,3]`。源 slot 由行索引选出 `[42080,42081,42083]`；正式逻辑位置 `4096、4097、4098` 对应的目标 slot 则是 `[42080,42081,42082]`。最后一项要把 slot 42083 的 C 状态写到 slot 42082，覆盖那里未接受的 B，而不是反过来覆盖 C。R、A 的源和目标可以恰好相同，不能由此省略其余行的映射。
 
 固定源码：
 
@@ -501,7 +487,7 @@ logits_output.hidden_states =
    tree-node predict/hidden layout → contiguous chain layout
 ~~~
 
-下面分别沿这三种数据整理操作追踪。
+其中 KV relocation 处理池地址，Tensor compaction 处理预测与 hidden 的排列；改了其中一种，不会自动修好另一种。例如 KV 已整理为正确路径，但 hidden 仍按原树排列，下一轮 Draft Extend 依然可能把正确 token 配到错误分支的特征上。
 
 ### 当前 DeepSeek-V4 + DSpark 为什么不走这套 Tree Compact
 
@@ -524,9 +510,7 @@ A tree (topk > 1) layout
 would need the accept-index mapping
 ~~~
 
-因此：
-
-> **通用 EAGLE Spec V2 需要 `accept_index` 解决 tree → chain；当前 DeepSeek-V4 DSpark 是 linear chain，accepted prefix 天然连续。**
+EAGLE 的树路径需要用 `accept_index` 找回非连续行；当前 DeepSeek-V4 DSpark 是 linear chain，前缀长度就能确定有效位置。两者都要维护正确边界，但不能因为输出长度都叫 accept length，就认定都执行了同一套树搬移。
 
 DSpark 按连续前缀提交，EAGLE Tree 则额外按接受索引收集非连续行。
 
@@ -540,7 +524,7 @@ candidate 被拒绝
 删掉对应 KV
 ~~~
 
-但 Spec V2 的内存管理不是这么工作的。
+这个动作还涉及空间归谁持有、是否跨页，以及是否要留给下一轮复用。Accept 先排除错误历史，allocator 不必在同一时刻逐个清掉候选 slot。
 
 ### `kv_committed_len` 与 `kv_allocated_len` 是两条不同的线
 
@@ -562,13 +546,7 @@ kv_allocated_len
                               kv_committed_len
 ~~~
 
-`committed` 表示逻辑上已经由 request 接受的 KV 边界。
-
-`allocated` 表示这个 request 当前持有到哪里的物理 capacity。
-
-两者之间：`[kv_committed_len, kv_allocated_len)`
-
-就是 speculative reserve / overshoot 的典型来源。
+`kv_committed_len` 表示有效输入 KV 的逻辑边界，`kv_allocated_len` 表示请求持有的容量上界。区间 `[kv_committed_len,kv_allocated_len)` 是 speculative reserve / overshoot 的典型来源，里面可能有已写入但未提交的数据。数值存在不赋予这些行有效历史的身份，下次读取仍应受正式边界约束。
 
 ### 正常下一轮 Decode 不会因为 reject 自动缩小 allocated tail
 
@@ -583,9 +561,7 @@ nxt = max(
 )
 ~~~
 
-注意：`nxt >= cur`
-
-所以正常 speculative iteration 的 allocation path 是“够了就复用，不够再扩”，而不是：
+这里 `nxt>=cur`，正常迭代的分配路径先复用已有容量，只有不足时才扩展。它不会每轮都执行下面这套分配和释放：
 
 ~~~text
 每轮 Accept
@@ -615,7 +591,7 @@ physical slots 仍可能保持 allocated
 下一轮直接覆盖 / 复用
 ~~~
 
-这不是 memory leak，而是 Spec V2 的 reserve 策略。
+例如只看这条分配公式，假设已分配容量是 4352、committed 边界是 4099、reserve=16、allocator page_size=128，向上对齐 `4099+16=4115` 得到 4224，取 `max(4352,4224)` 后仍是 4352，不新增也不缩小分配。这个教学结果符合 reserve 策略；诊断泄漏仍要看请求结束或所有权转移后是否正确回收，不能只凭一次 reject 前后显存不变判断。
 
 ### Overshoot 的实际释放时机
 
@@ -630,33 +606,17 @@ physical slots 仍可能保持 allocated
 | StreamingSession match/rewind | `_free_tail()` 在重新 extend 前释放旧 session row 中 `[prefix_len, kv_allocated_len)` 的 orphaned tail |
 | 整个 session 释放 | session-owned row 最终整体回收 |
 
-因此上一版如果只写：
-
-> “Rejected slot 留着，最后 request finish 才 free”
-
-也不够准确。
-
-更准确的说法是：
-
-> **普通 iteration 内 reject 不触发逐候选 free； reclaim 由 request/session 生命周期的 ownership 转换触发。**
+普通迭代内的 reject 通常不逐候选 free，回收由表中的 request/session 生命周期转换触发。`release_kv_cache()` 还会先把适合保留的历史交给 cache 处理；释放请求持有范围，不等于所有历史 Prefix 都立刻归还设备 allocator。排查时应区分 cache 接管、session 继续持有与真正 free。
 
 ### 页分配下的回收边界
 
-Paged allocator 释放的是整页。
-
-因此：`committed boundary`
-
-提交边界落在页中间时，包含活跃 Token 的整页继续保留，回收范围从可释放的整页开始。
+Paged allocator 按整页释放。若有效边界落在页中间，直接 free 第一个尾部 slot 可能连带释放同页仍活跃的行，因此回收要从下一条安全的整页边界开始。
 
 `_release_overallocated_kv_indices()` 和 StreamingSession 的 `_free_kv_aligned()` 都会把 free start 向上对齐：`ceil_align(boundary, page_size)`
 
-这意味着：`boundary 到下一个 page 边界之间`
+这里用的是实际 allocator 的 page_size，不能误用 Attention kernel 的较小页尺寸；有 DCP 扩宽时，两者可能不同。沿用教学边界 4099 与 page_size=128，下一整页边界是 4224，若 allocated=4352，本段 tail reclaim 可释放 `[4224,4352)`。`[4099,4224)` 共 125 个位置虽然已在有效边界外，仍与活跃位置共享页，不能在这一步单独归还。
 
-即使逻辑上已经属于 overshoot，也可能暂时继续挂在 request/session 上，直到整页可以安全回收。
-
-所以：
-
-> **逻辑 Reject、逻辑 ownership 失效、物理 page free，是三个不同时间点。**
+因此要分别检查候选何时被排除、请求何时不再持有某段历史，以及整页何时真正归还。它们可能发生在不同阶段。
 
 固定源码：
 
@@ -681,7 +641,7 @@ C4 compressor state
 C128 compressor state
 ~~~
 
-而它们的地址与 ownership 不是一套规则。
+KV 保存供 Attention 读取的历史表示，compressor state 保存继续压缩计算所需的中间状态；清理其中一项，不会自动处理另一项。它们的地址与所有权也不使用同一套规则。
 
 ### C4 state 的 ownership 还取决于 NPU 架构
 
@@ -727,9 +687,7 @@ state first half  -> 0
 state second half -> -inf
 ~~~
 
-这属于：`stale-state sanitation`
-
-目的不是把显存页归还 allocator，而是避免以后碰到 compression boundary 时读到 rejected draft 留下的 state。
+这一步在原有 state buffer 上写入规定的无效值，不改变分配容量，目的是防止后续压缩边界读到旧候选状态。在线性 Verify 窗口中，若 `accept_len=3`，保留的是 offset 0、1、2，offset 3 起才清理；这个长度包含 root 输入行，不能直接换成只统计 Draft 的接受数。
 
 因此必须把两个动作分开：
 
@@ -745,11 +703,7 @@ C128 KV page free
 
 所以它不需要照抄 C128 的逐 rejected-offset clear。
 
-这不是说：`“C4 永远不需要生命周期管理”`
-
-而是说：
-
-> **在这个 specific rejected-draft stale-state hazard 上，C4 的 overwrite-before-read 语义已经避免了同类问题。**
+这个结论只针对当前 rejected-draft stale-state 风险：C4 在读取相应位置前会覆盖旧数据，因此不需要照搬同一种 clear kernel。它不代表 C4 的页、请求 Ring 或其他生命周期可以不管理。
 
 另外，pre-A5 的 C4 state 跟随 SWA physical pages；A5 的 CYCLE 路径采用独立请求状态。是否需要清理，要结合各自的寻址和覆盖顺序判断。
 
@@ -788,7 +742,9 @@ clear request-scoped C128 state
 
 还有一个容易忽略的路径：当 request 的 C128 prefix sidecar 被替换时，`replace_req_c128_prefix()` 会对变化掉的旧 page reference 做 release，并对新 page retain。
 
-因此 C128 physical page 的 ownership 更接近：
+用一个引用计数教学例子看，某页由两个持有者引用，计数为 2；其中一个请求释放引用后变成 1，页仍需保留，最后一个引用释放到 0 才能归还。前缀替换也要释放旧引用、保留新引用，不能仅按当前请求的接受长度直接 free 那一页。
+
+因此 C128 页的回收依据是：
 
 ~~~text
 sidecar reference lifecycle
@@ -811,18 +767,16 @@ free(req=..., req_to_token_pool=...)
 → 才能处理 C128 sidecar / request-scoped state
 ~~~
 
-原因也很直接：
+generic full-KV slot index 不包含完整的 request identity，无法单独说明独立 C128 sidecar 中哪一条引用应该释放。调用 `free(free_index)` 与带 req 的释放路径，检查的是两种不同层次的信息。
 
-> 只有一个 generic full-KV slot index 时，没有足够的 request identity 去安全决定独立 C128 page 的引用关系。
-
-所以文章如果写成：
+如果把释放概括成：
 
 ~~~text
 tree_cache.free_kv_row(...)
 → Full/SWA/C4/C128 全部同步释放
 ~~~
 
-会过度概括。
+就会遗漏 sidecar 引用和请求状态的处理条件。检查实际 free 调用时，应同时核对参数形式、请求 row 是否仍有效，以及引用计数是否已经归零。
 
 ### Ascend 还有一个重要例外：ONLINE_C128 根本不是当前 NPU 路径
 
@@ -855,7 +809,7 @@ if ONLINE_C128:
 
 `clear_unaccepted_c128_draft_states(...)` 的显式调用位于 EAGLE 共享 Verify 流程 `run_eagle_verify()`，清理未接受的 C128 Compressor State。
 
-同版本 DSpark Worker / Verify 路径未找到同名直接调用。DSpark 通过 `commit_lens` 和 Target Hidden 注入控制提交范围；分析它的 Compressor State 时，沿自身写入与提交路径继续追踪。
+同版本 DSpark Worker / Verify 路径未找到同名直接调用。它通过 `commit_lens` 与 Target hidden 注入控制提交范围；这不能直接证明“不需要清理”，也不能据此认定“少调用导致了 bug”。分析 DSpark 的 compressor state，仍需沿它自己的写入、覆盖与提交路径核对是否存在读取未接受状态的机会。
 
 固定源码：
 
@@ -902,11 +856,7 @@ flowchart TD
     R --> W[DSV4 special state hygiene]
 ~~~
 
-这里的 “Rollback” 已经可以重新定义。
-
-它不是：`restore an old snapshot`
-
-而是几类不同机制的组合：
+这条路径里的 Rollback 不要求先保存完整旧快照再逐字节恢复。它可以由下面这些机制共同完成：
 
 ~~~text
 1. logical non-commit
@@ -917,11 +867,7 @@ flowchart TD
 6. backend-specific stale-state cleanup
 ~~~
 
-所以更准确的词其实是：
-
-> **state convergence**
-
-一次 speculative iteration 结束后，所有子系统必须重新收敛到同一个 committed sequence boundary。
+一轮结束时，后续可见的 token、KV、hidden 与压缩器状态必须对应同一条有效历史；allocator 容量则可以超过这个边界。检查“是否回滚正确”，应核对后续会读取什么，而不只是看尾部内存是否已经清零或显存是否下降。
 
 ### Debug 时核对索引、长度与页归属
 
@@ -981,7 +927,7 @@ immediate physical free
 cleanup 是为了防 stale read，还是为了把 physical page 还给 allocator？
 ~~~
 
-明确这三项后，就能定位要处理的是缓存行、预留页还是压缩器状态。
+这三项会把问题分到不同入口：接受路径错先看行索引，搬移错看 source/destination，容量不回收看 ownership 与页边界，压缩边界读旧值则继续看 state 的覆盖和清理。它们需要的证据不同，不能都归成“KV 没释放”。
 
 ## 七、源码入口与计数对照
 
