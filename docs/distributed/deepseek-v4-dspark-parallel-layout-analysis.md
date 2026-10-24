@@ -2,7 +2,7 @@
 
 同样是 DeepSeek-V4，在 `TP32 / DP16` 下，Target 的 Attention 与 MoE 之间有显式的 Token 行布局转换；DSpark 的 MoE Draft 却会在启动时被拒绝，因为这时 `attn_tp_size=2`，不满足 Worker 要求的 `attn_tp_size=1`。
 
-要理解这个差异，需要分别看 Draft 的并行上下文、各 Rank 的 Token 计数，以及投机决策同步。下面沿这三处源码展开：先定位限制，再说明现有布局如何衔接，最后列出验证更宽 Attention TP 所需的检查项。
+Target 与 Draft 的可用并行参数需要分别判断。Draft 除了计算候选，还要让各 Rank 对请求数、候选行数和接受结果保持对应。下面先找启动检查，再跟着同一批请求看 Draft 使用哪个通信组、计数怎样换算，以及哪些决定需要同步。本文定位的是固定版本的限制与执行约束，没有完成解除限制后的运行验证。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -13,7 +13,7 @@
 
 ## 一、启动限制发生在哪里
 
-对 DP Attention，前一篇得到：
+开启 DP Attention 后，`dp_size` 决定 Attention 侧怎样划分请求，剩余的 TP 宽度再由同一组请求内的 Rank 分担。沿用前一篇在普通、非弹性布局下的宽度关系：
 
 ~~~text
 attn_dp_size = dp_size
@@ -32,7 +32,7 @@ CP1
 => attn_tp_size = 2
 ~~~
 
-而 DSpark guard 的三个条件恰好全部成立：
+这里 `attn_tp_size=2` 表示每个 Attention-DP 副本内，有两个 Rank 协同处理相应请求。把它代入 DSpark 的启动检查，三个条件同时成立：
 
 ~~~text
 enable_dp_attention = True
@@ -42,15 +42,15 @@ attn_tp_size > 1
 
 所以 TP32 / DP16 在创建 DeepSeek-V4 draft worker 之前就被拒绝。
 
-这项限制由通用 MoE Draft Runtime 中的 DSpark Worker 配置检查实施，guard 没有 `is_npu()` 或 HCCL 判断。
+检查发生在通用 DSpark Worker 中，条件没有 `is_npu()` 或 HCCL 判断。因此即使现场运行在 Ascend 910C，也不能仅凭这条报错把问题归到 NPU 通信库。
 
 报错文本进一步给出一个重要线索：`attn_tp > 1 corrupts the MoE-under-DP all-reduce`
 
-报错把线索指向 MoE-under-DP 的 all-reduce。定位还要向前走一步：对照各 Rank 的 Tensor 行归属与归约结果，找到第一次分歧。
+这段报错把排查方向指向 MoE-under-DP 的 all-reduce，但没有给出哪一行数据、哪一步归约先出错。要进一步定位，仍需对照各 Rank 送入归约的行分别属于哪个请求、它们是否是同一个结果的局部贡献。删除检查只能让程序继续进入该路径，不能证明这些关系已经正确。
 
 ## 二、Dense Draft 与 MoE Draft 的并行上下文
 
-DSpark worker 初始化时先区分 Draft 类型：
+先看 DSpark 怎样选择 Draft 的执行上下文。这里的 context 会临时改变代码查询到的 TP Group，所以即使模型层函数相同，进入时看到的分组也可能不同。Worker 初始化先区分 Draft 类型：
 
 ~~~python
 self._draft_is_moe = draft_is_deepseek_v4()
@@ -85,7 +85,7 @@ patch draft TP group = attn_tp_group
 Draft 在这个局部 group 内运行
 ~~~
 
-但 DeepSeek-V4 MoE draft 刻意不走这一整个 forward context：
+DeepSeek-V4 MoE Draft 的条件不同：它不会给整个 Forward 套用上面的局部 TP Context：
 
 ~~~text
 _draft_is_moe = True
@@ -97,7 +97,7 @@ _draft_is_moe = True
 
 ### MoE Draft 为什么保留跨 DP 的参与关系
 
-周边代码提供了非常强的设计信号：创建 `DraftBlockProposer` 时，MoE draft + DP Attention 会设置：
+继续看 `DraftBlockProposer` 的构造。MoE Draft 与 DP Attention 同时开启时，会设置：
 
 ~~~python
 dp_moe_sync = (
@@ -108,7 +108,7 @@ dp_moe_sync = (
 
 随后 Draft forward 会额外填充 DP/MoE 同步 metadata；空闲 Rank 也需要执行 `run_idle_participation()` 进入 draft model forward。
 
-这些调用表明，MoE Draft 的执行保留了跨 DP / MoE Rank 的同步与 collective 参与关系。这也解释了它与 Dense Draft 的上下文选择为何不同：整个 Forward 要继续使用 MoE 所需的通信拓扑。
+这些调用把上下文选择与后续执行接上了：MoE Draft 保留跨 DP / MoE Rank 的计数同步和通信参与关系，不能只让本地有请求的 Attention 子组独自运行。与 Dense Draft 相比，它需要继续使用 MoE 所涉及的通信拓扑。
 
 还有一个更细的点：`DraftBlockProposer._base_logits_context()` 在 `dp_moe_sync=True` 时，会短暂使用 `draft_tp_context(attn_tp_group)` 来计算 proposal-side base logits。`attn_tp_group` 在这两个阶段的用途不同：
 
@@ -120,15 +120,13 @@ Draft model forward / MoE
 → 可以临时进入 attn_tp_group context
 ~~~
 
-这进一步说明 group ownership 是按阶段区分的。
+因此读到 `attn_tp_group` 时，还要看它包住的是整个模型 Forward，还是其中一段 logits 计算。两个位置用了同一个组名，并不表示它们负责相同范围的执行。
 
 ## 三、每个 Rank 的 Token 计数怎样传递
 
-这里需要区分 draft 模型参数和实际通信布局。
+选好通信组之后，还要让所有参与者用同一种单位理解本轮工作量。一次 Draft 可能给每条请求准备多行输入，因此“有几条请求”和“有几行 Token”是两个数。
 
-在 decode-family DP 同步中，`ScheduleBatch.global_num_tokens` 保存：
-
-> **每个相关 Rank 的原始同步计数列表；在普通 decode-family round 中，这些原始值是 per-rank request counts。**
+在这里的 decode-family DP 同步中，`ScheduleBatch.global_num_tokens` 保存各相关 Rank 的原始同步计数列表，普通 decode-family 轮次中按每 Rank 的请求数计。名字里虽然有 tokens，读字段时仍要看产生它的阶段。
 
 固定函数 [`spec_scale_global_num_tokens()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_info.py#L451-L465) 的 docstring 直接写：
 
@@ -194,9 +192,7 @@ scaled draft-token units
 → DP / MoE synchronization geometry
 ~~~
 
-因此，读取 `global_num_tokens` 时需要同时确认计数单位：
-
-> **它携带的是 per-rank 计数向量；对 speculative forward，会按每请求固定宽度缩放成每 Rank 的 token-row 数，用来让相关 DP/MoE runtime 对几何形状取得一致认识。**
+例如前面的 `[1, 3, 0, 2]`，Graph 准入需要知道四个参与者各有几条请求；本次 Draft Forward 若每条请求占六行，DP/MoE 布局则需要 `[6, 18, 0, 12]`。两份计数分别服务于请求级调度和 Token 行级执行，不能拿缩放后的 18 当作 18 条请求，也不能拿原始的 3 当作本次仅有三行输入。这个六行宽度来自例子中的 `num_tokens_per_req`，不应直接等同于所有配置的候选数。
 
 ### Idle Rank participation 也说明这些 metadata 属于 collective contract
 
@@ -208,7 +204,7 @@ scaled draft-token units
 这个 Rank 可以完全跳过本轮 distributed MoE path
 ~~~
 
-collective participation 本身就是 correctness contract 的一部分。
+零行参与者仍可能是同一个 Collective 的成员。其他 Rank 按计划进入通信时，它也必须按相同轮次参加；否则问题可能表现为等待，而非某个本地 Tensor 的数值错误。这里的空 Forward 就是为了保留这种参与关系。
 
 ## 四、SpecTpSync 同步哪些决策
 
@@ -230,11 +226,7 @@ SpecTpSync group
 attn_tp_group
 ~~~
 
-TP32 / DP16 / CP1 时，这就是每个 DP replica 内的 2-rank Attention TP group。
-
-但必须非常清楚：
-
-> **`SpecTpSync` 在所选 TP Group 内同步投机决策，DP / MoE 的模型通信另由对应路径完成。**
+按 TP32 / DP16 / CP1 的拓扑计算，这会是每个 DP 副本内由两个 Rank 组成的 Attention TP 组；前面的 Worker 检查仍会拒绝该 MoE Draft 配置，这里只说明组选择规则。`SpecTpSync` 在选定组内同步投机决策，模型中的 DP/MoE 数据通信仍由相应执行路径负责。
 
 它的类注释是：`Broadcasts a speculative decision from rank 0 to its TP group.`
 
@@ -262,7 +254,7 @@ DSPARK_TARGET
 
 见 [`environ.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/environ.py#L1362-L1375)。
 
-所以默认情况下，代码中显式调用 `self._tp_sync.sync(site, tensor)` 的 speculative 决策会在 attn-TP group 内广播一致。
+因此默认配置下，多 Rank 组中显式调用 `self._tp_sync.sync(site, tensor)` 的决策会取组内源 Rank 的值。这里的 `src=0` 指组内编号 0，不一定是全局 Rank0；单 Rank 组则无需执行这次跨 Rank 广播。
 
 但它不会自动同步：
 
@@ -286,13 +278,11 @@ Draft MoE distributed execution
 → DP / MoE / EP runtime topology
 ~~~
 
-这两个 domain 同时存在，正是 `attn_tp_size>1` 时问题复杂的原因之一。
+只对齐候选或接受结果，无法替代 Draft 模型对 Token 行的分配与归约。两部分都要核对，才能判断更宽 Attention TP 下是哪一个边界不成立。
 
 ## 五、Planner 的 DP Tier Gather 条件
 
-`attn_tp_size == 1` 出现在 DP-tier gather 的启用条件中：
-
-真实代码里这个条件属于：
+Planner 中也能看到 `attn_tp_size == 1`，但它出现在另一处条件里：
 
 ~~~python
 self._dp_tier_gather_enabled = (...)
@@ -315,7 +305,7 @@ not scheduler skip all-gather
 
 固定源码：[`DSparkVerifyPlanner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_planner.py)。
 
-`attn_tp_size == 1` 与上面的其他条件一起，开启 compact ragged-verify 的 DP-tier token-count gather。它控制的是这一条优化分支。
+这些条件一起决定是否开启 compact ragged-verify 的 DP-tier Token 计数收集。这里的 Tier 可以理解为本轮 Verify 选择的执行容量档位，计数会影响不同 Rank 如何选择与组织相应容量。这个条件控制的是一条 Planner 优化分支，不能把它与 Worker 的启动拒绝检查当作同一处限制。
 
 当前 Worker 在 Planner 初始化前就拒绝 MoE Draft 的 `attn_tp_size>1`。因此，要验证更宽的 Attention TP，需要先处理 Worker 限制，再检查 Planner 的宽度选择、计数与 Graph Tier。
 
@@ -336,7 +326,7 @@ self._run_moe_ffn_dp_sync(
 
 固定源码：[`DSparkV4Stage._run_ffn()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_dspark.py#L701-L778)。
 
-Draft 因此复用了这部分 Attention→MoE bridge，排查时继续检查调用前后的行布局与计数。
+Draft 因此复用了这部分 Attention→MoE bridge，也就是衔接两个阶段行布局的转换代码。排查时继续检查调用前后，每行属于哪个请求、计数按什么单位解释。
 
 ### 从限制定位到运行验证
 
@@ -350,13 +340,15 @@ Draft 因此复用了这部分 Attention→MoE bridge，排查时继续检查调
 | Graph 与 Verify 模式 | 在正确 Eager 基础上分别验证 | padding、tier 选择或 metadata 是否改变语义？ |
 | Ascend 目标环境 | 使用实际 ModelSlim、通信后端与部署拓扑 | 平台分支能否保持同样的正确性？ |
 
-验证顺序是先建立正确基线，再逐边界比较更宽拓扑的输出。第一处差异会指明修复应落在 bridge、metadata 还是后续执行路径。
+上表是后续验证方案，不是本文已经执行的实验结果。先在受支持的布局下建立目标模型的正确基线，再逐边界比较更宽拓扑的输出，才能判断差异出在 bridge、metadata 还是后续执行路径。
 
 ### 按依赖顺序推进验证
 
+下面保持 CP1、PP1 与其余可比条件一致。TP32 / DP32 用于建立受支持宽度的基线，目标模型与平台是否满足其他条件仍需核对；绕过 guard 仅用于隔离开发环境中的定位：
+
 ~~~text
 TP32 / DP32 + DSpark
-→ 当前正确 baseline
+→ 待建立并验证的 baseline
 
 TP32 / DP16 + DSpark OFF
 → 验证 target path
@@ -398,7 +390,7 @@ cache locations
 
 > **这行 Token 当前属于哪个请求、哪个 speculative step、哪个 Rank；下一个 collective 又认为它属于谁？**
 
-这比一上来只抓 HCCL trace 更容易找到 ownership 第一次分叉的位置。
+例如两个 Rank 都有四行输入，shape 检查会通过；但如果其中一边的第二行已经对应另一个请求，后续归约仍然可能错误。把请求身份、轮次与行位置一起记录，才能把这种分歧与通信本身的故障区分开。
 
 ### Ascend NPU 上还要单独补一组验证
 
@@ -416,7 +408,7 @@ vs
 Ascend NPU / ModelSlim / HCCL backend-specific correctness
 ~~~
 
-CUDA Eager 结果可作为对照，Ascend 跨机配置则要覆盖上面的 ModelSlim、HCCL 与 Graph 路径。
+CUDA Eager 结果只能作为相应路径的对照，无法替代 Ascend 910C 的验收。目标部署仍要覆盖实际使用的 ModelSlim、通信后端、Graph 与跨机拓扑，确认平台分支没有改变前面建立的行与状态对应关系。
 
 ## 七、区分模型布局、计数与决策
 
