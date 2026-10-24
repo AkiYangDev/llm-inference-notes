@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？](npu-timeline-gaps-and-recoverable-speedup.md)：用真实rank0/1区间统计与小拷贝定位，区分记录空隙、跨rank等待、采集扰动与可回收关键路径时间。
+
 - [128K 输入、90% 前缀缓存：怎样把压测场景真正跑准](128k-prefix-cache-benchmark-calibration.md)：沿真实 tokenizer 核长、共享区与独立后缀、seed/check 和正式 usage，解释预测前缀与实际命中的差别。
 
 - [Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批](deepseek-v4-prefill-chunk-size-selection.md)：用8192→8320与CP2负例，解释有效chunk、页预算、通信分轮和跨请求合批怎样共同决定吞吐。

@@ -575,5 +575,20 @@
     "role": "advanced",
     "seo_title": "128K输入、90%前缀缓存：怎样把压测场景真正跑准",
     "seo_summary": "DeepSeek-V4-Flash与Ascend 910C压测实践：真实tokenizer核长、共享前缀与独立后缀、多DP的seed和check，以及逐请求缓存计数、吞吐和准备成本。"
+  },
+  "docs/performance/npu-timeline-gaps-and-recoverable-speedup.md": {
+    "summary": "从真实18.77%/20.68%的rank局部空隙出发，解释wall、区间并集、等待累计、跨rank依赖和Profiler扰动，配套教学图与纯CPU统计脚本。",
+    "category": "性能分析",
+    "tags": [
+      "Ascend 910C",
+      "Profiling",
+      "DeepSeek-V4",
+      "关键路径",
+      "性能调优"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？",
+    "seo_summary": "Ascend 910C NPU trace中的19%空隙为何不等于19%可回收加速：跨stream区间并集、跨rank等待、Graph端点、DSpark元数据小拷贝与Profiler扰动的真实案例。"
   }
 }

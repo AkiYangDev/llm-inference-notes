@@ -1,0 +1,453 @@
+{
+  "scope": "Historical rank0/rank1 all-recorded-device-stream intervals. No all-rank idle, critical-path saving or current throughput claim.",
+  "analysis_date": "2026-10-20",
+  "model": "DeepSeek-V4-Flash",
+  "hardware": "Ascend 910C",
+  "software_version": "0.0.0.dev18433+gce0a8fea5.d20261013",
+  "profile_runtime": {
+    "P": {
+      "version": "0.0.0.dev18433+gce0a8fea5.d20261013",
+      "json_model_override_args": "{\"use_index_cache\":false,\"index_topk_freq\":1}",
+      "attn_cp_size": 4,
+      "dp_size": 4,
+      "prefill_max_requests": 1,
+      "chunked_prefill_size": 32768,
+      "disable_overlap_schedule": false
+    },
+    "D": {
+      "version": "0.0.0.dev18433+gce0a8fea5.d20261013",
+      "json_model_override_args": "{\"use_index_cache\":false,\"index_topk_freq\":1}",
+      "speculative_algorithm": "DSPARK",
+      "speculative_num_draft_tokens": 4,
+      "speculative_num_steps": 1,
+      "cuda_graph_bs_decode": [
+        1,
+        2,
+        4,
+        8,
+        12,
+        16
+      ],
+      "dp_size": 16,
+      "disable_overlap_schedule": false
+    },
+    "actual_input_profile_load": {
+      "declared": 160,
+      "actual_success": 640,
+      "actual_failed": 0,
+      "profile_end_confirmed": true,
+      "performance_score": false
+    }
+  },
+  "profile_options": {
+    "common_config": {
+      "activities": [
+        "ProfilerActivity.CPU",
+        "ProfilerActivity.NPU"
+      ],
+      "schedule": {},
+      "record_shapes": true,
+      "profile_memory": false,
+      "with_stack": false,
+      "with_flops": false,
+      "with_modules": false
+    },
+    "experimental_config": {
+      "_profiler_level": "Level1",
+      "_aic_metrics": "ACL_AICORE_PIPE_UTILIZATION",
+      "_l2_cache": false,
+      "_msprof_tx": false,
+      "_mstx": false,
+      "_data_simplification": false,
+      "record_op_args": false,
+      "_export_type": [
+        "text"
+      ],
+      "_host_sys": [],
+      "_op_attr": false,
+      "_gc_detect_threshold": null,
+      "_mstx_domain_include": [],
+      "_mstx_domain_exclude": [],
+      "_sys_io": false,
+      "_sys_interconnection": false
+    }
+  },
+  "rank_clocks": [
+    {
+      "rank": 0,
+      "wall_ms": 2085.29142,
+      "busy_union_ms": 1693.9219199999031,
+      "kernel_sum_ms": 2319.7540199997516,
+      "total_cost_ms": 2734.9002299997514,
+      "recorded_kernel_uncovered_ms": 391.3695000000971,
+      "uncovered_fraction": 0.18768096211708246,
+      "largest_gap_ms": 9.404560000000055,
+      "dynamic_endpoint_gap_ms": 345.4969000000069,
+      "dynamic_share_of_uncovered": 0.8827895377639832,
+      "model47_same_endpoint_gap_ms": 19.979560000081662,
+      "model47_max_gap_us": 4.21999999973923,
+      "model47_ge100us_gap_count": 0,
+      "AI_CPU_union_ms": 21.71402000000188,
+      "all_non_AICPU_union_ms": 1673.5282599999002
+    },
+    {
+      "rank": 1,
+      "wall_ms": 2085.7130129999996,
+      "busy_union_ms": 1654.3459569999197,
+      "kernel_sum_ms": 2286.06636299973,
+      "total_cost_ms": 2738.01088599973,
+      "recorded_kernel_uncovered_ms": 431.36705600007986,
+      "uncovered_fraction": 0.2068199475725666,
+      "largest_gap_ms": 9.440249000000069,
+      "dynamic_endpoint_gap_ms": 385.6655360000129,
+      "dynamic_share_of_uncovered": 0.8940542181782688,
+      "model47_same_endpoint_gap_ms": 20.024998000041464,
+      "model47_max_gap_us": 5.341000000014901,
+      "model47_ge100us_gap_count": 0,
+      "AI_CPU_union_ms": 22.91449099999806,
+      "all_non_AICPU_union_ms": 1632.2541229999215
+    }
+  ],
+  "selected_task_anchors": [
+    {
+      "id": "rank0_gap0",
+      "gap_duration_ms": 9.404560000000055,
+      "host_coverage_ratio": 0.940340111605464,
+      "sync_marker_overlap_ratio": 0.016007660113809108,
+      "comm_marker_overlap_ratio": 0.8540792977024099,
+      "before": {
+        "name": "assign_req_to_token_pool",
+        "type": "assign_req_to_token_pool",
+        "core": "AI_VECTOR_CORE",
+        "stream": "27",
+        "task": 3426,
+        "duration": 2.72,
+        "wait": 230.15,
+        "relative_to_gap_start_us": -2.7199999999720603
+      },
+      "after": {
+        "name": "aclnnIndex_IndexCheck_IndexCheck",
+        "type": "IndexCheck",
+        "core": "AI_VECTOR_CORE",
+        "stream": "30",
+        "task": 12336,
+        "duration": 2.96,
+        "wait": 9404.53,
+        "relative_to_gap_start_us": 9404.560000000056
+      },
+      "host_events": [
+        {
+          "name": "gloo:all_gather",
+          "start_relative_to_gap_us": 873.035000000149,
+          "duration_us": 7684.870000000112
+        },
+        {
+          "name": "c10d::_allgather_base_",
+          "start_relative_to_gap_us": 516.4650000000838,
+          "duration_us": 347.37000000011176
+        },
+        {
+          "name": "aten::chunk",
+          "start_relative_to_gap_us": 536.7750000001397,
+          "duration_us": 277.79000000003725
+        },
+        {
+          "name": "aten::split",
+          "start_relative_to_gap_us": 539.2250000000931,
+          "duration_us": 274.69999999995343
+        },
+        {
+          "name": "aten::repeat",
+          "start_relative_to_gap_us": 284.92500000004657,
+          "duration_us": 192.39999999990687
+        },
+        {
+          "name": "Event::wait",
+          "start_relative_to_gap_us": 9239.915000000037,
+          "duration_us": 77.47999999998137
+        },
+        {
+          "name": "Event::record",
+          "start_relative_to_gap_us": 32.03500000014901,
+          "duration_us": 60.03000000002794
+        },
+        {
+          "name": "aten::min",
+          "start_relative_to_gap_us": 8781.38500000001,
+          "duration_us": 54.27000000001863
+        }
+      ]
+    },
+    {
+      "id": "rank0_gap9",
+      "gap_duration_ms": 0.5408600000001025,
+      "host_coverage_ratio": 0.6591724290934539,
+      "sync_marker_overlap_ratio": 0.4656842805894287,
+      "comm_marker_overlap_ratio": 0.0,
+      "before": {
+        "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+        "type": "Fill",
+        "core": "AI_VECTOR_CORE",
+        "stream": "43",
+        "task": 21924,
+        "duration": 1.44,
+        "wait": 412.16,
+        "relative_to_gap_start_us": -1.4399999999441206
+      },
+      "after": {
+        "name": "aclnnClamp_ClipByValueV2AiCore_ClipByValueV2",
+        "type": "ClipByValueV2",
+        "core": "AI_VECTOR_CORE",
+        "stream": "43",
+        "task": 21925,
+        "duration": 3.0,
+        "wait": 541.06,
+        "relative_to_gap_start_us": 540.8600000001024
+      },
+      "host_events": [
+        {
+          "name": "aten::to",
+          "start_relative_to_gap_us": 202.21500000008382,
+          "duration_us": 104.62999999988824
+        },
+        {
+          "name": "aten::_to_copy",
+          "start_relative_to_gap_us": 205.79500000015832,
+          "duration_us": 100.8300000000745
+        },
+        {
+          "name": "aten::copy_",
+          "start_relative_to_gap_us": 220.89500000001863,
+          "duration_us": 84.9199999999255
+        },
+        {
+          "name": "aten::to",
+          "start_relative_to_gap_us": 68.90500000002794,
+          "duration_us": 82.56000000005588
+        },
+        {
+          "name": "aten::_to_copy",
+          "start_relative_to_gap_us": 72.80500000016764,
+          "duration_us": 78.27000000001863
+        },
+        {
+          "name": "aten::to",
+          "start_relative_to_gap_us": 345.90500000002794,
+          "duration_us": 55.67999999993481
+        },
+        {
+          "name": "aten::copy_",
+          "start_relative_to_gap_us": 96.57500000018626,
+          "duration_us": 53.610000000102445
+        },
+        {
+          "name": "aten::_to_copy",
+          "start_relative_to_gap_us": 348.5050000001211,
+          "duration_us": 52.889999999897555
+        }
+      ]
+    },
+    {
+      "id": "rank1_gap8",
+      "gap_duration_ms": 0.5572110000001267,
+      "host_coverage_ratio": 0.6997331352043531,
+      "sync_marker_overlap_ratio": 0.47443248607776667,
+      "comm_marker_overlap_ratio": 0.0,
+      "before": {
+        "name": "aclnnInplaceFillScalar_FillAiCore_Fill",
+        "type": "Fill",
+        "core": "AI_VECTOR_CORE",
+        "stream": "45",
+        "task": 25854,
+        "duration": 1.66,
+        "wait": 323.31,
+        "relative_to_gap_start_us": -1.659999999916181
+      },
+      "after": {
+        "name": "aclnnClamp_ClipByValueV2AiCore_ClipByValueV2",
+        "type": "ClipByValueV2",
+        "core": "AI_VECTOR_CORE",
+        "stream": "45",
+        "task": 25855,
+        "duration": 2.54,
+        "wait": 557.34,
+        "relative_to_gap_start_us": 557.2110000001267
+      },
+      "host_events": [
+        {
+          "name": "aten::to",
+          "start_relative_to_gap_us": 233.12200000020675,
+          "duration_us": 125.20999999996275
+        },
+        {
+          "name": "aten::_to_copy",
+          "start_relative_to_gap_us": 236.37200000020675,
+          "duration_us": 121.6699999999255
+        },
+        {
+          "name": "aten::copy_",
+          "start_relative_to_gap_us": 251.47200000006706,
+          "duration_us": 105.37999999988824
+        },
+        {
+          "name": "aten::to",
+          "start_relative_to_gap_us": 3.632000000216067,
+          "duration_us": 72.38999999989755
+        },
+        {
+          "name": "aten::_to_copy",
+          "start_relative_to_gap_us": 7.052000000141561,
+          "duration_us": 68.71999999997206
+        },
+        {
+          "name": "aten::to",
+          "start_relative_to_gap_us": 129.3220000001602,
+          "duration_us": 57.48999999999069
+        },
+        {
+          "name": "aten::_to_copy",
+          "start_relative_to_gap_us": 131.752000000095,
+          "duration_us": 54.860000000102445
+        },
+        {
+          "name": "aten::copy_",
+          "start_relative_to_gap_us": 24.632000000216067,
+          "duration_us": 50.14999999990687
+        }
+      ]
+    }
+  ],
+  "dynamic_metadata_observation": [
+    {
+      "rank": 0,
+      "original_pattern": {
+        "before_type": "Fill",
+        "after_type": "ClipByValueV2",
+        "count_all": 28,
+        "count_ge100us": 28,
+        "total_gap_ms": 11.488339999999967,
+        "largest_gap_ms": 0.5408600000001025,
+        "mean_gap_us": 410.297857142856
+      },
+      "pattern_gap_fraction_of_recorded_wall_percent": 0.550922518062246,
+      "stage_signature_count": 28,
+      "stage_shape_BS_counts": {
+        "3": 16,
+        "4": 12
+      },
+      "following_same_BS_le": 28,
+      "exactly_two_int64_16_copies": 28,
+      "two_copy_host_duration_sum_ms": 3.366309999999241,
+      "host_copy_duration_mean_us": 60.11267857141502,
+      "host_copy_sum_fraction_of_capture_percent": 0.1614311538288131,
+      "cost_limit": "Host to_copy duration is host association and may contain enqueue/wait; not pure transfer time or removable critical-path time. Pattern fraction is a scope fraction, not a speedup prediction."
+    },
+    {
+      "rank": 1,
+      "original_pattern": {
+        "before_type": "Fill",
+        "after_type": "ClipByValueV2",
+        "count_all": 28,
+        "count_ge100us": 28,
+        "total_gap_ms": 12.32387200000009,
+        "largest_gap_ms": 0.5572110000001267,
+        "mean_gap_us": 440.13828571428894
+      },
+      "pattern_gap_fraction_of_recorded_wall_percent": 0.5908709358951529,
+      "stage_signature_count": 28,
+      "stage_shape_BS_counts": {
+        "3": 20,
+        "4": 8
+      },
+      "following_same_BS_le": 28,
+      "exactly_two_int64_16_copies": 28,
+      "two_copy_host_duration_sum_ms": 3.10796999999939,
+      "host_copy_duration_mean_us": 55.49946428570339,
+      "host_copy_sum_fraction_of_capture_percent": 0.1490123512020966,
+      "cost_limit": "Host to_copy duration is host association and may contain enqueue/wait; not pure transfer time or removable critical-path time. Pattern fraction is a scope fraction, not a speedup prediction."
+    }
+  ],
+  "model_tag_limits": {
+    "dynamic_endpoint_shares": [
+      0.8827895377639832,
+      0.8940542181782688
+    ],
+    "model47_endpoint_max_gap_us": [
+      4.22,
+      5.341
+    ],
+    "model47_endpoint_gap_ge100us_count": [
+      0,
+      0
+    ],
+    "warning": "Immediate endpoint tags are not full graph replay containment. Dynamic-tagged tasks may interleave within replay spans."
+  },
+  "source_sha256": {
+    "anomaly": "e8cd4dfccfe6969bcab5bc4383fa703d4b79f86d157ed014e7054e6d36ef7043",
+    "interval_facts": "7c485edd6653c458b1ab144f9ca59d385133b7a31aff9ee11ed7d1ff88f4ff7c",
+    "model_tags": "a364af1f2d9e43beadc45e3636eb58396c57461431088f578df7329e5ce04356",
+    "metadata_review": "69d0b23c21303fa02029503013da9998e80d6b16145a101a2bb02142d5e936d6",
+    "analysis_source": "83d3df835bb80e750fa894e5b1edc306971b501e134fb7c0e28504aed2a43d30",
+    "draft_source": "5fe3e4b96bd82e6e8eaa1424068824d51cfb59101a7ab998c511cdab2046957c",
+    "sampling_source": "6c91c3d467f08e575abe093bce36b8fa88489cd393bf407d25dfa067e76cd1d1",
+    "crossrank_contract_only": "446bb89f2fbb384ac3a7a902119692e8d97c2db16b3547b9381dc792d384ba89"
+  },
+  "original_trace_hashes_from_frozen_analysis": [
+    {
+      "rank": 0,
+      "file": "kernel_details.csv",
+      "sha256": "d78284a60c069f1528d98b6f9fe1ea8cb8cd94330d406baecdd0896c59842670"
+    },
+    {
+      "rank": 0,
+      "file": "trace_view.json",
+      "sha256": "724ba461eda3d295d48d4767b775bb7941b6db41f297ad7838e7b65d3e28261e"
+    },
+    {
+      "rank": 0,
+      "file": "profiler_info_0.json",
+      "sha256": "b426e4e57b9864bd1f9fb887b65f46c24328b1f8899f60c2c63e080056055a90"
+    },
+    {
+      "rank": 1,
+      "file": "kernel_details.csv",
+      "sha256": "d16901fc52aa6a66eaaa2a31a86b604d3e5eb9a55979c35f62eee8ec3796e48c"
+    },
+    {
+      "rank": 1,
+      "file": "trace_view.json",
+      "sha256": "ef1727837d5304f933e8704f4cfdb659499f8fc14bce3e456833d8a06240a70c"
+    },
+    {
+      "rank": 1,
+      "file": "profiler_info_1.json",
+      "sha256": "c6a18636536a989ed4c96bb80fa81f317a6b6e132f32b5a88c275ad4bda6194c"
+    }
+  ],
+  "source_association_limit": "Helpers matched an installed-source read after capture. Shape/order evidence is not a captured Python call stack; capture-time complete helper source identity was not independently frozen in that addendum.",
+  "source_candidate": "DraftBlockProposer._run_forward -> _fill_dp_moe_sync_metadata -> stage_sampling_params -> draft model forward",
+  "candidate_status": "LOW_PRIORITY_DEFERRED; no patch or performance benefit measured",
+  "global_rank_idle_ratio": "NOT_OBSERVED",
+  "recoverable_critical_path_time": "NOT_OBSERVED",
+  "profiling_overhead_for_this_run": "NOT_MEASURED",
+  "draft_verify_phase_cost_unprofiled": "NOT_OBSERVED",
+  "counterfactual_only": {
+    "removed_fraction": 0.19,
+    "remaining_fraction": 0.81,
+    "throughput_multiplier": 1.2345679012345678,
+    "throughput_gain_percent": 23.456790123456784,
+    "warning": "Teaching arithmetic only; not a prediction or bound inferred from the local gaps."
+  },
+  "article_work": {
+    "new_profile": false,
+    "new_model_requests": 0,
+    "GPU_actions": 0,
+    "SSH_calls": 0,
+    "raw_trace_reanalysis": false,
+    "source": "Existing bounded JSON summaries and local source reads"
+  },
+  "public_references": [
+    "https://docs.pytorch.org/docs/2.14/profiler.html",
+    "https://github.com/Ascend/msserviceprofiler/blob/master/docs/en/msserviceprofiler_serving_tuning_instruct.md"
+  ]
+}

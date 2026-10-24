@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+<title id="title">区间并集与跨rank空隙交集：两个教学例子</title>
+<desc id="desc">上图中三段任务时长和为11毫秒，跨stream并集为9毫秒，窗口为10毫秒。下图中两个rank各有两毫秒空隙但互相错开，同时空隙为零。全部为构造数据。</desc>
+<rect width="1200" height="760" rx="16" fill="#f7f9fc"/>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#172b4d} .title{font-size:25px;font-weight:700}.sub{font-size:20px;font-weight:600}.label{font-size:18px}.small{font-size:16px}.bartext{font-size:17px;fill:white;font-weight:600}.grid{stroke:#dce3ed;stroke-width:1}</style>
+<text x="36" y="43" class="title">先合并同rank的stream，再区分多个rank的空隙</text>
+<text x="36" y="73" class="small">纯教学示意 · 时间单位ms · 不是实际trace截图</text>
+<text x="36" y="119" class="sub" text-anchor="start">A. 单rank：多stream重叠不能重复计时</text>
+<line x1="240" y1="157" x2="240" y2="313" class="grid"/>
+<text x="240" y="147" class="small" text-anchor="middle">0</text>
+<line x1="326" y1="157" x2="326" y2="313" class="grid"/>
+<text x="326" y="147" class="small" text-anchor="middle">1</text>
+<line x1="412" y1="157" x2="412" y2="313" class="grid"/>
+<text x="412" y="147" class="small" text-anchor="middle">2</text>
+<line x1="498" y1="157" x2="498" y2="313" class="grid"/>
+<text x="498" y="147" class="small" text-anchor="middle">3</text>
+<line x1="584" y1="157" x2="584" y2="313" class="grid"/>
+<text x="584" y="147" class="small" text-anchor="middle">4</text>
+<line x1="670" y1="157" x2="670" y2="313" class="grid"/>
+<text x="670" y="147" class="small" text-anchor="middle">5</text>
+<line x1="756" y1="157" x2="756" y2="313" class="grid"/>
+<text x="756" y="147" class="small" text-anchor="middle">6</text>
+<line x1="842" y1="157" x2="842" y2="313" class="grid"/>
+<text x="842" y="147" class="small" text-anchor="middle">7</text>
+<line x1="928" y1="157" x2="928" y2="313" class="grid"/>
+<text x="928" y="147" class="small" text-anchor="middle">8</text>
+<line x1="1014" y1="157" x2="1014" y2="313" class="grid"/>
+<text x="1014" y="147" class="small" text-anchor="middle">9</text>
+<line x1="1100" y1="157" x2="1100" y2="313" class="grid"/>
+<text x="1100" y="147" class="small" text-anchor="middle">10</text>
+<text x="214" y="196" class="label" text-anchor="end">Stream A</text>
+<text x="214" y="246" class="label" text-anchor="end">Stream B</text>
+<text x="214" y="296" class="label" text-anchor="end">记录区间并集</text>
+<rect x="240" y="175" width="344" height="30" rx="4" fill="#1766b5"/>
+<text x="412.0" y="196" class="bartext" text-anchor="middle">4ms</text>
+<rect x="842" y="175" width="258" height="30" rx="4" fill="#1766b5"/>
+<text x="971.0" y="196" class="bartext" text-anchor="middle">3ms</text>
+<rect x="412" y="225" width="344" height="30" rx="4" fill="#35859a"/>
+<text x="584.0" y="246" class="bartext" text-anchor="middle">4ms</text>
+<rect x="240" y="275" width="516" height="30" rx="4" fill="#19836a"/>
+<text x="498.0" y="296" class="bartext" text-anchor="middle">6ms</text>
+<rect x="756" y="275" width="86" height="30" rx="4" fill="#c74856"/>
+<text x="799.0" y="296" class="bartext" text-anchor="middle">1ms</text>
+<rect x="842" y="275" width="258" height="30" rx="4" fill="#19836a"/>
+<text x="971.0" y="296" class="bartext" text-anchor="middle">3ms</text>
+<text x="36" y="353" class="label" text-anchor="start">Duration算术和 = 7+4 = 11ms；记录覆盖并集 = 9ms；wall = 10ms。</text>
+<text x="36" y="408" class="sub" text-anchor="start">B. 跨rank：每个rank都有空隙，也可能没有同时空隙</text>
+<line x1="240" y1="449" x2="240" y2="657" class="grid"/>
+<text x="240" y="439" class="small" text-anchor="middle">0</text>
+<line x1="326" y1="449" x2="326" y2="657" class="grid"/>
+<text x="326" y="439" class="small" text-anchor="middle">1</text>
+<line x1="412" y1="449" x2="412" y2="657" class="grid"/>
+<text x="412" y="439" class="small" text-anchor="middle">2</text>
+<line x1="498" y1="449" x2="498" y2="657" class="grid"/>
+<text x="498" y="439" class="small" text-anchor="middle">3</text>
+<line x1="584" y1="449" x2="584" y2="657" class="grid"/>
+<text x="584" y="439" class="small" text-anchor="middle">4</text>
+<line x1="670" y1="449" x2="670" y2="657" class="grid"/>
+<text x="670" y="439" class="small" text-anchor="middle">5</text>
+<line x1="756" y1="449" x2="756" y2="657" class="grid"/>
+<text x="756" y="439" class="small" text-anchor="middle">6</text>
+<line x1="842" y1="449" x2="842" y2="657" class="grid"/>
+<text x="842" y="439" class="small" text-anchor="middle">7</text>
+<line x1="928" y1="449" x2="928" y2="657" class="grid"/>
+<text x="928" y="439" class="small" text-anchor="middle">8</text>
+<line x1="1014" y1="449" x2="1014" y2="657" class="grid"/>
+<text x="1014" y="439" class="small" text-anchor="middle">9</text>
+<line x1="1100" y1="449" x2="1100" y2="657" class="grid"/>
+<text x="1100" y="439" class="small" text-anchor="middle">10</text>
+<text x="214" y="491" class="label" text-anchor="end">Rank A</text>
+<text x="214" y="546" class="label" text-anchor="end">Rank B</text>
+<text x="214" y="611" class="label" text-anchor="end">任一rank有记录</text>
+<rect x="240" y="470" width="172" height="30" rx="4" fill="#1766b5"/>
+<rect x="412" y="470" width="172" height="30" rx="4" fill="#c74856"/>
+<text x="498.0" y="491" class="bartext" text-anchor="middle">空隙2ms</text>
+<rect x="584" y="470" width="516" height="30" rx="4" fill="#1766b5"/>
+<rect x="240" y="525" width="344" height="30" rx="4" fill="#35859a"/>
+<rect x="584" y="525" width="172" height="30" rx="4" fill="#c74856"/>
+<text x="670.0" y="546" class="bartext" text-anchor="middle">空隙2ms</text>
+<rect x="756" y="525" width="344" height="30" rx="4" fill="#35859a"/>
+<rect x="240" y="590" width="860" height="30" rx="4" fill="#19836a"/>
+<text x="670.0" y="611" class="bartext" text-anchor="middle">10ms均有某个rank的任务记录</text>
+<text x="36" y="700" class="label" text-anchor="start">各rank未覆盖20%，全组同时未覆盖为0；这仍不能替代关键路径分析。</text>
+</svg>

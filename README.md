@@ -35,6 +35,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ### 进阶
 
+- [NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？](docs/performance/npu-timeline-gaps-and-recoverable-speedup.md)：用真实rank0/1区间统计与小拷贝定位，区分记录空隙、跨rank等待、采集扰动与可回收关键路径时间。
+
 - [Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批](docs/performance/deepseek-v4-prefill-chunk-size-selection.md)：用8192→8320与CP2负例，解释有效chunk、页预算、通信分轮和跨请求合批怎样共同决定吞吐。
 
 - [DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么](docs/performance/deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md)：解释freq2按c4层复用历史位置选择，结合源码与同负载对照说明少算了什么、为何仍需质量验收。
