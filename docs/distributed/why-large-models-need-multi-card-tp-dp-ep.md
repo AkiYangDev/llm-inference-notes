@@ -2,7 +2,7 @@
 
 部署大模型时，第一道约束通常是容量：权重、KV Cache 和执行中的临时 Tensor 能否同时放进设备内存。把权重分到多张卡后，还要决定一次计算怎样分工，以及分片结果在哪里合并。
 
-TP 拆分 Tensor 计算，普通 DP 让模型副本处理不同请求，EP 把不同专家交给不同 Rank。SGLang 的 DP Attention 又把请求分组嵌入同一个 TP 域。下面先算显存，再用一组 DeepSeek-V4 的并行例子说明这些方式怎样配合。
+例如 MoE 每个 Token 只激活一小部分专家，看起来计算量比总参数规模小很多，却仍要存放后续请求可能选到的专家权重。先把容量这笔账算清，再看 TP 怎样切矩阵、普通 DP 怎样分请求、EP 怎样放专家，最后就能理解同一批设备为什么会在 Attention 和 MoE 阶段采用不同布局。
 
 本文的并行语义参考 `sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a`，核对日期为 2026-09-21；DeepSeek-V4 参数规模与 Ascend 支持情况同时参考当前 SGLang 官方文档。本文只讨论推理，不讨论训练里的梯度同步与 Optimizer State。
 
@@ -12,9 +12,9 @@ SGLang 当前 DeepSeek-V4 cookbook 给出的 `DeepSeek-V4-Flash-0731` 规模约�
 
 这两个数字必须先分清。`304B` 是整套模型的总参数量；`13B` 是 MoE 路由之后，一个 Token 在一次前向中大约激活的参数规模。每个 Token 只使用部分 Expert，后续 Token 却可能选择其他 Expert，因此服务仍要能访问整套可路由专家的权重。
 
-所以对于 MoE，**“每个 Token 算多少参数”与“服务时总共要放多少权重”是两笔不同的账。**
+13B 主要帮助理解一次 Token 前向的激活计算规模，不能拿它代替整套常驻权重的容量。除非另行设计权重卸载或按需装载，这些可能被路由到的专家都要在服务可访问的位置保存；下面按权重常驻设备 HBM 的部署讨论。
 
-先忽略量化 scale、metadata、对齐、Embedding、Runtime Buffer 等所有额外开销，只算理论下界：
+先按总参数量估算权重本身，暂不另加量化 Scale、对齐和 Runtime Buffer 等开销。Embedding 等模型权重已包含在总参数口径内，不应作为额外参数再算一次：
 
 | 权重精度 | 理想化每参数字节数 | 304B 参数的权重下界 |
 | --- | ---: | ---: |
@@ -22,7 +22,7 @@ SGLang 当前 DeepSeek-V4 cookbook 给出的 `DeepSeek-V4-Flash-0731` 规模约�
 | W8 / INT8 | 1 Byte | 约 304 GB |
 | 4 bit | 0.5 Byte | 约 152 GB |
 
-这是按参数位宽估算的数学下界，Checkpoint 文件和服务 HBM 还包含额外数据。W8A8 还会有量化 scale、非量化权重、布局与对齐等额外数据；SGLang 的 Ascend 文档也明确把 ModelSlim W8/W4 描述为相对 BF16 降低权重 footprint，而不是把整个 Runtime 压成对应的理论位宽。
+表中 GB 按十进制计算，即 `1 GB = 10^9 Byte`；与工具显示的 GiB 对比前要先统一单位。这只是按理想位宽估算的权重下界。真实 Checkpoint 和服务 HBM 还包含量化 Scale、未量化部分、布局与对齐等数据；ModelSlim W8/W4 降低的是对应权重的占用，不能把 KV Cache、临时工作区和整个 Runtime 都按同样比例缩小。
 
 这里还要统一一个 Ascend 计数口径。SGLang Ascend 文档当前仍使用 `A3 Series` 的产品命名，并按**每张卡 2 个 die、每个 die 64 GB device memory**描述资源；本文沿用本系列统一的对外称呼 **Ascend 910C**，在引用官方资源口径时保留 `A3 Series` 便于对照。本文按参与计算的逻辑 device / die 数量解释 `tp_size`，物理卡数另按双 die 口径换算。
 
@@ -43,9 +43,7 @@ HBM
 
 allocator 的 `reserved` 已包含它管理的活跃块。核算额外占用时，取尚未使用的保留空间及碎片，避免与权重、KV 等活跃分配重复计数。
 
-DeepSeek-V4 的缓存容量还要按 SWA 与压缩历史分别计算。将这些运行开销加到权重之上，可以得到部署容量的基本要求：
-
-> **即使已经做 W8 量化，仅 304B 权重的理想下界也约为 304 GB；一张 Ascend 910C 仍无法把这一整份模型连同运行时空间一起容纳。**
+DeepSeek-V4 的缓存还要区分 SWA 与压缩历史，不能直接套用普通 MHA 的容量公式。权重放下之后，并发请求数和上下文长度仍会改变缓存需求；容量规划必须为这些状态与执行工作区留出空间。
 
 在这种常驻本地 HBM 的部署条件下，多卡先满足模型的容量要求，再讨论性能取舍。
 
@@ -67,19 +65,13 @@ flowchart TD
 
 ## 二、TP、DP 与 EP 分别切什么
 
-如果只背缩写，很容易把三种并行都理解成“把任务分给多张卡”。更有用的方式是问：**它们到底在切什么对象？**
+三种并行的区别，可以先从被分配的对象看。TP 分的是一个 Tensor 的计算与权重，普通 DP 分的是请求，EP 分的是专家权重；它们解决的容量或吞吐问题并不相同。
 
 | 并行方式 | 主要切分对象 | 最先解决的问题 | 一个 Token 的直觉 |
 | --- | --- | --- | --- |
 | **TP** | Tensor / Linear 权重维度 | Dense / 共享权重太大，单设备放不下或算不动 | 同一个 Token 由多个 Rank 协作计算 |
 | **DP** | Request / Batch | 请求多，需要更高吞吐 | 不同 Replica 处理不同请求 |
 | **EP** | MoE Expert ownership | Expert 权重太多，不能全部复制 | Token 被 Router 发给持有目标 Expert 的 Rank |
-
-换成三个工程问题就是：
-
-- **TP**：一个矩阵太大，怎么拆？
-- **DP**：一堆请求太多，怎么分？
-- **EP**：一堆 Expert 太多，怎么放？
 
 对 DeepSeek-V4 这样的 MoE，Dense / 共享部分可以由 TP 分片，数量巨大的 Expert 权重还可以由 EP 分散。TP 和 EP 都可能降低单 Rank 需要持有的权重，只是它们切的是不同维度。
 
@@ -103,7 +95,7 @@ flowchart TD
     M --> MTP["moe_tp"]
 ```
 
-物理 Rank 没有凭空增加；变化的是**数据 ownership 与通信 Group**。有了这张总图，再分别看 TP、DP、EP，就不会把三个概念学成互不相干的名词。
+这两套乘积分解都在描述同一批 model-parallel Rank。Attention 按请求与特征分片组织计算，MoE 再按专家归属组织数据；阶段切换时，就需要把上一阶段的输出转成下一阶段能消费的布局。
 
 ## 三、TP：拆分矩阵计算，再合并结果
 
@@ -123,15 +115,13 @@ flowchart LR
 
 这带来两个直接收益。第一，参与 TP 分片的权重不再要求每个 Rank 保存完整副本；如果一个矩阵能够均匀做 8-way TP，那么每个 Rank 对这块矩阵只承担大约 `1/8` 的 shard。第二，同一个 Forward 的计算也分散到了多个设备上。
 
-单个矩阵的均匀分片比例与整模型的显存比例分开计算。
+这个 `1/8` 只适用于刚才那块能均匀切分的矩阵，不能直接推成“整模型 HBM 也降到八分之一”。
 
 真实模型里有些权重会 TP-shard，有些权重可能复制；到了 MoE，又可能由 EP 决定 Expert ownership。最终每个 Rank 的模型内存取决于模型结构、TP/EP 布局、量化方式和具体实现。
 
 TP 还有一个代价：切开以后经常要重新交换或归并数据。比如 Row Parallel Linear 中，不同 Rank 可能分别产生 partial output，随后需要 reduction 才能得到后续层需要的结果。根据具体布局，常见 collective 包括 AllReduce、AllGather 和 ReduceScatter；后续计算需要 replicated Tensor 时，就恢复完整结果；能够消费 sharded Tensor 时，继续保留分片。
 
-TP 的容量与通信取舍可以概括为：
-
-> **用更多本地 HBM 和计算单元换取更小的单 Rank shard，同时付出跨 Rank 通信成本。**
+增加 TP Rank，可以让可分片权重分别放到更多设备的本地 HBM，并分担计算。但设备之间不会自动共享结果，分片越多，越需要检查合并结果的通信和同步是否抵消了计算收益。
 
 这也解释了为什么 `tp_size` 不是越大越好。TP 太小，模型可能放不下；TP 太大，又可能让通信、small GEMM 和同步成本开始吞噬收益。
 
@@ -143,11 +133,7 @@ TP 解决了“同一份模型怎么拆”。当模型已经能运行，服务�
 
 假设一份模型本身需要 8 个 device worker 做 `TP=8`，那么经典 DP=2 更接近两套独立的 TP8 模型副本。每个 Replica 内部仍然有自己的 TP shard 集合，只是两套 Replica 处理不同请求。
 
-这说明一个很重要的边界：
-
-> **普通 DP 的每个 Replica 都需要容纳一份可运行的模型。**
-
-单份模型如果必须 TP8 才能装下，那么每个 DP Replica 仍然需要自己的 TP8 shard 集合。DP 解决的是并发和吞吐，而不是把一份权重继续切小。
+两套副本都必须各自容纳一份可运行的模型。因此单份模型若必须 TP8 才能装下，DP=2 仍要两组 TP8 权重分片，而不能把第二组设备当作第一份模型额外的存储空间。普通 DP 主要增加并发服务容量，不会继续缩小单份模型。
 
 到了 DeepSeek 场景，SGLang 的 `--dp-size` 还可能出现在另一种完全不同的模式：**DP Attention（DPA）**。官方文档把 DPA 描述为只对 Attention 部分应用数据并行。对于 DeepSeek 这类 MLA 模型，它可以让不同 Attention-DP shard 处理不同请求，并维护各自的 KV Cache；进入后续 FFN / MoE 时，再把数据布局桥接到另一套并行拓扑。
 
@@ -195,7 +181,7 @@ SGLang 官方 DPA 文档也明确区分了普通 DP 和 DPA：普通 DP 是完�
 
 ## 五、EP：让 Token 找到对应专家
 
-现在只剩 DeepSeek 最有代表性的一层：MoE。
+接下来把分配对象从请求换成专家，看 MoE 怎样使用这批设备。
 
 Dense FFN 可以粗略理解为每个 Token 都经过同一套 MLP；MoE 则先经过 Router，为 Token 选择少量 Expert。这解释了为什么 `304B Total / 13B Active` 可以同时成立：模型拥有大量 Expert，但每个 Token 只命中其中一小部分。
 
@@ -220,11 +206,7 @@ flowchart TD
 
 当很多 Rank 上的 Token 同时命中很多远端 Expert，Dispatch / Combine 自然会形成 All-to-All 类型的数据交换。SGLang 当前 EP 文档也把 DeepEP 定义为用于 MoE token shuffling 的高效 A2A backend。
 
-但同样要避免一个过度简化：
-
-> **EP 描述专家如何分布；All-to-All 描述 Token 如何跨 Rank 交换。**
-
-EP 描述的是 **Expert ownership 如何分片**；All-to-All 是某些 EP backend 用来完成 Token Dispatch / Combine 的通信方式。SGLang 当前 `none` backend 还可以走基于 AllReduce / AllGather 的路径，而 DeepEP、Ascend FuseEP 等 A2A backend 有自己的限制与实现。
+这里要分清专家布局与通信实现。EP 决定哪些 Rank 持有哪些专家；All-to-All 是某些 backend 用来完成 Token Dispatch / Combine 的交换方式。SGLang 固定版本的 `none` backend 还可以走基于 AllReduce / AllGather 的路径，DeepEP、Ascend FuseEP 等 A2A backend 则有各自的适用条件。看到 EP 参数后，仍要继续核对实际 backend。
 
 对于当前固定版本，SGLang 文档还明确指出：DeepEP 等 A2A backend 目前要求 `ep_size = tp_size`。因此在一个典型的 `TP16 + DPA8 + EP16` 概念配置里，如果 `moe_dp_size=1`，同一批 16 个 Rank 可以出现两种视角：
 
@@ -248,7 +230,7 @@ ep_size = 16
 moe_a2a_backend = deepep
 ```
 
-先不考虑 PP、PD Disaggregation 和投机解码，只看一个 Decoder Layer。
+这是一组用于说明数据流的概念配置，不是完整启动命令，也不表示已在任意硬件上验证通过。先不考虑 PP、PD Disaggregation 和投机解码，只看一个 Decoder Layer，实际部署仍需核对模型、精度与 backend 的支持条件。
 
 Attention 阶段，16 个 Rank 被解释成 `8 DP × 2 Attention-TP`。不同 Attention-DP shard 可以处理不同请求与本地 KV；每个 shard 内部，两个 Attention-TP Rank 共同完成需要分片的 Attention 计算。
 

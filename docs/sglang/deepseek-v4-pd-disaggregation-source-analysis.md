@@ -2,7 +2,7 @@
 
 PD 分离把输入处理和持续生成交给两组服务。P 端完成 Prompt 计算后，D 端需要接收足够的缓存与辅助状态，才能继续生成，而不必重算整段输入。
 
-交接里最容易错一位的是首 Token：P 已经采样出它，但它还没有经过下一次模型计算，因此没有自己的 KV。下面从这枚 handoff Token 出发，追踪目标资源预分配、状态传输、完成确认和第一次 Decode，同时说明拆分带来的独立调度能力与传输成本。
+交接里最容易错一位的是首 Token：P 已经知道要输出哪个 Token ID，但这枚新 Token 还没经过模型，所以没有自己的 KV。D 接收的是已算好的 Prompt 状态，要从这枚 handoff Token 继续向前。沿着它追踪资源预分配、状态传输和第一次 Decode，就能分清“传输完成”“请求已接管”和“新一轮模型计算”各自发生了什么。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -24,7 +24,7 @@ hidden_states
 ≈ [8192, H]
 ~~~
 
-进入 Linear、Attention、MoE 后，能够形成较大的矩阵计算和较大的 token workload。
+这些新 Token 行一起进入 Linear、Attention、MoE，通常比单条 Decode 请求形成更大的矩阵工作量。这里的 8192 行是说明阶段差异的例子；实际还会受 Chunked Prefill、缓存命中与分片方式影响。
 
 而到了普通 Decode，一条请求每轮只新增一枚 Token。即使 Continuous Batching 同时放进 32 条请求，也更接近：
 
@@ -80,7 +80,7 @@ flowchart TD
     D --> O[Generated Tokens]
 ~~~
 
-Prefill 和 Decode 从同一个统一调度域中拆出来之后，可以分别选择更适合自己的 batch、并行、graph、并发上限和机器数量。
+分成两个资源池后，P 可以按长输入组织较大的计算批次，D 则按持续输出的时延目标安排并发和 Graph。两边也能分别选择并行度与机器数量。不过这些调度选择要真正形成收益，还取决于交接的状态量、目标端等待和传输时间。
 
 拆分之后，下一步要完成请求状态交接：
 
@@ -108,7 +108,7 @@ req.output_ids.append(next_token_id)
 
 [`process_batch_result_disagg_prefill()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/disaggregation/prefill.py#L723-L962)
 
-这枚 token 随 PD metadata 一起交给 Decode。MetadataBuffers 的注释甚至直接写明：`We transfer the metadata of first output token to decode`
+这枚 token 随 PD metadata 一起交给 Decode。MetadataBuffers 的注释写明：`We transfer the metadata of first output token to decode`
 
 并在 `set_buf()` 中写入：
 
@@ -136,7 +136,7 @@ return len(req.origin_input_ids) + max(len(req.output_ids) - 1, 0)
 
 [`DecodePreallocQueue._pre_alloc_fill_len()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/disaggregation/decode.py#L808-L829)
 
-因此，对正常 fresh PD handoff，可以把状态理解成：
+例如一条新请求有 N 个 Prompt Token，P 已完成位置 `0...N-1` 的状态计算，并采样出首个输出 h。此时交接的状态边界可以画成：
 
 ~~~text
 Prefill 已完成：
@@ -164,9 +164,9 @@ handoff token ID
 必要 auxiliary metadata
 ~~~
 
-其中不包含 `h` 自己的 KV；这部分留到下一次模型计算。
+这里 N 表示 Prompt Token 数，与图中最后一个下标 n 的关系是 `N=n+1`。h 将进入位置 N，但采样只产生了 ID，没有计算位置 N 的 KV。因此交接时不能把 h 的缓存也当作已完成状态传给 D。
 
-Decode 收到 `h` 后，下一次 Decode forward 会把这枚 handoff token 作为当前输入，计算它自己的 KV/state，同时预测下一枚 Token。
+D 收到 h 后，第一轮真正的 Decode Forward 以 h 为输入：读取位置 `0...N-1` 的已有历史，计算并写入位置 N 的新状态，再预测下一枚 Token。这里说的是正常 fresh handoff；源码的 rebootstrap 分支有单独长度规则，不能把上面的减一公式直接套到所有恢复场景。
 
 所以 ownership 可以精确写成：
 
@@ -189,7 +189,7 @@ Decode 复用已经算好的 Prompt 状态，从 handoff token 的 Forward 继�
 
 ## 三、Bootstrap 与目标资源预分配
 
-目标地址需要先准备好，才能发送状态。但不能据此把计算也画成下面这样绝对串行的过程：
+发送端需要知道数据要写到 D 的哪些位置，才能传输。这个依赖限制的是发送时机，不必然限制 P 的计算时机。下面这种把两者绑定的绝对串行关系并不适用于所有配置：
 
 ~~~text
 Decode 完成全部 prealloc
@@ -197,7 +197,7 @@ Decode 完成全部 prealloc
 Prefill 才允许开始计算
 ~~~
 
-发送需要目标地址就绪。计算则有两条路径：普通 Bootstrap 按就绪状态推进，**optimistic prefill** 允许在目标资源尚未完全准备好时提前计算。
+Bootstrap 在这里负责让两端交换交接所需的信息，包括请求标识和目标位置。普通路径按就绪状态推进；配置允许 optimistic prefill 时，P 可以在 D 尚未完全准备好前先算 Prompt，再等待发送条件满足。
 
 ### 两边先各自建立 Sender / Receiver
 
@@ -210,7 +210,7 @@ req.disagg_kv_sender = kv_sender_class(
     mgr=self.kv_manager,
     bootstrap_addr=...,
     bootstrap_room=req.bootstrap_room,
-    ...
+    # 其余参数省略
 )
 ~~~
 
@@ -248,7 +248,7 @@ allocate metadata slot
 
 再通过 `send_metadata(...)` 把目标页索引等信息发布给 Prefill。
 
-这一步发生在 `pop_preallocated()` 内，目标地址发布完成之后，请求才交给 DecodeTransferQueue。
+这一步发生在 `pop_preallocated()` 内。可以把它理解为 D 先准备一份“接收位置表”，再把这份表交给 P；地址发布完成后，请求转入 DecodeTransferQueue 等待数据到达。此时有了目标空间，还不代表里面已经写入有效状态。
 
 ### Prefill 正常路径等到 WaitingForInput 再 finalize bootstrap
 
@@ -256,7 +256,7 @@ Prefill 会 poll sender。
 
 当状态进入：`KVPoll.WaitingForInput`
 
-说明 Decode 侧已经具备可用 destination metadata。此时：
+说明发送端已经取得可用的目标元数据。P 还要确保本地 metadata buffer 槽位可用，`finalize_bootstrap()` 成功后才会完成 Sender 初始化并清除 `pending_bootstrap`。核心操作包括：
 
 ~~~python
 decode_prefix_len = req.disagg_kv_sender.pop_decode_prefix_len()
@@ -287,7 +287,7 @@ physical page 101  ─────► physical page 803
 physical page 102  ─────► physical page 804
 ~~~
 
-两边 allocator 独立，所以物理 page id 本来就不需要相同。
+上面的页编号是示意值。两端 allocator 独立，源页 100 对应目标页 501 完全可以正确；需要保持的是它们代表同一请求的同一段逻辑状态。只比较两边 page id 是否相等，无法验证交接正确。
 
 ### Optimistic Prefill 打破了“prealloc 完成才能计算”的绝对顺序
 
@@ -315,7 +315,7 @@ if req.pending_bootstrap:
 
 [`process_disagg_prefill_inflight_queue()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/disaggregation/prefill.py#L965-L1035)
 
-这两条路径的差别在于计算何时开始，状态传输仍依赖目标资源就绪：
+Optimistic Prefill 提前的是计算，不是绕过目标资源的准备。若 P 先算完，它还要持有源状态并等在 Inflight Queue，不能在 D 尚无可用目标位置时直接完成交接。两条路径的区别是：
 
 | 路径 | Prefill 何时进入计算 | 传输前要满足什么 |
 | --- | --- | --- |
@@ -348,17 +348,15 @@ req.disagg_kv_sender.send(
 
 [`_send_kv_chunk()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/disaggregation/prefill.py#L1302-L1495)
 
-Prefill 请求然后停留在 Inflight Queue，持续 poll transfer 状态；只有所有参与 Rank 对 terminal state 达成一致，才释放本地 ownership。
+Prefill 请求随后停留在 Inflight Queue，持续轮询传输状态。发送调用返回不等于 D 已经接管；相关 Rank 还要对终态取得一致认识，成功路径才释放本地缓存的持有关系，失败则走对应清理流程。
 
-Decode 侧则在：`DecodeTransferQueue`
-
-轮询 Receiver。成功之后：
+Decode 侧由 `DecodeTransferQueue` 轮询 Receiver，确认成功后才执行：
 
 ~~~python
 self._commit_transfer_to_req(decode_req)
 ~~~
 
-会恢复：
+这一步把接收缓冲区中的元数据写回 Decode 端的请求对象，包括：
 
 ~~~text
 handoff output token
@@ -429,7 +427,7 @@ future_map.stash(
 
 下一个 Decode forward 再从 relay 重建 `input_ids`。
 
-PREBUILT 在本地重建“Prefill 已由远端完成”的请求元数据与输出状态，随后 Decode 从 handoff token 继续。
+PREBUILT 因而是一段调度侧接续：让本地请求对象认识到 Prompt 已由远端算完，并把 handoff Token 放入后续输入的 relay。它不执行模型，也不生成另一枚 Token；下一次真正的 Decode Forward 才接着计算。
 
 整个 Decode 接管过程可以画成：
 
@@ -449,17 +447,11 @@ flowchart TD
     J --> K[First real Decode forward]
 ~~~
 
-这里被跳过的是：
-
-> **Prompt 的模型 Prefill Forward。**
-
-没有被跳过的是：
-
-> **handoff token 后续作为新输入所需要的第一轮 Decode。**
+因此观察日志时，要把 PREBUILT 与模型 Forward 分开。D 省掉了整段 Prompt 的重复 Prefill，但仍需用 h 做第一轮 Decode；若把 PREBUILT 记作这轮计算已经完成，就会把输入 Token 和 KV 长度错开一位。
 
 ## 五、DeepSeek-V4 的 KV 与辅助状态
 
-DeepSeek-V4 在 Ascend 上使用 `DSV4NPUTokenToKVPool`，分别注册 SWA、C4、C128 和 Compression / Indexer State。下面按注册入口与页、请求两种归属方式展开。
+DeepSeek-V4 在 Ascend 上使用 `DSV4NPUTokenToKVPool`。交接内容既有供 Attention 读取的历史数据，也有供后续压缩与索引计算继续使用的辅助状态。下面按注册入口展开：有的以页为索引，有的以请求为索引，传输时要各自匹配。
 
 ### C4 主数据走 main PD buffer
 
@@ -555,7 +547,7 @@ C128 KV
 C128 compressor/request state
 ~~~
 
-这两类数据有不同的 buffer、index 和 transfer ownership。
+C128 KV 保存已经形成的压缩历史，request state 则维护后续压缩计算要继续使用的状态。传完前者，不代表后者也已到齐；两者使用不同的 Buffer 与索引，需要按各自注册项交接。
 
 ### Speculative Decode 还会继续扩大 wire contract
 
@@ -572,11 +564,7 @@ DSA top-k indices
 
 这与上一篇 speculative decoding 的状态机直接连接起来。
 
-所以 DeepSeek-V4 PD 更准确的抽象是：`Model execution state migration`
-
-而不是简单：`KV memcpy`
-
-当前 Ascend DSV4 的注册对象对应如下：
+因此检查 DeepSeek-V4 的 PD 传输时，需要沿着模型继续执行所需的状态逐项对应。仅确认某块 KV Buffer 已复制，不足以说明 D 已具备后续计算的全部输入。当前 Ascend DSV4 的注册对象对应如下：
 
 | 组件 | 当前 PD wire 角色 |
 | --- | --- |
@@ -632,11 +620,7 @@ class AscendKVBootstrapServer(MooncakeKVBootstrapServer):
     pass
 ~~~
 
-这不意味着：
-
-> Ascend PD 的底层数据面还是 Mooncake engine。
-
-更准确的理解是：**Ascend 复用了 Mooncake backend 已经实现好的 PD control / sender / receiver protocol scaffolding。**
+这里继承的是 Mooncake backend 的控制与 Sender/Receiver 协议框架。要知道请求的数据实际由谁传输，还得继续看 Manager 创建了哪个 Engine，不能用父类名字代替执行路径。
 
 初始化数据传输 engine 的地方在：
 
@@ -691,11 +675,7 @@ flowchart TD
     F --> X[SDMA or device_rdma]
 ~~~
 
-默认协议：`sdma`
-
-也可以通过：`ASCEND_MF_TRANSFER_PROTOCOL=device_rdma`
-
-选择 device RDMA。
+默认协议为 `sdma`，设置 `ASCEND_MF_TRANSFER_PROTOCOL=device_rdma` 可以请求使用 device RDMA。固定源码还会检查已安装 MemFabric 提供的协议类型；不支持所选类型时记录警告并回退到 SDMA。因此配置了变量之后，仍要核对实际初始化日志与运行环境支持。
 
 当使用 `device_rdma` 时，源码会在 MemFabric 初始化前先做一次 NPU world `all_gather`，注释说明这是为了**提前初始化 HCCL，避免 HCCL 与 RDMA 初始化冲突**。
 
@@ -715,11 +695,7 @@ flowchart TD
 
 ## 七、PD 的独立调度能力与适用负载
 
-PD 将两类计算放到独立资源池，让它们各自选择调度与执行策略。
-
-PD 改变的是：
-
-> **Prefill 和 Decode 不再必须共享同一个资源池、同一个 batch 形态和同一套性能参数。**
+前面的状态交接，使 P、D 能在不同资源池继续同一条请求。独立资源池的用途，是让两种工作负载分别选择 Batch、Graph、并行度和并发上限；它并不自动保证所有请求都更快。
 
 固定版本的 DeepSeek-V4-Flash Ascend Best Practice 就展示了这种差异。
 
@@ -747,7 +723,7 @@ decode-oriented DeepEP tuning
 
 [DeepSeek-V4-Flash Ascend Best Practice](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/docs/docs/hardware-platforms/ascend-npus/model-deployment/best-practices/deepseek_v4_flash.mdx)
 
-这些 Benchmark 配置展示了独立设计 P、D 的方式：根据各自负载选择并发、分块、Graph 与并行策略，再在目标 SLO 下测量。
+这些官方 Benchmark 配置用于说明两端如何分别设计，不能把其中的单个参数当作通用最优值。复用配置时，还要对齐输入输出长度、请求压力、缓存与网络条件，再看 TTFT、TPOT 和吞吐是否满足目标 SLO。本文没有执行这些 Benchmark。
 
 最终的生产权衡更接近：
 
@@ -775,7 +751,7 @@ failure / timeout handling
 
 是否采用 PD，可以从负载与传输代价一起评估。请求规模较小、P/D 干扰不明显时，统一服务更简单；长输入持续挤占 Decode 资源，且 TTFT、TPOT 有不同目标时，独立资源池才可能带来足够收益。
 
-例如，假设一次交接需要传 2 GiB 状态，有效链路带宽为 40 GiB/s，仅数据传输的理想下限就是 50 ms。这里的容量与带宽均为教学设定；排队、协议、预分配和计算依赖还会增加交接耗时。部署时应使用实际传输字节数与有效带宽代入，再与隔离 Prefill 干扰所节省的时间比较。
+例如，假设一次交接需要传 2 GiB 状态，有效链路带宽为 40 GiB/s，仅按 `2 / 40 = 0.05 s` 计算，数据传输的理想下限就是 50 ms。这里的容量与带宽均为教学设定。端到端交接还要考虑排队、预分配、Bootstrap 和计算依赖，其中有些阶段可以重叠；不能把所有单段耗时直接相加当成实测延迟。应使用实际状态字节数与有效带宽估算，再对照时间线确认这些工作是否落在请求关键路径上。
 
 将资源准备与计算合在一起，一次请求的交接流程如下：
 
