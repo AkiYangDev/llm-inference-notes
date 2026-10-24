@@ -472,5 +472,20 @@
     "role": "advanced",
     "seo_title": "一轮实验什么时候算完成：全自动调优的状态、证据与恢复",
     "seo_summary": "从一次AISBench统计子进程故障展开，讨论全自动推理调优中的配置身份、执行阶段、缓存观测、结果口径与恢复。"
+  },
+  "docs/performance/ascend-910c-inference-tuning-effective-optimizations-and-costs.md": {
+    "summary": "复盘DeepSeek-V4-Flash真实PD调优：P端尾块合批的32.27%稳态吞吐收益、IndexCache与静态布局、Compact负例，以及whole/native、缓存和实验成本的判断边界。",
+    "category": "性能调优",
+    "tags": [
+      "Ascend 910C",
+      "SGLang",
+      "PD分离",
+      "性能调优",
+      "工程复盘"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "Ascend 910C推理调优复盘：有效优化、失败假设与实验成本",
+    "seo_summary": "用DeepSeek-V4-Flash真实PD实验解释P端尾块合批为何提高32.27%稳态吞吐，以及IndexCache、静态EPLB和Compact的收益边界。"
   }
 }

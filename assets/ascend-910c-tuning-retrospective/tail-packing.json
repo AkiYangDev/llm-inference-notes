@@ -1,0 +1,75 @@
+{
+  "scope": "Actual PrefillAdder CPU fixture; not device timing or speed prediction",
+  "cases": [
+    {
+      "cap": 1,
+      "passes": 960,
+      "first8": [
+        [
+          8192
+        ],
+        [
+          8192
+        ],
+        [
+          4
+        ],
+        [
+          8192
+        ],
+        [
+          8192
+        ],
+        [
+          4
+        ],
+        [
+          8192
+        ],
+        [
+          8192
+        ]
+      ],
+      "max_tokens": 8192,
+      "total_tokens": 5244160,
+      "completed": 320
+    },
+    {
+      "cap": 2,
+      "passes": 645,
+      "first8": [
+        [
+          8192
+        ],
+        [
+          8192
+        ],
+        [
+          4,
+          8064
+        ],
+        [
+          8192
+        ],
+        [
+          132,
+          7936
+        ],
+        [
+          8192
+        ],
+        [
+          260,
+          7808
+        ],
+        [
+          8192
+        ]
+      ],
+      "max_tokens": 8192,
+      "total_tokens": 5244160,
+      "completed": 320
+    }
+  ],
+  "actual_runtime_inputs": "noCP/DP16/page128/chunk8192/radixenabled/FCFS/Pcap1or2; generous available memory host fixture, not NPU proof"
+}

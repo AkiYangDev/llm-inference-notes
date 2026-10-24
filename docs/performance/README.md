@@ -4,6 +4,7 @@
 
 ## 调优实践
 
+- [一次Ascend 910C推理调优复盘：真正有效的优化、失败假设与实验成本](ascend-910c-inference-tuning-effective-optimizations-and-costs.md)：从P端尾块合批、IndexCache与静态布局的实测收益，讲到Compact负例、缓存口径和实验成本。
 - [让 AI 连续调优几天后，我发现实验流程也有瓶颈](inference-tuning-workflow-postmortem.md)：沿真实时间账与几次返工，讨论脚本复制、检查错位、多代理协作和跨会话接续。
 - [把性能目标交给 AI 之后：大模型推理的全自动调优闭环](ai-driven-inference-autotuning-decision-loop.md)：从固定场景、瓶颈证据到短筛确认，讨论下一轮实验怎么选。
 - [一轮实验什么时候算完成：全自动调优的状态、证据与恢复](ai-driven-inference-autotuning-execution-and-evidence.md)：沿一次实验的执行和采集过程，说明热状态接续、计数范围与跨会话交接。
