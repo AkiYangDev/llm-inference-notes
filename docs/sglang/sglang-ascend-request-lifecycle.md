@@ -1,8 +1,8 @@
 # SGLang 请求生命周期：从 Chat Completion 到 Ascend NPU
 
-客户端发送一句“中国的首都是哪里？”，服务端随后开始返回文字。中间经历了协议转换、分词、排队、缓存匹配、批处理和模型计算；只要生成尚未结束，同一条请求就会继续进入设备执行。
+客户端发送一句“中国的首都是哪里？”，随后看到回答逐渐出现。服务端并没有在一次模型调用里把整段回答算完：它先处理输入，产生首枚 Token，再反复把新 Token 送回模型，直到满足结束条件。
 
-本文跟随这条请求的表示变化：聊天消息变成 Token ID，独立请求进入 batch，模型输入与缓存位置交给 NPU，结果再回到 Scheduler 决定继续还是结束。先把这条链走通，再把 DeepSeek-V4 的后端细节放到相应环节。
+这篇先沿一条普通生成请求走通全程：聊天消息怎样变成 Token ID，什么时候进入一轮计算，结果又怎样变回客户端收到的文本。涉及 DeepSeek-V4 的缓存和算子细节放在可展开部分；第一次读时，先跟住同一条请求的输入、输出和进度即可。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -13,9 +13,9 @@
 
 ## 一、请求经过哪些进程
 
-一次生成请求可能持续数秒，设备上的一个 batch 却只承担其中一轮计算。等待结果的 HTTP 请求始终存在，参与本轮计算的请求集合则不断变化：有的刚开始处理 prompt，有的已经在生成下一个 token，还有的已经结束。
+先分清两个对象：请求是一项持续中的生成任务，batch 是同一轮送去计算的一组工作。一条请求可能跨越很多个 batch；与它一起计算的其他请求，也会随着新任务加入、旧任务结束而变化。HTTP 连接在等待返回，调度器则按轮次推进生成。
 
-SGLang 将请求接入、调度执行和文本解码分开组织，使这些不同节奏的工作能够协作。
+接入、模型执行和文本解码的工作节奏不同。SGLang 将这些职责分开，让接收新请求、推进现有生成和返回文本能够各自向前走。
 
 在一个服务实例中，HTTP 与请求管理侧负责接入和返回，Scheduler 侧组织并推进模型执行，Detokenizer 负责将输出 token ID 解码成文本。它们通过以下消息路径连接：
 
@@ -42,7 +42,7 @@ flowchart TD
     D -->|解码后的文本与状态| T
 ```
 
-Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManager、Scheduler 与 Detokenizer 之间通过进程间消息传递数据。图中的模型 Worker 是 Scheduler 侧的执行对象，与 ModelRunner 一起承担模型执行职责。
+图里先看两次交接：TokenizerManager 把准备好的请求送给 Scheduler，Scheduler 再把生成结果送往 Detokenizer。Serving 衔接 HTTP 协议与请求管理；模型 Worker 和 ModelRunner 属于调度侧的执行职责。进程之间传递消息，模型计算则由执行侧发起。
 
 多卡部署时，执行侧包含多个协作的 Rank，图中将它们合并为调度与执行职责；它不表示整个 DeepSeek 模型只占一个进程或一张卡。Scheduler 所在进程通过 Worker 发起设备计算。CPU 组织请求并提交工作，NPU 执行相应算子；在允许重叠执行的路径中，主机侧处理与设备计算可以交错推进。
 
@@ -64,13 +64,13 @@ Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManage
 }
 ```
 
-`messages` 是对话协议中的表达形式。模型所需的输入还包括角色边界、轮次分隔符，以及提示模型继续生成 assistant 内容的标记。这些信息由模型对应的 Chat Template 等处理逻辑组织起来。因此，实际送入模型的序列通常比用户看到的一句话长。
+客户端给出的是带角色的消息，模型最终消费的是 Token 序列。角色边界、轮次分隔和提示 assistant 继续生成的标记，需要由对应模型的 Chat Template 等逻辑组织起来。因此，实际模型输入不只是用户可见的那一句话。
 
 在这一版本中，`OpenAIServingChat._convert_to_internal_request()` 接收 `ChatCompletionRequest`，处理消息，构建采样参数，随后创建 `GenerateReqInput`。后者承载 Runtime 所需的生成输入和控制信息，例如 prompt、采样参数、流式开关以及部分路由或会话信息。对话中的生成要求由此转化为内部接口可以消费的字段。[源码：请求转换](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py#L1143-L1268)
 
 内部请求可以携带文本，也可以携带上游模板处理已经生成的 token ID。TokenizerManager 根据输入形式完成必要的分词与请求准备，构造送往调度侧的 `TokenizedGenerateReqInput`。已有 ID 的输入可以直接进入相应处理路径。[源码：TokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py)
 
-下文使用一个六 token 的示意 prompt：`[A, B, C, D, E, F]`。字母代表 token ID，便于追踪它们在调度、缓存和模型计算中的位置。
+为了把后面的变化看清，下面把模型输入简化为六个 Token：`[A, B, C, D, E, F]`。字母只是 ID 的代号，不代表这句中文恰好会被切成六块，也不代表一个字一定对应一个 Token。
 
 同一请求在不同边界使用的对象，可以放在一张表里理解：
 
@@ -83,7 +83,10 @@ Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManage
 | `ScheduleBatch` | 调度与批处理逻辑 | 这一轮把哪些请求、哪些 token 放在一起计算？ |
 | `ForwardBatch` | 模型执行层 | 本轮计算所需的输入 Tensor、位置和执行信息是什么？ |
 
-其中，`Req` 保存单条请求跨越多轮生成的状态，batch 则描述某一轮的计算安排。同一条请求会先后进入多个 batch，与它一起运行的其他请求也可能变化。
+读这张表时，不必一次记下所有类名。先记住 `Req` 跟随一条请求持续存在，`ScheduleBatch` 和 `ForwardBatch` 服务于本轮执行。后续每次看到 batch，都要再问一句：这轮处理哪些位置，结果写回哪条请求？
+
+<details markdown="1">
+<summary>沿固定版本源码继续追踪</summary>
 
 如果要自己沿源码复现这条主线，不必从仓库目录逐层翻找。可以从请求入口开始，每次只追一个问题，并把上一层产出的对象带到下一层：
 
@@ -99,13 +102,15 @@ Serving 与 TokenizerManager 衔接协议处理和请求管理；TokenizerManage
 
 这张表是阅读路线，不表示七个函数彼此直接调用。进程间消息、batch 转换和模型内部调用仍然存在；后文会在它们影响请求状态的地方展开。
 
-当 Scheduler 收到输入后，请求拥有了可持续更新的运行状态。后面每生成一批结果，系统都要更新它的输出、长度和结束条件。至此，聊天协议已经转化成一个等待计算资源的推理任务。
+</details>
+
+到调度侧时，协议转换已经完成，请求带着 Token ID、采样要求和停止条件等待资源。后面会持续变化的是处理进度和输出；原始 Prompt 不会因为生成了一枚 Token 就变成另一条请求。
 
 ## 三、本轮处理哪些请求与 Token
 
-聊天请求进入 Scheduler 后，要和其他请求共享计算与缓存资源。刚到达的请求需要处理 prompt，已经开始生成的请求需要继续向后推进。一次 HTTP 请求会持续等待，但设备每轮处理的 batch 可以变化。
+Scheduler 收到请求，不等于 NPU 已经开始处理它。新请求需要与现有生成共享计算和缓存空间，只有被选入某轮 batch 后，才会形成这一次设备执行的输入。
 
-这对应两种基本计算节奏。Prefill 处理提示词，为后续生成建立缓存；普通 Decode 消费上一轮生成的 token，利用已有缓存预测下一个 token。缓存保存的是 Attention 后续计算所需的历史表示。对于本文的 DeepSeek-V4，这些表示还涉及滑窗、压缩内容和压缩器状态，第四章会展开它们的关系。
+第一次处理 Prompt 的阶段叫 Prefill，它为后续生成建立所需状态，并能产生首枚输出。后面的普通 Decode 每轮消费上一轮生成的 Token，读取已有历史，再预测下一枚。缓存保留的是后续 Attention 需要的历史表示；DeepSeek-V4 还涉及滑窗和压缩状态，后面的展开部分再说明。
 
 普通调度循环的核心职责如下。这里是省略空闲与暂停检查后的伪代码，不是源文件逐字摘录：
 
@@ -136,7 +141,7 @@ flowchart TD
     W --> I
 ```
 
-全文继续追踪六个 token 的 prompt `[A, B, C, D, E, F]`。主例假设没有可复用前缀，因此第一次需要处理六个输入，逻辑位置为 `[0, 1, 2, 3, 4, 5]`。这里的字母只是 token ID 的代号，与真实分词结果无关。
+回到六个 Token 的例子，先假设没有可复用前缀。第一次执行要处理 A 到 F，序列位置为 `[0, 1, 2, 3, 4, 5]`；采样得到的首枚输出记为 y1。接下来观察同一条请求如何跨过两轮计算。
 
 把同一个 `Req` 连续观察三次，可以看出“请求状态”和“本轮 batch”为什么是两回事：
 
@@ -146,7 +151,7 @@ flowchart TD
 | 被选入 Prefill | prompt 不变，输出仍为空 | 计算 A 到 F 六个位置 | 采样得到 y1，记录首个生成结果；请求若未结束则继续保留 |
 | 再次被选入普通 Decode | prompt 不变，已生成结果为 `[y1]` | 只把 y1 作为本轮新增模型输入 | 采样得到 y2，已生成结果推进为 `[y1, y2]` |
 
-因此，`Req` 的生命周期覆盖多轮计算；`ScheduleBatch` 只描述其中一轮。Prefill 结束时产生了 y1，但 y1 对应的模型状态要等它在下一轮作为输入被处理后才写入缓存。
+表中 Prompt 始终不变，变化的是已生成输出和本轮输入。Prefill 算完 A 到 F 后得到 y1，下一轮才把 y1 送入模型。因此，已经拿到 y1，并不意味着已经计算过 y1 对应的缓存；请求进度与缓存进度需要按这个先后关系理解。
 
 前缀缓存可以改变待算数量。若另一条请求已经留下相同前缀，并且缓存实现能够恢复该模型需要的完整状态，命中的部分就不必重新做全部模型计算。例如逻辑上复用了前四个位置，待处理后缀就只剩 E、F。这个例子说明输入如何切分，不表示 DeepSeek-V4 的实际缓存匹配一定允许四 token 粒度。
 
@@ -170,7 +175,7 @@ flowchart TD
 
 ## 四、输入与缓存怎样准备给 NPU
 
-六个 token ID 还不是模型向量。调度侧先整理本轮 ID、长度与缓存位置，执行侧再把它们组织成模型所需的 Tensor。
+选好本轮工作后，还需要把输入送到设备。六个 Token ID 是整数索引，Embedding 之后才成为模型向量；同时准备的长度、位置和缓存映射，负责让模型知道这些行分别属于谁。
 
 在 `prepare_for_extend()` 中，输入 ID 先进入 CPU 暂存区；序列长度保留设备 Tensor 和 CPU 版本。执行前，`resolve_forward_inputs()` 将暂存 ID 传到设备。Worker 随后构造 `ForwardBatch`，把模型执行所需的输入、位置和模式集中起来。[源码：Extend 输入准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L2685-L2728)、[设备输入解析](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/overlap_utils.py#L87-L114)、[Worker 构造 ForwardBatch](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tp_worker.py#L631-L685)
 
@@ -183,7 +188,7 @@ flowchart TD
 | `out_cache_loc` | 为六个新位置分配的槽位索引 | 关联本轮输入与缓存写入位置 |
 | `out_cache_loc_dsv4` | DeepSeek-V4 专用位置集合 | 关联压缩缓存等独立分配结果 |
 
-如果第二条请求本轮还要处理三个 token，输入可以打包成 `[9]`，Embedding 后对应 `[9, H]`。各请求的长度与映射仍然保留，因此拼接存储不会让两条请求共享上下文。
+同一轮还可以打包其他请求。假设另一条请求本轮新增三个 Token，合起来就是 `[9]` 的 ID Tensor，Embedding 后得到 `[9, H]`。这九行连续存储，但各请求的边界和历史仍由元数据分别记录。
 
 ```mermaid
 flowchart TD
@@ -198,9 +203,9 @@ flowchart TD
     E --> A
 ```
 
-`positions` 和 `out_cache_loc` 是两套坐标。前者表示 token 在序列中的先后，后者表示系统分配的缓存落点。DeepSeek-V4 的 NPU 后端还会把完整槽位映射到滑窗缓存槽位，具体缓存落点由分配与映射结果给出。`store_cache()` 通过 `get_swa_out_cache_loc()` 获得对应位置，再写入 SWA 缓存池；已有元数据可提供这组位置，否则由池执行映射转换。[源码：滑窗位置转换与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2192-L2224)
+`positions` 回答“这个 Token 在自己的序列里排第几”，`out_cache_loc` 回答“新状态写进设备缓存的哪个槽位”。两套坐标不能互相替代。DeepSeek-V4 的 NPU 路径还会把完整槽位转换为滑窗槽位：`store_cache()` 通过 `get_swa_out_cache_loc()` 取得落点，已有元数据可直接提供位置，否则由缓存池完成映射。 [源码：滑窗位置转换与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2192-L2224)
 
-DeepSeek-V4 按层使用滑窗历史和相应的压缩历史。请求长度、当前写入位置和历史页表，分别负责进度、存储和寻址；这些职责先分清，后面读模型层就能知道各字段的用途。下面展开该后端的缓存形式。
+理解到这里，先抓住长度、逻辑位置和存储位置的区别，就能继续跟随请求。DeepSeek-V4 怎样将历史分成滑窗与压缩形式，可以在下面展开；这些模型细节不会改变“一轮输入由 ID 和执行元数据共同描述”的关系。
 
 <details markdown="1">
 <summary>深入：V4 的 SWA、C4/C128 与 NPU 缓存布局</summary>
@@ -242,7 +247,7 @@ flowchart TD
 
 ## 五、DeepSeek-V4 一层怎样进入 Ascend 算子
 
-设备输入准备完成后，直接执行路径通过 ModelRunner 和 `EagerRunner` 调用模型。`DeepseekV4ForCausalLM.forward()` 进入内部 `DeepseekV4Model`，后者执行 Embedding、Decoder layers 和末端处理，再由 logits processor 结合 LM Head 产生输出分数。[源码：EagerRunner](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L378)、[DeepSeek-V4 生成入口](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155)
+直接执行路径经 ModelRunner、`EagerRunner` 进入模型。`DeepseekV4ForCausalLM.forward()` 调用模型主体，依次完成 Embedding、各 Decoder Layer 和末端处理，再由 logits processor 与 LM Head 产生词表分数。此时仍需采样，才能选出具体的下一枚 Token。 [源码：EagerRunner](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L378) [DeepSeek-V4 生成入口](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155)
 
 DeepSeek-V4 在 Embedding 后把 `[T, H]` 扩展为 `[T, hc_mult, H]`，保留多路表示；层内的 mHC 处理负责在子层前后混合这些表示。层内的数据流是：Attention 和专家网络消费整理后的输入，结果再合入持续向下传递的多路状态。这里的 `hc_mult` 是状态流数量，不是 Attention head 数。[源码：Embedding 与多路状态](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L4679-L4701)
 
@@ -260,7 +265,10 @@ flowchart TD
     O --> Y[传给下一层]
 ```
 
-图中是层内职责关系，融合实现可能合并相邻操作。代码中的 `DeepseekV4DecoderLayer` 构造 `MQALayer` 作为 Attention，同时复用名为 `DeepseekV2MoE` 的专家模块，并传入 `is_deepseek_v4=True`。这个类名反映代码复用，不表示模型退回了 V2 架构。MoE 将 token 交给选定的专家计算并合并结果；跨设备的专家通信取决于具体并行和后端配置。[源码：Decoder Layer 构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2603-L2705)、[子层执行](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L3006-L3250)
+图表示一层中的计算关系，融合实现可能把相邻步骤合在一起。`DeepseekV4DecoderLayer` 使用 `MQALayer` 和带有 `is_deepseek_v4=True` 的 `DeepseekV2MoE`；后者的名字来自代码复用。MoE 把 Token 交给选中的专家计算，再合并结果，是否跨设备通信取决于并行配置和后端。 [源码：Decoder Layer 构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2603-L2705) [子层执行](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L3006-L3250)
+
+<details markdown="1">
+<summary>深入：从 Query、缓存写入到 Ascend Attention 算子</summary>
 
 先沿 Attention 看六个输入怎样变化。以 NPU、未启用多流的准备路径为例：查询侧经过 `wq_a`、归一化和 `wq_b`，形成各个本地 head 的 Q；共享 KV 侧经过 `wkv` 和归一化。RoPE 将逻辑位置信息作用到相关分量。代码也允许融合前段投影，但不会改变这些数据各自承担的职责。[源码：查询前段投影](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1750-L1774)、[NPU Q 与共享 KV 准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1955-L1998)
 
@@ -321,9 +329,11 @@ Attention 输出随后经过相应位置变换及输出投影，回到层内 mHC
 
 至此，“再生成一步”已经落实为确定的设备工作：构造当前查询，更新该层所需状态，按窗口及压缩映射读取历史，计算输出。Python 负责组织调用，`torch_npu` 与 Ascend 执行栈承接设备算子。采用图回放时可以复用已捕获的执行安排，数据依赖仍然存在，但每轮不必重走相同的 Python 调用序列。
 
+</details>
+
 ## 六、结果返回与持续生成
 
-普通自回归主线中，Prefill 结束就可以采样得到 y1。下一轮消费 y1，计算它对应的模型状态并预测 y2；再下一轮消费 y2，预测 y3。
+模型采样出 y1 后，请求若未结束，就继续执行：下一轮输入 y1、预测 y2，再下一轮输入 y2、预测 y3。下面将已算过的位置与刚生成的输出放在一起，避免把这两个进度混为一谈。
 
 | 轮次 | 执行前已经形成缓存的位置 | 本轮新增模型输入 | 本轮结束后的缓存进度 | C4 状态变化 | 采样输出 |
 |---|---|---|---|---|---|
@@ -364,7 +374,10 @@ sequenceDiagram
     H-->>C: 结束事件
 ```
 
-这里的服务侧合并了 HTTP、Serving 和 TokenizerManager，执行侧合并了 Worker、ModelRunner 和设备工作。Scheduler 更新请求后，常规文本路径通过 Detokenizer 将 token ID 转成文本，再由请求管理与 Serving 层返回。一个 token 不一定对应一个汉字，一轮计算也不保证对应一条 SSE 消息；解码缓冲、输出间隔和停止字符串会影响文本增量的边界。[源码：Detokenizer](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py#L443-L490)、[Chat 流式返回](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py)
+图中的服务侧合并了 HTTP、Serving 和 TokenizerManager，执行侧合并了 Worker、ModelRunner 与设备工作。Scheduler 更新请求后，常规文本路径通过 Detokenizer 把 ID 解码为文本，再沿请求管理链路返回。计算轮次与 SSE 消息并不一一对应：一个 Token 未必是一个汉字，文本增量还受到解码缓冲、输出间隔和停止字符串的影响。 [源码：Detokenizer](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py#L443-L490) [Chat 流式返回](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py)
+
+<details markdown="1">
+<summary>启用 DSPARK 后，生成循环怎样变化</summary>
 
 启用 DSPARK 后，上图的外部请求生命周期仍然成立，但“下一轮生成工作”需要展开为草稿和验证。公开实现的 worker 在 Prefill 路径调用目标模型，并取得供后续草稿使用的 hidden states；后续生成路径由 proposer 提出候选块，再交给目标模型验证，按验证结果确定本轮接受的输出和新的状态。[源码：DSPARK Prefill](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L528-L640)、[候选、验证与提交](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L689-L939)
 
@@ -384,6 +397,8 @@ flowchart TD
 
 这也解释了为何投机推理适配会牵涉 Scheduler、batch、模型与缓存：需要协同的不只是草稿模型的 forward，还包括候选输入的组织、目标验证、接受数量以及后续可见状态。本文的普通生成例子提供基础时间线，DSPARK 在这条时间线上增加了候选与提交边界；具体草稿块长度和并行协作由相应配置与实现决定。
 
-请求结束后，运行状态与独占资源进入回收流程，可复用缓存是否保留由缓存策略决定。请求数下降不意味着对应设备内存立即全部归还给分配器。
+</details>
 
-一次 Chat Completion 最终形成了一个闭环：协议输入变成可调度请求，batch 描述本轮计算，DeepSeek-V4 模型更新多路表示及各类 Attention 状态，`dsv4` 后端把查询、窗口和压缩历史交给 Ascend 算子。执行结果再推动请求继续、接受候选或结束，并沿文本返回链送到客户端。
+EOS、长度上限或其他停止条件触发后，请求退出持续运行集合，独占资源进入回收流程。可复用前缀是否留下，由缓存策略决定；请求已经结束，并不能直接推出设备分配器已收回它使用过的全部内存。
+
+接着读 [Scheduler](sglang-scheduler-source-analysis.md) 时，可以把问题收窄到这条请求：它怎样从等待变成可执行工作，一次 Prefill 之后怎样继续 Decode，又在哪一轮退出运行集合。请求接入和文本返回先放在两端，集中观察中间的状态变化。
