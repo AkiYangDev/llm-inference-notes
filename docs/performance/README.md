@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [SGLang 流式压测：怎样保留接受率和缓存计数，又不改坏计时](sglang-stream-acceptance-cache-timing.md)：附原解析方法的离线回放，解释metadata-only事件、父类后保留字段、缺失计数与AL/接受率分母。
+
 - [128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？](128k-prefix-cache-remaining-costs.md)：区分token命中、计算量、状态驻留和传输，结合真实128K实验解释剩余开销。
 
 - [用 AISBench 压测 SGLang：从第一条请求到一份可信报告](aisbench-sglang-first-request-to-report.md)：附可运行配置、JSONL与脚本，解释模型名、tokenizer、N/C/r、retry及whole/native结果保存。

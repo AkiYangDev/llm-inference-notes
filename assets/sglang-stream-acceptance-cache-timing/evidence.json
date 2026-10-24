@@ -1,0 +1,134 @@
+{
+  "scope": "Historical n=1 stream telemetry; new example is offline synthetic replay, not a new inference test",
+  "AIS_source": {
+    "git_commit": "e00d1f758310c45580576af291a3126919776c89",
+    "actual_bound_file_SHA256": {
+      "models/api_models/base_api.py": "203a416444b972193274a13e1593328a288b6879a3d62e4f201bbb9adfa81755",
+      "models/api_models/vllm_custom_api_chat.py": "093e1aae05b49647c3dc0fb6ecf6e41812914ac2293874979cc9deaabc60018c",
+      "models/output.py": "ecf7600edf599cae33f8024fac0d2d1b285050110b4a45d7f6c6ec0d03c4836d"
+    },
+    "writer_SHA256": {
+      "base_handler.py": "591f1186930ab146e7eda8ca9ccb951a21b577926992dd2082b7ae3f20d76959",
+      "gen_inferencer_output_handler.py": "d5832ed1e192656d1cffbfb483b8466f2da23c99c081d4d332cb53b66586ab38",
+      "inferencer": "9e456230079053fe3ea963763095f52172cce4bd2d3007926349edd922acd5d4"
+    }
+  },
+  "local_SGLang_snapshot": {
+    "serving_chat_SHA256": "d46f8df3c7ca46e521202af8bdc7fc199c5e5cda887528a232c6d492ea171ea6",
+    "tokenizer_manager_SHA256": "c052b113023c88360dd3465d2f6053d13505bf37c25c966da5bf3a1770077da5",
+    "tokenizer_manager_runtime_binding_in_this_record": "NOT_ESTABLISHED; used to explain local implementation, not current remote state",
+    "reported_proposed_formula": "verify_ct * (speculative_num_draft_tokens - 1)",
+    "n1_shape": "dict; n>1 may be list"
+  },
+  "missing_extension_diagnostic": {
+    "N": 8,
+    "all_request_flags_true": true,
+    "all_input_tokens": 16388,
+    "all_output_tokens": 1024,
+    "parsed_SSE_JSON_counts": [
+      180,
+      180,
+      180,
+      181,
+      181,
+      181,
+      181,
+      182
+    ],
+    "sglext_present_chunks": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "scope": "Actual parsed event observations, not a packet capture or proof about every upstream hop"
+  },
+  "historical_fixed_gamma5_counters": {
+    "scope": "Whole N160 expert-count diagnostic, fixed gamma5/verify6 source contract; not Compact actual-proposal proof",
+    "counts": {
+      "coverage": 160,
+      "attempted": 160,
+      "gamma": 5,
+      "verify_calls": 28434,
+      "accepted_drafts_before_output_stop": 135905,
+      "proposed_drafts": 142170,
+      "correct_drafts_histogram": [
+        237,
+        348,
+        522,
+        806,
+        510,
+        26011
+      ],
+      "strict_AR": 0.9559330379123584,
+      "AL_output": 5.762115776886826,
+      "AL_verified_block": null,
+      "completion_tokens": 163840,
+      "bonus_slots_from_bound_source": null,
+      "prefix_survival": [
+        0.9916649082084829,
+        0.9794260392487867,
+        0.9610677358092424,
+        0.9327213898853485,
+        0.9147851164099318
+      ],
+      "conditional_prefix_continuation": [
+        0.9916649082084829,
+        0.9876582615171826,
+        0.9812560594635354,
+        0.9705053609982801,
+        0.9807699558840165
+      ],
+      "coverage_complete_for_given_records": true,
+      "complete_expected_request_coverage": true
+    },
+    "native_counter_scope": "NOT_COLLECTED",
+    "draft_verify_phase_wall": "NOT_COLLECTED"
+  },
+  "historical_cache": {
+    "scope": "Whole 640-request C90 128K showcase; native matching not inferred here",
+    "body_tokens": 131072,
+    "chat_tokens": 131076,
+    "actual_output_tokens": 1024,
+    "requests": 640,
+    "cached_tokens_each": 118784,
+    "actual_cache_fraction": 0.9062223442888095
+  },
+  "synthetic_timing_example": {
+    "performance_measurement": false,
+    "time_points_s": [
+      0,
+      0.1,
+      0.14,
+      0.16,
+      0.18
+    ],
+    "completion_tokens": 8,
+    "E2E_ms": 180,
+    "TTFT_ms": 100,
+    "TPOT_ms": 11.428571428571429,
+    "ITL_ms": [
+      40,
+      20,
+      20
+    ],
+    "if_tail_events_are_deleted": {
+      "E2E_ms": 140,
+      "TPOT_ms": 5.714285714285714,
+      "ITL_ms": [
+        40
+      ]
+    }
+  },
+  "publication": {
+    "new_HTTP": 0,
+    "new_model_requests": 0,
+    "new_profile": 0,
+    "strict_AR_not_reconstructed_from_AL": true,
+    "raw_prompts_and_responses_not_published": true
+  }
+}

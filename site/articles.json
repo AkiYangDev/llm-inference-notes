@@ -647,5 +647,19 @@
     "role": "advanced",
     "seo_title": "128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？",
     "seo_summary": "沿真实128K/1K请求区分复用前缀、新Query和逻辑上下文，解释DeepSeek-V4的SWA/C4/C128历史访问、PD状态交接，以及90%命中之后仍然存在的生成与排队成本。"
+  },
+  "docs/performance/sglang-stream-acceptance-cache-timing.md": {
+    "summary": "8条请求已带投机开关，SSE却没有sglext。从字段产生、父类解析和writer落盘走到原计时规则，解释metadata-only事件、接受率分母与whole/native窗口。",
+    "category": "压测实践",
+    "tags": [
+      "AISBench",
+      "SGLang",
+      "流式输出",
+      "投机解码",
+      "性能指标"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "SGLang流式压测：保留接受率与缓存计数，沿用原计时"
   }
 }
