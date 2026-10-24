@@ -22,6 +22,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 文章按主要阅读角色组织；专题、标签与系列阅读仍在网站中并行保留。
 
+- [静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？](docs/distributed/ascend-dynamic-eplb-weight-migration.md)：从专家槽位、W8A8/NZ暂存和通信等待，讲到逐层路由提交、验证范围与迁移成本。
+
 - [SGLang 流式压测：怎样保留接受率和缓存计数，又不改坏计时](docs/performance/sglang-stream-acceptance-cache-timing.md)：沿真实缺字段诊断、原SSE计时与observer写盘链，说明计数来源、事件扰动和统计窗口怎样对应。
 
 - [128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？](docs/performance/128k-prefix-cache-remaining-costs.md)：解释前缀命中之后的新输入计算、压缩历史访问、PD状态交接和持续生成成本。

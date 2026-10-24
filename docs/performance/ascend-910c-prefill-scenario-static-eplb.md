@@ -164,3 +164,5 @@ whole输出提升14.18%，首token与完成时间也缩短，说明该候选在�
 ---
 
 **数据与实现范围**：[实验对照](../../assets/ascend-910c-prefill-static-eplb/measurements.csv)保留whole/native、N/C/r及缺失标记；[离线拟合数值](../../assets/ascend-910c-prefill-static-eplb/offline-fit-summary.json)保留两种场景的槽数、分割语义、逐层理想估计和拟合脚本指纹。教学布局不属于实测。严格proposal接受率及native接受计数未完整观测，均标`NOT_OBSERVED`；正文AL采用whole输出/verify定义，包含首token与输出截断影响。本文没有重新压测、采集或修改服务，也不公开内部地址、账号、请求正文及原始计数文件。
+
+运行期间怎样安全地把专家放到新位置，见[《静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？》](../distributed/ascend-dynamic-eplb-weight-migration.md)。它进一步区分布局规划、实际权重迁移和路由生效，并保留动态方案的验证与成本边界。

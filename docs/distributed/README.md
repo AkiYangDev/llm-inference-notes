@@ -14,4 +14,8 @@ TP、DP、EP、PP 与数据归属、通信正确性。
 - [DeepSeek-V4 DSpark 的并行限制与 Draft 布局](deepseek-v4-dspark-parallel-layout-analysis.md)：理解 Draft / Target / Verify 使用不同并行布局时的同步与 ownership 问题。
 - [多卡投机解码：Draft、Verify 与 Accept 怎样保持一致](deepseek-v4-speculative-distributed-consistency-source-analysis.md)：拆分 speculative control、logical layout 与 model-data collective，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast。
 
+## 专家布局与运行时迁移
+
+- [静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？](ascend-dynamic-eplb-weight-migration.md)：沿统计、规划、ND staging、权重回填和metadata提交，理解动态EPLB的正确性与性能边界。
+
 [返回仓库首页](../../README.md)

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="490" viewBox="0 0 1120 490" role="img" aria-labelledby="title desc">
+  <title id="title">ND staging keeps original model storage in place</title>
+  <desc id="desc">Internal-format model weights are copied to a reusable ND layer workspace. Local sources and peer receives use temporary destination buffers. Completed values return through the ND workspace to original model storage before routing metadata is updated. Diagram is conceptual, not a memory-size measurement.</desc>
+  <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#496b86" stroke-width="1.5"/></marker></defs>
+  <rect width="1120" height="490" rx="18" fill="#f5f8fc"/>
+  <g font-family="Segoe UI, Arial, sans-serif" fill="#15334d">
+    <text x="38" y="48" font-size="27" font-weight="700">Move logical values; preserve model storage and format</text>
+    <text x="38" y="79" font-size="17">ND staging is extra workspace, not zero-copy migration.</text>
+    <rect x="38" y="126" width="298" height="144" rx="12" fill="#c3dfea"/>
+    <text x="60" y="162" font-size="22" font-weight="700">Original model storage</text>
+    <text x="60" y="194" font-size="18">Internal format / NZ</text>
+    <text x="60" y="222" font-size="18">Weights + scales + offsets</text>
+    <text x="60" y="250" font-size="18">Keep addresses and views</text>
+    <rect x="410" y="126" width="298" height="144" rx="12" fill="#d9ead4"/>
+    <text x="432" y="162" font-size="22" font-weight="700">ND layer workspace</text>
+    <text x="432" y="194" font-size="18">Read old expert values</text>
+    <text x="432" y="222" font-size="18">Install completed slot values</text>
+    <text x="432" y="250" font-size="18">Reuse across layer loop</text>
+    <rect x="782" y="126" width="298" height="144" rx="12" fill="#f2dfb5"/>
+    <text x="804" y="162" font-size="22" font-weight="700">Destination buffers</text>
+    <text x="804" y="194" font-size="18">Local copies / peer receives</text>
+    <text x="804" y="222" font-size="18">Protect old sources</text>
+    <text x="804" y="250" font-size="18">Wait before model overwrite</text>
+    <path d="M338 172 H406 M708 172 H778" stroke="#496b86" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M780 232 H712 M408 232 H342" stroke="#496b86" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="353" y="151" font-size="16">stage</text>
+    <text x="347" y="260" font-size="16">copy_</text>
+    <path d="M187 273 V318 H931 V273" fill="none" stroke="#9bb2c3" stroke-width="2"/>
+    <text x="38" y="357" font-size="19">Working memory includes original weights, layer staging and temporary destinations.</text>
+    <text x="38" y="391" font-size="19">After weight update: change routing metadata for the completed layers.</text>
+    <text x="38" y="443" font-size="16" fill="#496b86">Conceptual dependency diagram. Box sizes do not represent bytes or execution time.</text>
+  </g>
+</svg>

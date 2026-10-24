@@ -661,5 +661,20 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "SGLang流式压测：保留接受率与缓存计数，沿用原计时"
+  },
+  "docs/distributed/ascend-dynamic-eplb-weight-migration.md": {
+    "summary": "从逻辑专家与物理槽位出发，沿真实Ascend适配解释W8A8/NZ权重暂存、HCCL通信等待、逐层映射提交和Graph地址约束，结合功能验证与正负性能结果分析动态EPLB的成本。",
+    "category": "分布式工程",
+    "tags": [
+      "SGLang",
+      "Ascend 910C",
+      "EPLB",
+      "MoE",
+      "Expert Parallel"
+    ],
+    "topic": "distributed",
+    "role": "deep",
+    "seo_title": "静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？",
+    "seo_summary": "动态EPLB怎样搬运专家权重而不破坏路由？结合Ascend W8A8/NZ、ND staging、HCCL和原位metadata更新，解释迁移顺序、验证证据与收益边界。"
   }
 }

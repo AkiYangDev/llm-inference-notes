@@ -1,0 +1,318 @@
+{
+  "article_date": "2026-10-24",
+  "source": {
+    "repository": "AkiYangDev/sglang",
+    "commit": "70d8a7a43b52826377618efa618730d4634fb9ac",
+    "community_PR": "https://github.com/sgl-project/sglang/pull/46233",
+    "PR_state_when_checked": "open, not merged",
+    "community_port_test_base": "de7055f59645ebe03784b0980e1f222789f468a3",
+    "files_sha256": {
+      "python/sglang/srt/eplb/comm_utils.py": "5c98ebcad527e17eabcba7c298fd32517cc1fd482f2b909cb5b4bd973f66d431",
+      "python/sglang/srt/eplb/eplb_manager.py": "bd0cbb8dbb7724a63e095a123e1ada7c2a25d1c13c16825e73290fbe0044f7d2",
+      "python/sglang/srt/eplb/expert_distribution.py": "e8147d819417dc7c74f4613f4d2ed6c8774345c282772e4dec1338d207386e88",
+      "python/sglang/srt/eplb/expert_location_updater.py": "dc89d6187f41b3e022f9791a61d8e52ce5449af1cd09e64fa988d032fc7b1a0b",
+      "python/sglang/srt/eplb/expert_location.py": "40c0a2b679f0093ef4b3dbf47a10eb25f6c59207c2c6db9f65629d7e053b6887",
+      "python/sglang/srt/eplb/npu_statistics.py": "5a6736e3c5df5d6aec34423bf10de580df60306e8c560c2e53cb49f486b99986",
+      "python/sglang/srt/model_executor/model_runner.py": "a023389ff853f0bc7f515dea7a0009bf619e22d59da9da3acb54a1861a34f08c",
+      "python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py": "84ce48ab6edd8c11757ed175b62be0d73f3d059711c08811504a914f5d64389c",
+      "test/manual/ep/test_eplb_weight_migration.py": "b8cdf77e7044ce170f9bd094c4ff6a8df8349b02c3c9becbffa66f6d74a5cfc7",
+      "test/manual/ep/reports/ascend_dynamic_eplb_upstream_20261024.md": "21c0cce2de94ba2ce6b864a64df482ee761b6b176e65847daea7c76c7324d93c",
+      "test/manual/ep/reports/ascend_dynamic_eplb_upstream_20261024/verification.json": "c47dfce1b5f5aa2042fb36c65f50730d2b1bd670ca2d52f71c6606cb24591888"
+    },
+    "reported_production_source_line_ending_binding": {
+      "python/sglang/srt/eplb/comm_utils.py": {
+        "git_blob_LF_sha256": "5c98ebcad527e17eabcba7c298fd32517cc1fd482f2b909cb5b4bd973f66d431",
+        "reported_CRLF_sha256": "9973d3a94a6a7ae25b19f321340e8233f573543184e53f6ee8021c1b71b0f910",
+        "only_LF_to_CRLF_conversion_matches": true
+      },
+      "python/sglang/srt/eplb/eplb_manager.py": {
+        "git_blob_LF_sha256": "bd0cbb8dbb7724a63e095a123e1ada7c2a25d1c13c16825e73290fbe0044f7d2",
+        "reported_CRLF_sha256": "32a9d818efff09fab5885260750fc60871e5749309f2c8ccf70fb732e8e35720",
+        "only_LF_to_CRLF_conversion_matches": true
+      },
+      "python/sglang/srt/eplb/expert_distribution.py": {
+        "git_blob_LF_sha256": "e8147d819417dc7c74f4613f4d2ed6c8774345c282772e4dec1338d207386e88",
+        "reported_CRLF_sha256": "c7cdfc07f6e90a96c9bc7c26e10b96be407a68798352cb37070ed71870ad1e87",
+        "only_LF_to_CRLF_conversion_matches": true
+      },
+      "python/sglang/srt/eplb/expert_location_updater.py": {
+        "git_blob_LF_sha256": "dc89d6187f41b3e022f9791a61d8e52ce5449af1cd09e64fa988d032fc7b1a0b",
+        "reported_CRLF_sha256": "e751a58061ccf9d1eabf98575cc47c653691ca3d623ad4d5b1d192920faf422e",
+        "only_LF_to_CRLF_conversion_matches": true
+      },
+      "python/sglang/srt/eplb/npu_statistics.py": {
+        "git_blob_LF_sha256": "5a6736e3c5df5d6aec34423bf10de580df60306e8c560c2e53cb49f486b99986",
+        "reported_CRLF_sha256": "9ba2bae75f9b5307822cac1da8ac73a6e0e985cd37c2392a1d8ba1caecd6b712",
+        "only_LF_to_CRLF_conversion_matches": true
+      },
+      "python/sglang/srt/model_executor/model_runner.py": {
+        "git_blob_LF_sha256": "a023389ff853f0bc7f515dea7a0009bf619e22d59da9da3acb54a1861a34f08c",
+        "reported_CRLF_sha256": "346135ec8faad6849eb12a81f4a8a72ab0031196b788a4d8e62ca3c42e7f6a30",
+        "only_LF_to_CRLF_conversion_matches": true
+      },
+      "python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py": {
+        "git_blob_LF_sha256": "84ce48ab6edd8c11757ed175b62be0d73f3d059711c08811504a914f5d64389c",
+        "reported_CRLF_sha256": "3303db05d4a5e6e8ce544b00eec2b632826452dea67e8863a6ac18b23a177fc1",
+        "only_LF_to_CRLF_conversion_matches": true
+      }
+    }
+  },
+  "scope": "Fixed EP membership; this is not an Elastic EP failure-recovery or concurrent background-swap proof",
+  "migration_order": [
+    "read sources from old mapping",
+    "prepare temporary destinations",
+    "submit matched P2P operations",
+    "wait for submitted communication",
+    "copy completed logical values into original model slots",
+    "update metadata for completed layers"
+  ],
+  "NPU_storage": {
+    "ND_staging": true,
+    "model_storage_replaced": false,
+    "layer_workspaces_reused_within_update_call": true,
+    "zero_copy_claimed": false,
+    "general_failure_atomicity_claimed": false
+  },
+  "NPU_group": {
+    "membership": "same as original WORLD",
+    "backend": "hccl",
+    "hccl_buffer_size_MiB": 32,
+    "hccl_op_expansion_mode": 1,
+    "not_total_migration_memory_budget": true
+  },
+  "current_community_port_checks": {
+    "environment": {
+      "hardware": "Ascend 910C",
+      "CANN": "9.1.0",
+      "torch": "2.10.0+cpu",
+      "torch_npu": "2.10.0.post6"
+    },
+    "cpu": {
+      "status": "UPSTREAM_PORT_CPU_PASSED",
+      "tests": 39,
+      "npu_initialized": false,
+      "suites": [
+        {
+          "path": "test/registered/unit/eplb/test_draft_distribution_isolation.py",
+          "passed": 4
+        },
+        {
+          "path": "test/registered/unit/eplb/test_eplb_threshold.py",
+          "passed": 5
+        },
+        {
+          "path": "test/registered/unit/eplb/test_npu_batched_statistics.py",
+          "passed": 6
+        },
+        {
+          "path": "test/registered/unit/eplb/test_npu_eplb_group.py",
+          "passed": 5
+        },
+        {
+          "path": "test/registered/unit/eplb/test_npu_expert_distribution.py",
+          "passed": 8
+        },
+        {
+          "path": "test/registered/unit/eplb/test_npu_initial_rebalance.py",
+          "passed": 3
+        },
+        {
+          "path": "test/registered/unit/eplb/test_npu_topk_padding.py",
+          "passed": 6
+        },
+        {
+          "path": "test/registered/unit/eplb/test_npu_w8a8_registration.py",
+          "passed": 2
+        }
+      ]
+    },
+    "npu_graph": {
+      "status": "ACTUAL_NPU_CAPTURE_LIFECYCLE_PASSED",
+      "capture_fallbacks": {
+        "fixed_lifecycle_BS16": 0,
+        "fixed_lifecycle_BS8": 0,
+        "fixed_lifecycle_BS1": 0
+      },
+      "cases": [
+        {
+          "tokens": 16,
+          "valid": 16,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 8,
+          "valid": 7,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 1,
+          "valid": 0,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 16,
+          "valid": 13,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 1,
+          "valid": 1,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 8,
+          "valid": 8,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 16,
+          "valid": 0,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 8,
+          "valid": 2,
+          "physical_exact": true,
+          "logical_exact": true
+        },
+        {
+          "tokens": 8,
+          "repeats": 3,
+          "overflow_exact": true,
+          "fallbacks": 43
+        },
+        {
+          "tokens": 97,
+          "repeats": 1,
+          "overflow_exact": true,
+          "fallbacks": 43
+        }
+      ],
+      "no_reset_between_warmups_and_capture": true,
+      "actual_run_once_AST": true,
+      "shared_storage": true,
+      "routes_unchanged": true,
+      "full_model_test": false,
+      "model_requests_sent": 0,
+      "scope": "Exact statistics and capture branches only; not full model or performance proof"
+    }
+  },
+  "earlier_integration": {
+    "report": "https://github.com/chenxu214/ci_sglang/blob/f040177346d5eca8ea38ce8d569444f4a5176206/test/manual/ep/reports/ascend_dynamic_eplb_delivery_20261024.md",
+    "not_current_community_port_model_benchmark": true,
+    "single_node_function": {
+      "success": 16,
+      "failed": 0,
+      "copy_oracle": 16
+    },
+    "PD_function": {
+      "all_planned_requests": 192,
+      "failed": 0,
+      "formal_N_each_arm": 64,
+      "formal_C": 16,
+      "actual_input_range": [
+        689,
+        708
+      ],
+      "actual_output": 128,
+      "formal_output_pairs_equal": 64,
+      "preparation_each_arm": [
+        16,
+        16
+      ],
+      "updates_per_rank_in_window_including_preparation": {
+        "OFF_P": 0,
+        "OFF_D": 0,
+        "ON_P": 4,
+        "ON_D": 10
+      },
+      "OFF_preparation_plus_formal_wall_s": 31.867,
+      "ON_preparation_plus_formal_wall_s": 36.623,
+      "steady_PD_speedup_established": false
+    },
+    "fixed_single_node_performance": {
+      "source_candidate": "singlecapture_v1",
+      "hardware": "Ascend 910C",
+      "model": "DeepSeek-V4-Flash W8A8",
+      "logical_devices": 16,
+      "physical_card_divisor": "NOT_USED",
+      "TP": 16,
+      "EP": 16,
+      "attention_DP": 16,
+      "DP": 1,
+      "N": 320,
+      "C": 128,
+      "target_req_s": 6,
+      "actual_chat_input": 16388,
+      "actual_output": 1024,
+      "cache_hit": 0,
+      "DSpark": false,
+      "Compact": false,
+      "initial_learning": 64,
+      "steady_interval": 640,
+      "statistics_window": 320,
+      "redundant_experts": 16,
+      "preparation_requests": 16,
+      "preparation_output_each": 64,
+      "fresh_process_and_trivial_initial_map_each_arm": true,
+      "ON_can_learn_during_preparation": true,
+      "reported_rows_rounded": [
+        {
+          "order": "first ON",
+          "output_token_s_total_whole": 1397.65,
+          "TTFT_mean_s": 19.79,
+          "TPOT_mean_ms": 55.1,
+          "E2E_mean_s": 76.19,
+          "success": 320,
+          "failed": 0
+        },
+        {
+          "order": "fresh OFF",
+          "output_token_s_total_whole": 1311.01,
+          "TTFT_mean_s": 25.62,
+          "TPOT_mean_ms": 55.8,
+          "E2E_mean_s": 82.67,
+          "success": 320,
+          "failed": 0
+        },
+        {
+          "order": "fresh ON",
+          "output_token_s_total_whole": 1385.85,
+          "TTFT_mean_s": 20.45,
+          "TPOT_mean_ms": 55.2,
+          "E2E_mean_s": 76.9,
+          "success": 320,
+          "failed": 0
+        }
+      ],
+      "reported_ON_output_changes_percent": [
+        6.61,
+        5.71
+      ],
+      "reported_preparation_plus_formal_improvement_percent": 3.17,
+      "full_lifecycle_improvement": "NOT_OBSERVED",
+      "confidence_interval": "NOT_ESTIMATED",
+      "speculative_acceptance": "NOT_APPLICABLE"
+    },
+    "historical_other_version_PD_order_effects_percent": [
+      7.39,
+      -7.35
+    ]
+  },
+  "not_established": [
+    "full task accuracy",
+    "all-layer/all-rank weight export",
+    "GPU hardware regression",
+    "general online failure rollback",
+    "new community-port full-model/PD/AIS performance",
+    "actual hardware utilization inferred from balancedness"
+  ],
+  "new_experiments_for_article": 0
+}
