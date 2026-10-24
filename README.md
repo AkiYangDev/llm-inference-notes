@@ -22,6 +22,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 文章按主要阅读角色组织；专题、标签与系列阅读仍在网站中并行保留。
 
+- [128K 输入、90% 前缀缓存：怎样把压测场景真正跑准](docs/performance/128k-prefix-cache-benchmark-calibration.md)：从首轮实际命中不足九成，到多 DP 预热、逐条验收和成本记录，展开 128K/1K 缓存场景的校准过程。
+
 ### 流量入口
 
 面向第一次进入 AI Infra / SGLang 的读者，从更广泛的问题切入。

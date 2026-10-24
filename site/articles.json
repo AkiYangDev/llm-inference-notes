@@ -561,5 +561,19 @@
     "role": "advanced",
     "seo_title": "Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批",
     "seo_summary": "DeepSeek-V4 / Ascend 910C 的Prefill chunk选择实录：8192与8320、CP2/DP8负例、页对齐与DeepEP通信轮次，结合128K前缀缓存和尾块合批分析调优方法。"
+  },
+  "docs/performance/128k-prefix-cache-benchmark-calibration.md": {
+    "summary": "首轮8条请求长度正确，实际缓存却只有87.50%至89.06%。从公共区构造、短seed与独立check，走到多DP预热和逐条90.6222%的验收。",
+    "category": "压测实践",
+    "tags": [
+      "前缀缓存",
+      "压测方法",
+      "PD 分离",
+      "AISBench"
+    ],
+    "topic": "performance",
+    "role": "advanced",
+    "seo_title": "128K输入、90%前缀缓存：怎样把压测场景真正跑准",
+    "seo_summary": "DeepSeek-V4-Flash与Ascend 910C压测实践：真实tokenizer核长、共享前缀与独立后缀、多DP的seed和check，以及逐请求缓存计数、吞吐和准备成本。"
   }
 }

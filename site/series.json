@@ -210,6 +210,11 @@
         "path": "docs/performance/decode-fast-throughput-limited-by-prefill.md",
         "label": "跟一次吞吐瓶颈实战",
         "description": "从低TPOT追到4-token尾块与Prefill合批"
+      },
+      {
+        "path": "docs/performance/128k-prefix-cache-benchmark-calibration.md",
+        "label": "把128K缓存场景跑准",
+        "description": "从理论前缀比例到逐请求实际命中与多DP预热"
       }
     ]
   }

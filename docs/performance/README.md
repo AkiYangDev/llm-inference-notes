@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [128K 输入、90% 前缀缓存：怎样把压测场景真正跑准](128k-prefix-cache-benchmark-calibration.md)：沿真实 tokenizer 核长、共享区与独立后缀、seed/check 和正式 usage，解释预测前缀与实际命中的差别。
+
 - [Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批](deepseek-v4-prefill-chunk-size-selection.md)：用8192→8320与CP2负例，解释有效chunk、页预算、通信分轮和跨请求合批怎样共同决定吞吐。
 
 - [DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么](deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md)：沿c4层调度、compressor更新和Graph共享存储，解释同负载native吞吐提升5.41%的来源与精度边界。
