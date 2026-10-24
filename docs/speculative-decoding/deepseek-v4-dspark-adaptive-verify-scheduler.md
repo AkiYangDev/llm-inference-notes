@@ -2,7 +2,7 @@
 
 同一 batch 中，有的请求后几枚 Draft 很可能被接受，有的请求可能很快遇到不匹配。如果 Verify 预算有限，把相同长度分给所有请求，未必能得到最多的有效输出。
 
-DSpark 的自适应调度用置信度估计前缀存活概率，再结合执行成本分配 `verify_lens`。本文先用预算分配解释它在优化什么，再区分训练目标、运行时校准与成本模型。最后回到执行路径：`cap-accept` 只限制接受范围，进入 compact 才会缩减逻辑输入行数；本文固定版本的 Ascend 910C 配方仍使用 static。
+DSpark 用 Confidence Head 估计候选前缀还能被接受的概率，再结合预计执行成本，决定每条请求的验证长度 `verify_lens`。这中间有两个容易混淆的地方：训练出的分数不一定直接等于当前服务的接受概率；少接受几枚候选，也不一定少执行几行 Target 计算。下面沿预算、校准、成本和执行布局逐层说明。本文固定版本的 Ascend 910C 配方仍使用 static，后面的 compact 适配与测量是建议步骤，不是已完成的性能结果。
 
 <details markdown="1">
 <summary>版本与源码入口</summary>
@@ -21,11 +21,9 @@ DSpark 的自适应调度用置信度估计前缀存活概率，再结合执行�
 
 ## 一、用存活概率分配 Verify 预算
 
-假设当前有 B 个 Request。
+假设一次 Planner 决策涉及 B 条请求，每条请求先保留一个 root 输入位置。即使所有 Draft 候选都不匹配，Target 也能从 root 的结果产生一个 fallback / bonus token。因此，在未考虑上层结束与截断的 Runtime 计数中，一轮的基础推进量是 `baseline progress = B`。这里 B 是该次决策看到的请求数，不是物理卡数，也不能直接当成所有 DP rank 请求数之和。
 
-每个 Request 即使一个 Draft Token 都没被接受，Target Verify 仍会提供一个正确的 fallback / bonus Token。因此一轮至少有：`baseline progress = B`
-
-如果额外 Verify 一个 Draft position，而该 position 能成为 accepted prefix 的概率是 s，那么它对期望 progress 的边际贡献就是：`+s`
+在这 B 行之外，每多验证一个 Draft 位置，就多一次接受它的机会。若它连同前面候选一起成为有效前缀的概率是 s，对期望输出推进的边际贡献就是 `+s`。这里问的是“接受路径能不能走到这个位置”，不是忽略前面分歧后单独判断这一枚 token 对不对。
 
 把所有候选位置的 survival probability 从高到低排序：`s1 >= s2 >= s3 >= ...`
 
@@ -48,7 +46,9 @@ tau_star = num_requests + torch.cat(
 )
 ~~~
 
-然后引入 Verify Step 成本。
+例如两条请求的条件置信度分别是 `[0.9,0.8]` 和 `[0.6,0.5]`，累乘后的前缀存活概率是 `[0.9,0.72]` 与 `[0.6,0.3]`。若额外预算为 2，最高的两个值都来自第一条请求。在每条请求至少保留 root 的口径下，分配结果为 `verify_lens=[3,1]`，期望推进为 `2+0.9+0.72=3.62`。这是用于解释分配规则的教学算例。
+
+预算也不能只按收益选得越大越好，因为新增 Verify 行会增加一轮的执行成本。Planner 接着将预计推进量换算成单位时间的产出。
 
 一维 SPS 表：
 
@@ -74,14 +74,14 @@ budget
 argmax_b theta(b)
 ~~~
 
-所以 DSpark 自适应 Verify 不是：
+逐位置的阈值判断只能表达：
 
 ~~~text
 Confidence > threshold
 → continue
 ~~~
 
-而是：
+这里的 Planner 则比较：
 
 ~~~text
 Expected Extra Progress
@@ -89,9 +89,9 @@ Expected Extra Progress
 Predicted Step Cost
 ~~~
 
-的全局优化。
+这个比值才是预算选择的目标。例如只比较两个可选预算：额外 2 行若预计耗时 1 ms，收益模型给出 `3.62/0.001=3620 token/s`；额外 3 行使期望推进增至 `4.22`，但若耗时变为 1.4 ms，预计产出反而约为 `3014 token/s`。这些时间是教学假设，说明更多候选可能增加单轮输出、却降低单位时间产出，不代表实测吞吐。
 
-Planner 先决定这一轮总共多 Verify 多少位置，随后 <code>ScheduleVerifyLensTopk</code> 再用当前 Confidence / Survival 决定这些位置分给哪些 Request。
+Planner 先决定这一轮总共多 Verify 多少位置，随后 <code>ScheduleVerifyLensTopk</code> 用当前的存活概率决定它们分给哪些请求。前面的简化推演采用每条请求保留一行的口径；实际分配还会应用 `min_verify_len`、`max_verify_len` 与 `survival_eps`，不能只从排序结果跳过这些长度约束。
 
 同一 Request 的 survival 是 cumulative product：
 
@@ -104,13 +104,11 @@ s3 = c1*c2*c3
 
 因为每个 c 都在 0 到 1 之间，所以同一 Request 内：`s1 >= s2 >= s3 >= ...`
 
-前缀概率随位置不增；出现并列值时，实现优先选择较早的位置，再按请求编号排序，从而保留前缀结构。最终得到：`verify_lens = [l1, l2, ..., lB]`
-
-并通过 <code>SpecTpSyncSite.DSPARK_PLAN</code> 在相关 TP Group 内同步。
+前缀概率随位置不增；出现并列值时，实现优先选择较早的位置，再按请求编号排序，从而保留前缀结构。最终得到 `verify_lens = [l1, l2, ..., lB]`，再通过 <code>SpecTpSyncSite.DSPARK_PLAN</code> 的同步入口交给相关 TP Group。
 
 ## 二、训练标签与运行时校准的区别
 
-这一区分决定了后面收益模型的含义。
+前面的 s 要能用于预计产出，就需要先说明它估计的究竟是哪一种接受事件。Confidence Head 的训练标签与 Runtime 观察到的前缀匹配，不是同一个对象。
 
 ### DeepSeek 官方 DeepSpec 训练的是什么
 
@@ -126,7 +124,7 @@ Linear
 scalar confidence logit
 ~~~
 
-关键是训练 target。
+Head 的输出是一个标量 logit；经过 sigmoid 可以转成 0 到 1 之间的分数。这个分数有什么含义，取决于训练时让它逼近的 target，而不是取决于 Head 叫不叫“AcceptRate”。
 
 DeepSpec 先计算：
 
@@ -155,15 +153,9 @@ binary_cross_entropy_with_logits(
 )
 ~~~
 
-训练。
+训练。这里 BCE 的 target 可以是 0 到 1 之间的小数：公开 DeepSpec 实现让每个位置的分数逼近 Draft 与 Target 分布的重叠程度，而不是用本次 token 最终接受或拒绝的 0/1 结果作标签。
 
-所以官方公开 DSpark 训练语义更准确地说是：
-
-> **每个 position 预测一个 soft probabilistic accept rate。**
-
-它不是 0/1 的“这个 Token 最后接受没接受”标签。
-
-经典 rejection sampling 中，Draft distribution q 与 Target distribution p 的平均 proposal acceptance 与 <code>1-TV(q,p)</code> 直接相关。因此这可以作为该位置的条件接受率 proxy。
+在经典 rejection sampling 的前提下，候选确实从同一上下文的 `q` 采出，再按 `min(1,p/q)` 接受，平均接受概率就是 `sum_x min(p(x),q(x)) = 1-TV(q,p)`。这解释了该训练 target 的来源。但 Greedy 的事件是 Draft token 是否等于 Target argmax，不能把上面的分布关系直接套成 Greedy 匹配概率。
 
 DeepSpec 还显式观测：
 
@@ -175,7 +167,7 @@ confidence_prefix_targets =
     accept_rate.cumprod(...)
 ~~~
 
-这与 SGLang Runtime 后面的 cumulative survival 是相容的。
+累乘的形式与 Runtime 使用的前缀 survival 相容；两者估计的是不是同一事件，还要继续看 Runtime 标签。这里仅借公开 DeepSpec 解释训练语义，不据此推定 V4-Flash 未公开的完整训练配方。
 
 ### 但 SGLang STS 校准的不是同一个 soft target
 
@@ -208,7 +200,7 @@ prefix_mask =
 [1, 1, 1, 0, 0, ...]
 ~~~
 
-这是一个 **greedy argmax exact-prefix correctness event**，而不是训练时的 soft accept-rate target。
+这份 mask 表示 Greedy 接受前缀是否覆盖每个位置。前三个位置为 1，后面全为 0；即使第四个位置之后又偶然出现一个匹配 token，也不会越过首个分歧恢复接受。它与训练时每个位置的 soft accept-rate target 含义不同。
 
 因此两边应画成：
 
@@ -241,7 +233,7 @@ calibrated cumulative survival
 
 ### STS 更像运行时语义桥
 
-STS fitter 对每个 position 选择 Temperature：`T_i`
+STS 即这里按位置拟合的温度缩放。fitter 为每个位置选择一个正温度 `T_i`，修改分数的刻度，而不是改变候选 token 或重新训练整个 Draft 模型。
 
 运行时：
 
@@ -250,23 +242,15 @@ c_i = sigmoid(z_i / T_i)
 S_k = product(i<=k) c_i
 ~~~
 
-然后用 ECE 让 cumulative survival 更贴近采集到的 binary prefix event。
+fitter 按位置依次搜索温度，保留前面已经拟合的 cumulative survival，再为当前位置选择 ECE 较低的结果。ECE（预期校准误差）比较一组相近预测概率与其实际事件频率，例如预测约 0.8 的前缀是否约有八成匹配；它不是任务准确率，也不直接衡量最终吞吐。
 
-所以 STS 更准确的作用是：
-
-> **把训练为 probabilistic conditional accept-rate predictor 的 checkpoint head，校准成当前 calibration workload 下更可信的 cumulative greedy-prefix survival signal。**
-
-校准在这里将模型分数映射到运行时观察的 Greedy 前缀事件。
+因此，STS 是把 Checkpoint Head 的分数刻度校准到当前采集负载下的 Greedy 前缀事件。校准数据分布或服务策略改变后，仍需检查这个映射是否成立，不能把一次拟合当成通用概率保证。
 
 ### Sampling 模式是一个重要边界
 
-当前 STS recorder 用的是 <code>argmax(target_logits)</code>。
+当前 STS 收集路径以 <code>argmax(target_logits)</code> 计算前缀匹配，recorder 保存这个 Greedy 标签。
 
-因此它校准的是 Greedy exact-prefix event。
-
-如果真实服务使用 temperature / top-p / top-k / rejection sampling，最终 Accept Decision 的随机变量不再等同于这个 greedy label。
-
-STS 当前校准到 Greedy Target-argmax Prefix Correctness。服务切换到其他 Sampling Policy 后，接受事件也随之变化，对应概率需要按该 Policy 的实际结果重新检查。
+服务切换到概率采样策略后，最终接受事件不再等同于这个 Greedy 标签。即使 STS 在 Greedy 采集集上校准良好，也不能直接推定它能预测 temperature、top-p、top-k 与 rejection sampling 路径的实际接受结果；需要按所用策略重新核对。
 
 ## 三、tau 怎样对应期望输出推进
 
@@ -305,7 +289,7 @@ sum(commit_len)
 B + sum(accepted_drafts)
 ~~~
 
-这解释了 Planner 为什么从 B 开始。
+每条请求都多计的这一枚，来自 Target 本轮提供的 fallback / bonus，这就是 Planner 从 B 开始的原因。它不表示所有新输出 token 都已有自己的 KV；输入与输出的位置偏移仍按 Accept 与 Commit 的规则处理。
 
 ### 概率事件对齐时的期望推导
 
@@ -357,7 +341,7 @@ E[sum(commit_lens)]
 B + sum(survival)
 ~~~
 
-当 Survival 描述的概率事件与实际接受事件一致时，tau 等于期望提交长度。
+这个推导用的是期望的线性性，不要求不同位置的接受事件彼此独立。前缀事件本来就相互依赖：接受第 k 个候选意味着前 k−1 个也被接受。真正需要的是每个 survival 都描述相应前缀事件，并且只对本轮允许验证的位置求和。
 
 ### Cap 本身也没有破坏这个推导
 
@@ -401,13 +385,11 @@ current survival
 
 第六，Sampling、Grammar、logits adjustment 和上层 stop / EOS 语义可能让最终用户可见 progress 与 Runtime 的 <code>commit_lens</code> 不完全相同。
 
-所以最稳妥的结论是：
-
-> **tau 用于估计提交长度。Survival 与接受事件对齐，且状态时滞和二次调度修正足够小时，这项估计接近期望提交长度。**
+tau 应读成提交长度的估计值。前面的条件说明，公式形式正确并不等于每轮预测都准确：标签是否对齐、历史分数是否适用于当前请求、预算是否又被 tier 对齐改写，都会影响它与实际提交量的差距。
 
 ## 四、SPS 成本模型与 Graph Tier
 
-Confidence 解决收益，SPS 解决成本。
+Confidence 估计多验证一个位置可能增加多少产出，SPS 表估计为此要付出多少时间。SPS 是 Steps Per Second，即每秒可执行多少个这样的 step；将期望 token 数乘以 SPS，才得到预算模型中的预计 token/s。
 
 ### 1D SpsCostTable
 
@@ -431,9 +413,9 @@ SPS =
 1 / median(step_time)
 ~~~
 
-Runtime 对 probe 做 floor lookup。
+Runtime 对 probe 做 floor lookup，即查找不超过当前 M 的最近采样点，而不是在两点间平滑插值。
 
-因此如果真实数据是：
+用一组假设的测量点说明查表行为，M 的单位是 Verify token 行，SPS 的单位是 step/s：
 
 | M | SPS |
 |---:|---:|
@@ -446,9 +428,7 @@ Runtime 对 probe 做 floor lookup。
 
 当前 scheduler 单测还专门构造了 <code>_cliff_table()</code>，验证在明显的 SPS cliff 下，预算 argmax 与 brute-force scan 一致。
 
-这证明的是：
-
-> **Planner 能正确消费一个 cliff-aware 1D cost table。**
+这项单测核对的是已有成本表到预算选择的计算：当输入表包含 cliff（成本突然增加、SPS 突然下降）时，Planner 能按它选预算。它没有证明某张实测表覆盖了服务负载，也没有证明后面的拟合能还原原始成本曲线。
 
 ### 为什么又需要 Additive SPS
 
@@ -460,7 +440,7 @@ B=8,  每个 Request 很长
 B=32, 每个 Request 很短
 ~~~
 
-Attention KV history、per-request bookkeeping、DP/collective geometry可能不同。
+即使总行数 M 相同，请求数 B 仍可能改变 Attention 历史读取、每请求管理开销与 DP/collective 的组织方式。1D 表只以 M 查找，无法区分这些来源。
 
 所以 Additive model 写成：
 
@@ -484,15 +464,13 @@ Request-side 成本
 Verify-token-side 成本
 ~~~
 
-这比只看 M 更合理，但引入了新的近似。
+其中 bias、alpha 和 theta 都以时间为单位；这里的 `theta(M)` 是 token 侧成本项，与前面表示预算产出目标的 `theta(b)` 不是同一个量。把 B 和 M 分开能表达请求数效应，但也引入了可加近似，并非自动获得更准确的每一步预测。
 
 ### 三个关键假设
 
 第一，它假设 B 与 M 的影响近似可加，不显式建模 B×M interaction。
 
-第二，Profiler fitting 当前默认：`mbin_width = 64`
-
-把 M 做 64-token 分 bin。
+第二，Profiler 拟合函数的默认参数是 `mbin_w = 64`，以 `round(M/64)*64` 将 M 归入 bin。同一个 bin 内的 M 共用 token 侧成本项，因此边界两侧的原始点可能先被合并。
 
 第三，导出的 Additive table 在 Runtime 对 theta(M) 做线性插值。
 
@@ -510,15 +488,7 @@ M=65 → graph tier 96
 
 ### Off-diagonal profiler 知道 graph tier，但模型没有显式 graph-tier 变量
 
-Compact/off-diagonal profiling 会记录真实 graph tier，还会检查：`graph_tier >= pinned M`
-
-确保测量合法。
-
-但最终 fit 输入仍然是：`(B, M, measured step time)`
-
-而不是：`(B, M, graph_tier, step time)`
-
-所以 Graph tier cliff 最终只能被 theta(M) 间接吸收。
+Compact/off-diagonal profiling 会记录真实 graph tier，并检查 `graph_tier >= pinned M`，保证测量所用 tier 容得下指定行数。但拟合仍以 `(B, M, measured step time)` 为输入，没有把 graph tier 作为独立解释变量；tier 切换的成本变化只能由 `theta(M)` 间接吸收。
 
 ### 当前测试没有证明 Additive fit 能恢复 cliff
 
@@ -529,17 +499,11 @@ Compact/off-diagonal profiling 会记录真实 graph tier，还会检查：`grap
 - Profiler fit 输出 residual、RMS、R²；
 - self-check 验证 step_time 为正。
 
-但它没有证明：
-
-> **带真实 Graph tier discontinuity 的 trace 经过 64-bin additive OLS 后，还能恢复正确的 cliff 和最优 budget。**
-
-Additive SPS 在这里承担的角色是：
-
-> **更能表达 Request-count effect 的经验 cost approximation，而不是 graph-tier-aware 精确模型。**
+这些检查没有覆盖“真实 Graph tier 阶跃经过 64-token 分 bin 和最小二乘拟合后，是否仍能选到正确预算”这个问题。拟合有 residual、RMS、R²，只说明可以查看误差，不表示误差已经足够小。Additive SPS 在这里是能表达请求数效应的经验成本模型；tier 切换处是否可用，需要单独核对。
 
 ### 在 Graph Tier 两侧测量拟合误差
 
-在每个 captured tier 两侧密集采样：
+如果后续验证这个拟合，优先在每个 captured tier 两侧密集采样，而不是先大量增加随机点：
 
 ~~~text
 tier-2
@@ -569,7 +533,7 @@ actual throughput-optimal budget
 使用 piecewise / lookup cost model
 ~~~
 
-而不是单纯增加随机样本。
+上面是针对边界误差的验证与模型改进建议，本文没有执行新的 profiling，也没有据此给出实际最优预算。
 
 ## 五、static、cap-accept 与 compact 的执行差异
 
@@ -580,7 +544,7 @@ verify_lens =
 [l1, l2, ..., lB]
 ~~~
 
-但这不自动意味着 Target Forward 只算 <code>sum(verify_lens)</code>。
+这些长度描述允许各请求验证到哪里，但 Forward 是否真的减少行数，由后面的执行模式决定。需要把“接受范围”与“实际提交给模型的输入布局”分开。
 
 ### static
 
@@ -592,15 +556,9 @@ static 下不构建 Confidence Head，也没有 STS、SPS budget、per-request v
 
 ### cap-accept
 
-cap-accept 可以产生不同 verify_lens，但 Worker 仍走 <code>run_non_compact()</code>。
+cap-accept 可以产生不同 `verify_lens`，但 Worker 仍走 <code>run_non_compact()</code>，Target 输入保持固定的 `B * verify_num_draft_tokens` 行。到 Accept 阶段，才把 `correct_len` 裁到 `verify_len - 1`。
 
-Target 输入仍是固定：`B * verify_num_draft_tokens`
-
-只是 Accept 阶段把：`correct_len`
-
-裁到：`verify_len - 1`
-
-所以它主要改变 Accept Horizon，不直接节省 Target Verify FLOPs。
+例如固定宽度 N=4、三条请求的 `verify_lens=[2,1,4]`，cap-accept 仍给 Target 12 行输入，只把各请求可接受的 Draft 数裁到 `[1,0,3]`。因此，仅看到有效提交长度变短，不能据此声称 Target Verify FLOPs 已减少。
 
 ### compact
 
@@ -616,7 +574,7 @@ B0
 C0 C1 C2 C3
 ~~~
 
-共 7 个 row，而不是固定宽度的 3×N。
+共 7 个逻辑 row，而不是前例固定宽度 N=4 时的 12 行。这里每条请求的第一行仍是 root，额外 Draft 行数为 `[1,0,3]`。compact 先减少的是有效输入行；如果后续使用更大的 Graph tier replay，实际执行还可能包含 padding，不能直接把 7/12 当作耗时比例。
 
 ### Graph tier alignment 是 paid-padding reclamation
 
@@ -626,7 +584,7 @@ C0 C1 C2 C3
 
 开启 graph-tier alignment 后，可以继续按 survival 填真实候选，直到接近 64 real rows。
 
-因为 64-token Graph 的成本已经支付，这相当于把 padding 变成可能产生 accepted progress 的有效工作。
+在该 tier 成本近似固定的模型下，原本为了 replay 支付的 27 行 padding 可以部分换成真实候选。这些候选是否增加有效提交仍取决于 survival；若可用候选不足，也不能强行填满。跨过 64 去选下一个 tier 则会改变预计成本，不能沿用“成本已经支付”的解释。
 
 ## 六、Ascend 910C 的固定宽度限制
 
@@ -658,7 +616,7 @@ Base class 默认：
 supports_ragged_verify_graph = False
 ~~~
 
-因此 Decode Graph Runner 的 ragged admission 会直接拒绝 NPU DSV4 ragged graph replay。
+因此该版本 Decode Graph Runner 的 ragged admission 不会放行 NPU DSV4 ragged graph replay。这个 capability 检查只说明 Graph 准入条件；能不能正确执行 Eager compact，还必须看输入 metadata，不能通过切到 Eager 就跳过后一个问题。
 
 ### 更硬的缺口：NPU Target Verify metadata 仍是固定宽度
 
@@ -680,7 +638,7 @@ actual_seq_lengths_q =
 
 这等价于假设每个 Request 的 Query width 都是同一个 N。
 
- compact layout 例如：`verify_lens = [2,1,4]`
+compact layout 例如：`verify_lens = [2,1,4]`
 
 需要的是：
 
@@ -696,7 +654,7 @@ RaggedVerifyLayout.verify_lens
 RaggedVerifyLayout.qo_indptr
 ~~~
 
-这里还存在输入布局约束：NPU DSV4 Target Verify 的 Query 组织方式仍要求 uniform-width。单独修改 Graph capability flag，无法改变这项要求。
+这里的 `cu_seqlens_q` 含起始 0，表示每条请求在紧凑 Query 数组中的边界；相邻差分别是 2、1、4。当前 NPU Target Verify 的 metadata 按统一 `n_draft` 组织这些边界，单独修改 Graph capability flag，不会把它变成正确的 ragged 输入，也无法保证 Attention 或后续状态写入正确。
 
 ### C4 / C128 Compressor metadata 也依赖固定 width
 
@@ -759,7 +717,7 @@ idle rank participation
 C4/C128 state write
 ~~~
 
-所以 compact support 不是改一个环境变量就完成。
+这些是输入、图执行和 collective 的共同约束。即使单 rank 的紧凑 Query 能执行，也不能据此宣称 DP Attention、空闲 rank 与 DeepEP 路径已经适配完成。
 
 ### 更合理的 bring-up 顺序
 
@@ -860,7 +818,7 @@ commit_lens/new_seq_lens
 与 static baseline 保持 lossless
 ~~~
 
-然后才比较 Target Verify device time、Step time、TPOT 和 throughput。
+上述 correctness 项需要先通过，再比较 Target Verify device time、整轮耗时、TPOT 和输出吞吐。性能表同时保留 AL 与实测严格 Draft 接受率，并列出同一窗口的实际提出、接受计数；若没有候选分母，应标明缺失，不能把 tau 或 `(AL-1)/gamma` 改名为实测接受率。高预计产出、高 AL 和端到端提速需要分别用对应证据确认。
 
 ---
 
@@ -926,9 +884,7 @@ NPU DSV4 Target Verify
 SGLANG_RAGGED_VERIFY_MODE=static
 ~~~
 
-对 Ascend 910C，下一步先完成后端输入几何的适配：
-
-> **先让 DeepseekV4AscendAttnBackend 正确消费 RaggedVerifyLayout，把 Query / Compressor / Graph metadata 从 fixed-width 改成 per-request verify_lens，再逐层恢复 TP / DP / DeepEP 能力。**
+对本文固定版本的 Ascend 910C，适配起点是让 `DeepseekV4AscendAttnBackend` 正确消费 `RaggedVerifyLayout`，把 Query、Compressor 和 Graph metadata 与各请求的 `verify_lens` 对齐。完成这些输入与状态校验，再逐层验证 TP、DP Attention 和 DeepEP；预算公式与通用 Runtime 已存在，不能替代后端正确性和实际收益的验收。
 
 ## 源码阅读入口
 
