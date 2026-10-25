@@ -4,6 +4,8 @@ Prefill 和 Decode 使用同一份模型权重，却把不同形状的工作交�
 
 例如同样一层矩阵乘，2048 个 Prompt Token 可以一起复用权重，单条 Decode 请求却只能先算当前这一个 Token。进入 MoE 后，这些 Token 又会分散给不同专家，每个专家实际收到的行数可能更少。理解这两次形状变化，才能判断时间更可能花在计算、数据搬运还是反复提交任务上。下面从矩阵形状推到 DeepSeek-V4-Flash 的滑窗与压缩历史，再讨论怎样用 Profile 核对。
 
+第一次接触这两个阶段，可以先读前两节，抓住“每轮有多少新 Token、权重被复用了多少次”这条主线。已经在看性能日志时，可以直接进入后面的 Attention 历史读取、执行开销与 Profile 对照；遇到陌生术语，再查[推理基础设施名词表](ai-infra-working-glossary.md)。
+
 本文主要固定到 SGLang commit <code>b86a30afbae389eec8763f4bcf38f14904d2d00c</code>，模型以 DeepSeek-V4-Flash-0731 为具体案例，核对日期为 2026-09-21。
 
 为了把 Shape 对算术强度的影响单独讲清楚，部分 GEMM 示例会统一使用 BF16 bytes 做思想实验。官方 DeepSeek-V4-Flash checkpoint 实际包含 FP8 / FP4 等量化配置，不同 Ascend 部署也可能采用 W8A8 等路径；dtype 会改变数值系数，但不会改变“大 M 更容易复用 Weight、小 M 更难摊薄 Weight / Launch 成本”的基本结论。

@@ -1,116 +1,83 @@
 # 网站维护
 
-网站由 `docs/` 中除目录 README 以外的 Markdown 文章生成，文章不需要维护第二份 HTML。添加文章后，推送到 main 会运行构建并部署至 GitHub Pages。
+本站由 `docs/` 中已发布的 Markdown 生成，文章只维护一份源文件。推送到 main 后，GitHub Actions 构建并部署至 GitHub Pages；项目路径为 `/llm-inference-notes/`。
 
-## 本地构建
+## 构建与预览
+
+需要 Python 3.12+、Node.js 22.13+ 和 pnpm 11.25.0。Linux 构建机还需要中文字体，Ubuntu 可安装 `fonts-noto-cjk`；Windows 使用系统微软雅黑，macOS 使用苹方。字体只在构建分享卡片时使用，读者无需下载中文字体。
 
 在仓库根目录执行：
 
 ```bash
 python3 -m pip install -r site/requirements.txt
+npm install -g pnpm@11.25.0
+pnpm install --frozen-lockfile --ignore-scripts
 python3 site/build.py
+python3 scripts/serve_site.py --port 8876
 ```
 
-生成目录为 `_site/`。站点基础路径为 `/llm-inference-notes/`，部署路径变化时需要同步调整 `site/build.py` 的 BASE。
+打开 `http://127.0.0.1:8876/llm-inference-notes/`。预览只监听本机回环地址；修改后重新构建并刷新。生成目录 `_site/` 和 `node_modules/` 不提交。
 
-首页高质量看板图由 `site/asset-payloads/whale-hero-v2/` 的文本分片在构建时还原为单张 `whale-hero-v2.webp`；`site/build.py` 会校验长度和 SHA-256，分片缺失或损坏会让构建直接失败。
+构建末尾运行 `scripts/enhance_site.mjs`：代码高亮和 KaTeX 公式生成静态 HTML，Mermaid 及其分块、公式样式和字体随站点托管。依赖版本固定在 `package.json` 和 `pnpm-lock.yaml`，构建时从包管理仓库安装，读者打开文章不依赖第三方 CDN。开源许可随生成资源保留。
 
-## 界面资源
+## 内容入口与元数据
 
-配色与响应式布局位于 `site/assets/style.css`，搜索、主题切换、复制与图表放大位于 `site/assets/app.js`。搜索索引从文章正文生成。
+- `/articles/` 为完整目录，支持专题、层级、标签、目录内筛选、排序和稍后读。
+- `/guides/` 根据读者当前问题组织推荐文章；`site/discovery.json` 维护四条路线和首页精选，指向未发布文件会让构建失败。
+- `/series/` 展示完整系列，`site/series.json` 维护顺序、简短标题和介绍。
+- `site/articles.json` 维护每篇文章的摘要、专题、标签和阅读层级；文章缺少元数据时构建失败。
 
-Mermaid、KaTeX 公式与代码高亮按需使用固定版本的 jsDelivr 模块；网络不可用时保留可阅读正文和源码。字体加载失败时使用系统字体。网站没有访问统计或跟踪脚本；本地存储用于主题偏好与当前浏览器的阅读进度。
+四种层级为入门、进阶、深入研究和速查，对应 `entry`、`advanced`、`deep`、`reference`。层级帮助选择阅读深度，专题用于归档，系列说明推荐顺序。阅读地图不是运行时调用图。
 
-首页现使用站点所有者选定并提供的鲸鱼娘立绘与 Q 版动画，历史看板和状态图继续存档，详细来源见 [素材来源](assets/SOURCES.md)。本站为独立个人技术站，不代表 DeepSeek 官方。
+首页将精选入口与最新发表的三篇文章分开展示；既有文章重写不会被当作新文章。文章列表保留最近更新排序。
 
-## 阅读与导航
+`seo_title` 和 `seo_summary` 可选，只改变搜索结果标题与摘要，不改变正文 H1。阅读时长按中文、英文、代码行和图表粗估；不包括实际运行命令的时间，也不是完成阅读的承诺。
 
-- `/articles/` 汇总全部已发布文章；`/topics/<topic>/` 按实际有文章的专题生成目录，不展示空占位栏目。
-- 搜索按文章与章节生成索引，结果高亮关键词并可跳到对应标题。正文标题 ID 由 Markdown TOC 扩展生成。
-- 主题默认跟随系统，手动切换后保留偏好；Mermaid 图随深浅色模式重绘。
-- 桌面提供右侧目录，窄屏提供折叠目录；表格可横向滚动。Mermaid 工程图及链接到图片文件的正文配图支持站内放大、缩小和适应窗口；按 Esc 或点击关闭按钮返回原阅读位置。图片链接在禁用 JavaScript 时仍可打开原图。
-- `/credits/` 记录插画来源。首页使用用户提供的 PNG 立绘与压缩 MP4 动画，历史看板仍保留。
-- 样式与交互脚本按内容哈希更新版本，搜索索引使用重新验证的请求。
+## 长文阅读与搜索
 
-## 内容四层
+桌面使用右侧目录；手机保留文首折叠目录，并提供随时打开的“本页目录”。选择章节后关闭弹窗，定位对应标题。搜索或外部链接指向折叠的实现细节时，会先展开祖先区块再定位。
 
-每篇公开文章都在 `site/articles.json` 中声明一个 `role`，用于区分文章在增长与阅读路径中的主要职责，而不是替代专题分类。
+宽表格保留局部横向滚动，实际溢出时显示提示；正文配图由本站托管，按需加载。Mermaid 和链接到图片文件的正文配图可放大、缩小及适应窗口，Esc 关闭后恢复焦点。禁用 JavaScript 时正文、高亮代码、公式及图片原链接仍可阅读；Mermaid 保留源码描述。
 
-- `entry` / 入门：回答更广泛的搜索问题，降低第一次进入 AI Infra / SGLang 的阅读门槛。
-- `advanced` / 进阶：从概念进入实现，连接 Scheduler、ModelRunner、Attention、MoE、分布式与量化执行。
-- `deep` / 深入研究：源码、性能、投机解码、Ascend Profiling 与 PR 级工程细节。
-- `reference` / 速查：适合反复查阅的名词表、Rank / Group、Collective 与知识地图。
+搜索按文章与章节建立索引，每篇只显示一个最佳结果。标题优先，再看章节标题和正文；结果可定位章节。中英文术语别名统一常见写法，如“首字延迟 / TTFT”“KVCache / KV Cache”“PD分离 / PD 分离”；TPOT 与 ITL、AL 与接受率保持独立。首次显示 15 篇，可继续加载其余结果。目录里的关键词可直接带入全文搜索。
 
-`/articles/` 默认按这四层组织，并生成 `/levels/entry/`、`/levels/advanced/`、`/levels/deep/`、`/levels/reference/` 四个独立归档页。首页同时提供层级入口；专题、标签和系列阅读仍保留，四层结构与原有信息架构并行存在。
+`/` 或 `Ctrl/⌘ + K` 打开搜索；`Alt + Shift + ←/→` 切换系列前后篇。输入、选择文本或弹窗打开时不触发系列跳转。
 
-文章可选声明 `seo_title` 与 `seo_summary`。它们只服务浏览器标题与搜索摘要，不改正文 H1，因此可以在不牺牲技术标题准确性的情况下，为高价值入口页提供更短、更明确的搜索结果文案。所有公开 Markdown 必须在 `site/articles.json` 有编辑元数据，否则构建失败，避免新文章悄悄退化到默认 SEO 信息。
+## 阅读记录与主题
 
-## Skills 栏目
+主题默认跟随系统，手动切换后保留偏好，Mermaid 随主题重绘。字号支持 16–22px，并提供专注阅读、代码复制、代码行链接和章节链接复制。
 
-网站自动发现 `skills/<slug>/README.md`，同目录必须存在 `SKILL.md`。
+已读标记、稍后读、字号与阅读位置只存于当前浏览器。不会根据滚动到底自动标记已读；用户在文末主动标记，可撤销。首页在存在记录时显示继续阅读入口。不登录、不跨设备同步，清除站点数据会删除记录。网站没有访问统计或跟踪脚本。
 
-- `/skills/` 生成目录，`/skills/<slug>/` 展示对应 README 全文。
-- README 的一级标题作为名称，首段作为简介；根 `skills/README.md` 的首段作为栏目介绍。
-- 首页和导航提供入口，搜索同时覆盖文章与 Skill 介绍，并标注内容类型。
-- 已有网站页面之间的相对链接转换为站内链接；规则、参考资料、评测与示例仍链接到 GitHub 对应文件。
-- 修改介绍或新增满足以上结构的 Skill 后，提交到 main 即自动更新，无需手工维护网页或列表。
+## 发布、分享与搜索收录
 
-完整规则不作为单独的博客文章导入，也不计入技术文章数量。
+构建自动生成 Sitemap、RSS、canonical、Open Graph 与 JSON-LD。每篇文章生成一张包含真实标题、专题和摘要的 1200 × 630 PNG 分享卡，标题或摘要变化后图片 URL 随内容哈希更新。CSS、入口脚本和搜索模块也使用内容版本文件名，避免发布后混用旧模块。
 
-## 系列阅读
+文章首次提交与最近更新读取完整 Git 历史，首次提交不等同于首次公开发布日期。源码依据只提取导读中明确记录的 `owner/repo @ 40位 commit`，不会自动跟随上游。简短的更新日期显示在文章头部，完整依据和修改记录可展开。
 
-`site/series.json` 定义系列名称、专题、文章路径和阅读顺序。构建只收录 `docs/` 中实际存在且有一级标题的文章，过滤缺失项后再生成编号、当前篇目、上一篇与下一篇。未发布的配置项不会出现在页面，也不会生成占位或失效链接。
+旧地址由 `site/redirects.json` 维护。GitHub Pages 不提供本项目自定义 HTTP 301，因此生成带 canonical 的静态跳转页，并保留查询参数和章节锚点。旧代码行链接在文章结构变化后可能需要重新定位。
 
-SGLang 系列顺序为请求执行全链路、Scheduler、ModelRunner、Attention 与 KV Cache、KV Cache 专题。按配置路径发布新文章后，会自动加入系列；如果文章使用其他文件名，需同步修改配置中的路径。
+首页、正文、专题、阅读路线和层级归档允许索引；404、旧地址跳转和细粒度标签页为 `noindex,follow`。标签页不进入 Sitemap。
 
-首页阅读地图、独立 `/series/` 阅读中心、文章目录和 SGLang 专题页展示已发布系列；文章顶部提供系列导航，底部提供相邻文章。首篇不显示上一篇，末篇不显示下一篇；Skills 不参与文章系列编号。
+Google Search Console 操作：
 
-阅读地图用编号展示推荐阅读顺序，不表示运行时调用关系。文末的「标记为已读」可撤销；地图显示已读数量，并链接到首篇未读文章。进度保存在当前浏览器，不跨设备同步；未读完不会自动标记完成。
-
-## 发布与阅读功能
-
-构建自动生成 `sitemap.xml`、`feed.xml`、Open Graph 与 JSON-LD。分享卡片使用站点封面，标题和摘要按页面生成。
-
-文章首次提交与最近更新读取完整 Git 历史；首次提交不等同于首次公开发布日期。源码依据仅提取文章导读中明确记录的 `owner/repo @ 40位 commit`，更新文章标注后随构建同步，不自动跟随上游版本。
-
-点击代码行号可高亮并分享该行链接；文章结构改动可能使旧的代码块编号发生变化。正文源码引用保留固定版本链接。阅读位置保存在当前浏览器，重新打开时点击“继续上次阅读”恢复。Alt + 左右方向键切换系列前后篇，输入框、选中文本和弹窗打开时不触发。
-
-## Google Search Console
-
-网站已输出完整静态正文、canonical、Sitemap、RSS 与 JSON-LD。首页、正文、专题页与四层阅读归档允许索引；404 与标签筛选页保持 `noindex,follow`。标签页主要承担站内导航，当前标签粒度较细，不进入 Sitemap，避免大量单篇/双篇薄归档稀释年轻站点的索引信号。发布前运行 `python scripts/check_site.py` 检查元数据、站内链接和 Sitemap。
-
-1. 在 Google Search Console 添加网址前缀属性 `https://akiyangdev.github.io/llm-inference-notes/`。
-2. 选择 HTML 标记验证，将 Google 提供的 content 值填入 `site/search-console.json` 的 `google_site_verification`，提交并等待部署后验证。空配置不会输出伪造标签。
+1. 添加网址前缀属性 `https://akiyangdev.github.io/llm-inference-notes/`。
+2. 将 HTML 标记验证的 content 值填入 `site/search-console.json` 中的 `google_site_verification`，部署后验证。空值不输出标签。
 3. 提交 `https://akiyangdev.github.io/llm-inference-notes/sitemap.xml`。
-4. 使用网址检查查看首页和代表文章，按需请求编入索引。提交不保证收录或排名。
+4. 用网址检查核对首页和代表文章的实际收录状态。提交不保证收录或排名。
 
-这是 GitHub Pages 的项目子目录。有效的 robots.txt 必须位于域名根目录 `/robots.txt`；不要把本项目内的 robots.txt 当作有效全站规则。无 robots.txt 不等于禁止抓取，本项目通过 Search Console 提交 Sitemap。
+有效的 robots.txt 位于域名根目录 `/robots.txt`，本项目子目录中的同名文件不能控制全站。参考 [Google Sitemap 文档](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap) 和[所有权验证说明](https://support.google.com/webmasters/answer/9008080)。
 
-参考：[Google Sitemap 文档](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap)、[所有权验证](https://support.google.com/webmasters/answer/9008080)。
+## Skills 与素材
 
-## 动效
+`skills/<slug>/README.md` 与同目录 `SKILL.md` 同时存在时，自动生成 `/skills/<slug>/`；首页、目录及搜索收录介绍页。完整规则、参考资料和评测仍链接到 GitHub，不计入技术文章数量。
 
-按钮与卡片提供轻量操作反馈，阅读地图按已读数量更新进度条，弹窗短促淡入。页面正文直接呈现；减少动态效果设置关闭全部动画和过渡。
+首页使用所有者提供的完整鲸鱼娘立绘和 Q 版动画。手机端缩小立绘并与文字并排展示。视频只在可视区域加载与静音循环，离开区域或切至后台暂停；减少动态效果时先显示封面，可手动播放。角色与衍生素材来源见 [SOURCES.md](assets/SOURCES.md) 和网站 `/credits/`，历史素材继续存档。本站为独立个人技术站，非 DeepSeek 官方。
 
-
-## 编辑部视觉系统
-
-首页采用雾白、明蓝、深色文字与蓝白鲸鱼娘看板，最新文章保持自动生成；完整阅读地图位于 `/series/`，首页用简洁入口连接。手机端首屏上下排列，正文延续独立阅读排版。
-
-`whale-hero-v3.webp`（1774 × 887）为首页高清看板图：桌面端按顶部对齐铺入 Hero，保留完整头饰；左侧渐变在人物前收束；移动端使用同一资源做右侧焦点裁切，避免再下载一张移动端大图。`whale-states.webp` 仍为 Q 版四宫格，CSS 的 `.mascot-*` 用于阅读入口、搜索、完成操作与 404；`whale-editor.webp` 保留为此前首屏版本的历史素材。素材来源页区分角色设计与 AI 延展素材。减少动态效果设置关闭动画与过渡。
-
-## 阅读体验与回归检查
-
-文章目录直接展示文章；全量标签默认折叠，阅读地图使用单独入口。手机导航提供菜单、搜索与主题切换，菜单包含文章、阅读地图、稍后读、Skills 和订阅入口。对外层级名称为「入门 / 进阶 / 深入研究 / 速查」，内部 role 标识和已发布 URL 保持稳定。
-
-搜索支持空格分隔的多个关键词，每篇内容只显示一个最佳结果；标题优先，其次章节标题，再次正文。章节命中继续跳到具体章节，结果数按文章和 Skill 数量统计。
-
-独占行的 `$$` 和 `\[` / `\]` 公式块在 Markdown 解析前保留原始 TeX；代码围栏里的示例不参与公式渲染。KaTeX 加载失败时保留公式源码。旧文章地址的脚本跳转保留查询参数与章节锚点，无 JavaScript 时仍提供跳转和手动链接。
-
-PR 检查与正式发布均运行文档、站点构建、站内锚点与静态资源、数学公式、搜索排序及 JavaScript 语法检查：
+## 发布前检查
 
 ```bash
-python3 scripts/check_docs.py
+python3 scripts/check_docs.py --strict-style
 python3 scripts/check_math.py
 python3 site/build.py
 python3 scripts/check_site.py
@@ -118,17 +85,6 @@ node scripts/check_search.mjs
 node --input-type=module --check < site/assets/app.js
 ```
 
-这些检查不能代替真实浏览器的视觉、交互、CDN 可达性与 Search Console 收录验证。
+PowerShell 中最后一条改用 `Get-Content -Raw site/assets/app.js | node --input-type=module --check`。
 
-## 目录与阅读工具
-
-目录使用侧栏分类和文章列表，可在当前分类内按标题、摘要、标签即时筛选，按推荐顺序、最近更新或阅读时长排序。筛选条件写入 URL，刷新后保留；“搜索全文”进入全站搜索。
-
-卡片与阅读工具栏支持稍后读；阅读页支持 16–22px 正文字号、专注阅读和章节链接复制。收藏、字号、已读标记及阅读位置仅存于当前浏览器，不登录、不跨设备同步，清除站点数据会删除这些记录。首页在存在记录时提供继续阅读入口。
-
-全站搜索可用 `/` 或 `Ctrl/⌘ + K` 打开；系列前后篇使用 `Alt + Shift + ←/→`，保留浏览器原有后退快捷键。
-
-
-## 用户指定的首页素材（2026-10-24）
-
-首页使用用户提供的全身立绘与 Q 版视频。立绘按原图比例完整显示；视频采用本地 H.264 文件，只在进入可视区域时加载并静音循环，离开区域或切到后台时暂停。系统减少动态效果时默认保留封面，可通过播放按钮主动播放；禁用 JavaScript 时保留静态封面。完整来源与转码记录见 `site/assets/SOURCES.md`。
+检查覆盖本地链接、站内锚点、分类归属、SEO 元数据、分享卡尺寸、静态公式与高亮资源、搜索别名和旧地址跳转。浏览器还需检查手机与桌面布局、暗色模式、搜索与目录弹窗、图表放大、键盘焦点、减少动态效果和禁用 JavaScript 的阅读体验；自动检查不证明技术文章结论或搜索引擎收录状态。

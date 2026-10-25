@@ -8,6 +8,8 @@
 
 本文展开的是 2026 年 10 月 21 日保存的 DeepSeek-V4-Flash / Ascend 910C 实验，使用当时冻结的本地 SGLang 适配。数据、调度验证与结果整理在[证据摘录](../../assets/decode-fast-throughput-limited-by-prefill/evidence.json)中。相关优化的横向对照见[调优总复盘](ascend-910c-inference-tuning-effective-optimizations-and-costs.md)，这里跟着这一个问题走到底。
 
+如果正在排查类似现象，先读第一节的 TTFT、TPOT 与系统吞吐关系，再看 P 端排队和尾块的证据。whole 与 native 的统计窗口贯穿后面的比较，不熟悉时可对照[指标口径说明](aisbench-whole-native-tpot-itl.md)；这里的收益数字仅对应本文保存的模型、负载和配置。
+
 ## 一、先看清这 8.7ms 包含了什么
 
 部署采用真实的 Prefill / Decode 分离：P、D 各 8 张 Ascend 910C，共 16 张物理卡。本文所有单卡吞吐都用系统输出吞吐除以这 16 张卡。模型使用同一份 W8A8 权重，负载是容易预测的原文复制展示集，正文 16384 token，经本次聊天编码后为 16388 token，实际输出固定为 1024 token。

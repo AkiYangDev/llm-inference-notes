@@ -8,9 +8,12 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import markdown
 from math_blocks import MathBlocksExtension
 from publishing import history, evidence_panel, metadata, feeds, PAGES, verification_meta
+from reading import reading_minutes, source_status, mobile_directory
+from social_cards import make_card
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '_site'
@@ -38,20 +41,25 @@ def title_html(title):
     return text
 
 
-def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=None, browser_title=None, meta_description=None, indexable=True):
-    version = hashlib.sha256((ROOT / 'site/assets/style.css').read_bytes() + (ROOT / 'site/assets/app.js').read_bytes() + (ROOT / 'site/assets/search.mjs').read_bytes()).hexdigest()[:12]
+def asset_version():
+    files = ['site/assets/style.css', 'site/assets/app.js', 'site/assets/search.mjs', 'pnpm-lock.yaml']
+    return hashlib.sha256(b''.join((ROOT / name).read_bytes() for name in files)).hexdigest()[:12]
+
+
+def shell(title, body, kind='home', route='', description=DESCRIPTION, dates=None, browser_title=None, meta_description=None, indexable=True, social_image=None):
+    version = asset_version()
     browser_title = browser_title or title
     meta_description = meta_description or description
     return f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(browser_title)} · AkiYang</title><meta name="description" content="{esc(meta_description)}">
-{metadata(title, meta_description, kind, route, ORIGIN, BASE, dates, indexable=indexable)}
+{metadata(title, meta_description, kind, route, ORIGIN, BASE, dates, indexable=indexable, social_image=social_image)}
 {verification_meta(ROOT)}
 <link rel="canonical" href="{ORIGIN}{BASE}{route}"><meta name="color-scheme" content="light dark">
 <link rel="icon" href="{BASE}assets/favicon.svg" type="image/svg+xml">
 <script>try{{const t=localStorage.getItem('aki-theme');document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}}catch(e){{}}</script>
-<link rel="stylesheet" href="{BASE}assets/style.css?v={version}">
-<script type="module" src="{BASE}assets/app.js?v={version}"></script></head><body class="{kind}" id="top">
+<link rel="stylesheet" href="{BASE}assets/style.{version}.css">
+<script type="module" src="{BASE}assets/app.{version}.js"></script></head><body class="{kind}" id="top">
 <a class="skip" href="#main">跳至正文</a><header class="header"><div class="header-inner">
 <a class="brand" href="{BASE}" aria-label="AkiYang 首页"><span class="brand-icon" aria-hidden="true">A<span>.</span></span><span>AkiYang<span class="brand-caption">推理工程手记</span></span></a>
 <nav aria-label="主导航"><a class="nav-home" href="{BASE}"{' aria-current="page"' if kind == 'home' else ''}>首页</a><a class="nav-articles" href="{BASE}articles/"{' aria-current="page"' if kind == 'archive-page' else ''}>文章</a><a class="nav-series" href="{BASE}series/"{' aria-current="page"' if kind == 'series-index-page' else ''}>阅读地图</a><a class="nav-skills" href="{BASE}skills/"{' aria-current="page"' if 'skill' in kind else ''}>Skills</a><a class="nav-github" href="{REPO}" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a><button class="search-trigger" type="button" aria-label="搜索文章与 Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索</span><kbd>/</kbd></button><button class="theme-toggle icon-button" aria-label="切换深色模式" title="切换深色模式"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button><button class="menu-toggle" aria-label="打开导航菜单" aria-controls="menu-dialog" hidden>菜单</button></nav></div></header>
@@ -132,7 +140,7 @@ def render_document(path, routes):
     md = markdown.Markdown(extensions=['fenced_code', 'tables', 'toc', 'sane_lists', 'md_in_html', MathBlocksExtension()], extension_configs={'toc': {'permalink': False}})
     rendered = md.convert(re.sub(r'^# .+\n', '', source, count=1))
     rendered = re.sub(r'<pre><code class="language-mermaid">([\s\S]*?)</code></pre>', r'<div class="diagram"><pre class="mermaid">\1</pre></div>', rendered)
-    rendered = re.sub(r'(<table>[\s\S]*?</table>)', r'<div class="table-scroll" tabindex="0" role="region" aria-label="可横向滚动的表格">\1</div>', rendered)
+    rendered = re.sub(r'(<table>[\s\S]*?</table>)', r'<div class="table-wrap"><p class="table-hint" hidden>表格可左右滑动 →</p><div class="table-scroll" tabindex="0" role="region" aria-label="可横向滚动的表格">\1</div></div>', rendered)
     def link(match):
         attr, destination = match.group(1), html.unescape(match.group(2))
         if destination.startswith(('http:', 'https:', '#', 'mailto:', 'data:', '/')):
@@ -140,13 +148,16 @@ def render_document(path, routes):
         file_part, _, fragment = destination.partition('#')
         target = (path.parent / file_part).resolve()
         dest = target.relative_to(ROOT).as_posix()
-        if attr == 'href' and target in routes:
+        if target.suffix.lower() in ('.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif') and dest.startswith('assets/'):
+            resolved = BASE + 'media/' + quote(dest.removeprefix('assets/'))
+        elif attr == 'href' and target in routes:
             resolved = routes[target]
         else:
             prefix = REPO + '/blob/main/' if attr == 'href' else 'https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/'
             resolved = prefix + quote(dest)
         return attr + '="' + esc(resolved + ('#' + fragment if fragment else '')) + '"'
     rendered = re.sub(r'(href|src)="([^"]+)"', link, rendered)
+    rendered = re.sub(r'<img ', '<img loading="lazy" decoding="async" ', rendered)
     rendered = re.sub(r'<a href="(https://github.com/[^" ]+/blob/[a-f0-9]{40}/[^" ]+)"', r'<a class="source-reference" title="跳转到文章引用的固定版本源码" href="\1"', rendered)
     return md, rendered
 
@@ -180,7 +191,7 @@ def build_skills(paths, routes):
         body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}skills/">Skills</a><span>/</span><span>介绍与使用</span></nav><header class="article-header skill-header"><p class="eyebrow">AGENT SKILL</p><h1>{esc(title)}</h1><div class="article-meta"><span>AI Infra · 工程方法</span><a href="{source_dir}" target="_blank" rel="noopener noreferrer">GitHub 目录 ↗</a><a href="{rules_url}" target="_blank" rel="noopener noreferrer">查看规则 ↗</a><button class="copy-link">复制链接</button></div></header><details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article><div class="article-end"><a href="{BASE}skills/" class="text-link">← 全部 Skills</a><a href="{source_dir}" class="text-link" target="_blank" rel="noopener noreferrer">在 GitHub 查看文件 ↗</a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
         dest = OUT / 'skills' / slug / 'index.html'
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(shell(title, body, 'article-page skill-page', f'skills/{slug}/', excerpt), encoding='utf-8')
+        dest.write_text(shell(title, body + mobile_directory(md.toc), 'article-page skill-page', f'skills/{slug}/', excerpt), encoding='utf-8')
     intro = '可复用的工程方法，面向源码研究、技术写作与内容审核。'
     root_readme = ROOT / 'skills/README.md'
     if root_readme.exists():
@@ -257,6 +268,8 @@ def reading_map(series, articles):
 
 
 def build():
+    if not (ROOT / 'node_modules/mermaid').exists():
+        raise RuntimeError('Install site dependencies first: pnpm install --frozen-lockfile --ignore-scripts')
     PAGES.clear()
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -264,6 +277,16 @@ def build():
     for path in (ROOT / 'site/assets').iterdir():
         if path.suffix != '.md':
             shutil.copy2(path, OUT / 'assets' / path.name)
+    version = asset_version()
+    shutil.copy2(ROOT / 'site/assets/style.css', OUT / f'assets/style.{version}.css')
+    shutil.copy2(ROOT / 'site/assets/search.mjs', OUT / f'assets/search.{version}.mjs')
+    app = (ROOT / 'site/assets/app.js').read_text(encoding='utf-8').replace("'./search.mjs'", f"'./search.{version}.mjs'")
+    (OUT / f'assets/app.{version}.js').write_text(app, encoding='utf-8')
+    for path in (ROOT / 'assets').rglob('*'):
+        if path.is_file() and path.suffix.lower() in ('.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif'):
+            target = OUT / 'media' / path.relative_to(ROOT / 'assets')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
 
     # The high-quality homepage hero is stored as small text payload chunks so
     # repository tooling can transport it reliably. Rebuild one normal WebP for
@@ -308,13 +331,14 @@ def build():
         # editorial topic differs from the physical docs directory.
         slug = path.parent.name + '/' + path.stem
         url = routes[path.resolve()]
-        minutes = max(1, round(len(re.sub(r'(```|~~~)[\s\S]*?\1', '', source)) / 650))
+        minutes = reading_minutes(source)
         md, rendered = render_document(path, routes)
         parser = SearchSections()
         parser.feed(rendered)
         sections = parser.result()
         excerpt = entry.get('summary') or sections[0]['text'][:110]
         a = {'title': title, 'topic': topic, 'topic_id': topic_id, 'url': url, 'minutes': minutes, 'excerpt': excerpt, 'sections': sections}
+        a['path'] = article_path
         a['category'] = entry.get('category', {'ascend': '部署实践', 'fundamentals': '基础原理'}.get(topic_id, '推理工程'))
         role = entry.get('role')
         if role not in CONTENT_ROLES:
@@ -340,7 +364,10 @@ def build():
         body = f'''<div class="reading-progress" aria-hidden="true"></div><main id="main" class="article-layout wrap"><div class="article-column"><nav class="breadcrumbs" aria-label="当前位置"><a href="{BASE}articles/">文章</a><span>/</span><a href="{BASE}topics/{topic_id}/">{esc(topic)}</a></nav><header class="article-header"><h1>{display_title}</h1><div class="article-meta"><span>AkiYang</span><span>约 {minutes} 分钟阅读</span><a href="{REPO}/blob/main/{path.relative_to(ROOT).as_posix()}" target="_blank" rel="noopener noreferrer">阅读源码文档 ↗</a><button class="copy-link">复制链接</button></div><nav class="article-tags header-tags" aria-label="文章标签"><a class="content-tag" href="{BASE}levels/{a['role']}/">{esc(a['role_label'])}</a>{tag_links(a["tags"])}</nav><details class="source-details"><summary>版本与源码依据</summary>{publication}</details><div class="resume-reading" hidden><button class="resume-position">继续上次阅读</button><button class="forget-position">清除位置</button><span>位置仅保存在当前浏览器</span></div></header>{reading_toolbar(url, title)}{series_nav}<details class="mobile-toc"><summary>本页目录 <span aria-hidden="true">⌄</span></summary>{md.toc}</details><article class="prose">{rendered}</article>{pager}<!--related-articles--><div class="article-end"><div><span class="eyebrow">读到这里</span><p>从一条请求，看见整个系统。</p></div><a href="{BASE}articles/" class="text-link">返回文章目录 <span aria-hidden="true">↗</span></a></div></div><aside class="toc-panel" aria-label="章节导航"><span class="toc-label">本页目录</span>{md.toc}<a class="back-top" href="#top">↑ 回到顶部</a></aside></main>'''
         output = OUT / 'articles' / slug / 'index.html'
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(shell(title, body, 'article-page', 'articles/' + slug + '/', excerpt, dates, browser_title=entry.get('seo_title'), meta_description=entry.get('seo_summary', excerpt)), encoding='utf-8')
+        body = body.replace('<details class="source-details">', source_status(source, dates) + '<details class="source-details">')
+        body += mobile_directory(md.toc)
+        cover = make_card(OUT, slug, title, topic, excerpt)
+        output.write_text(shell(title, body, 'article-page', 'articles/' + slug + '/', excerpt, dates, browser_title=entry.get('seo_title'), meta_description=entry.get('seo_summary', excerpt), social_image=cover), encoding='utf-8')
     for a in articles:
         output = OUT / a['url'].removeprefix(BASE) / 'index.html'
         output.write_text(output.read_text(encoding='utf-8').replace('<!--related-articles-->', related_articles(a, articles)), encoding='utf-8')
@@ -360,6 +387,21 @@ def build():
         dest.write_text(redirect_html, encoding='utf-8')
 
     topics = sorted({a['topic_id'] for a in articles})
+    discovery = json.loads((ROOT / 'site/discovery.json').read_text(encoding='utf-8'))
+    by_path = {a['path']: a for a in articles}
+    for path in discovery['featured'] + [p for guide in discovery['guides'] for p in guide['items']]:
+        if path not in by_path:
+            raise ValueError('Discovery links to an unpublished article: ' + path)
+    featured_cards = ''.join(card(by_path[p]) for p in discovery['featured'])
+    guide_tiles = ''.join(f'<a href="{BASE}guides/#{g["id"]}"><span>{i:02d}</span><strong>{esc(g["title"])}</strong><span>{esc(g["description"])}</span><b aria-hidden="true">→</b></a>' for i, g in enumerate(discovery['guides'], 1))
+    guide_sections = []
+    for guide in discovery['guides']:
+        members = [by_path[p] for p in guide['items']]
+        links = ''.join(f'<li><a href="{a["url"]}"><span class="guide-number">{i:02d}</span><div><h3>{title_html(a["title"])}</h3><p>{esc(a["excerpt"])}</p><span class="guide-meta">{esc(a["role_label"])} · 约 {a["minutes"]} 分钟</span></div><span aria-hidden="true">↗</span></a></li>' for i, a in enumerate(members, 1))
+        guide_sections.append(f'<section class="problem-guide" id="{guide["id"]}"><div class="guide-intro"><h2>{esc(guide["title"])}</h2><p>{esc(guide["description"])}</p><span>{len(members)} 篇 · 由浅入深</span></div><ol>{links}</ol></section>')
+    guides_body = f'<main id="main" class="archive wrap"><div class="archive-heading"><div><p class="eyebrow">按问题阅读</p><h1>现在想解决什么问题？</h1><p>从当前问题出发，沿已有文章找到概念、源码和实测依据。</p></div><a class="text-link" href="{BASE}series/">全部系列 →</a></div><nav class="guide-jumps" aria-label="选择当前问题">' + ''.join(f'<a href="#{g["id"]}">{esc(g["title"])}</a>' for g in discovery['guides']) + '</nav>' + ''.join(guide_sections) + f'<p class="map-note">需要查一个术语？<a href="{BASE}levels/reference/">打开速查文章 →</a></p></main>'
+    (OUT / 'guides').mkdir()
+    (OUT / 'guides/index.html').write_text(shell('按问题阅读', guides_body, 'guides-page', 'guides/'), encoding='utf-8')
     topic_links = ''.join(f'<a class="topic-link" href="{BASE}topics/{t}/">{esc(TOPICS.get(t,t))}<span>{sum(a["topic_id"] == t for a in articles):02d}</span></a>' for t in topics)
     role_links = ''.join(f'<a class="topic-link" href="{BASE}levels/{role}/">{esc(spec["label"])}<span>{sum(a["role"] == role for a in articles):02d}</span></a>' for role, spec in CONTENT_ROLES.items())
     # Keep the homepage entry point stable as new topic directories are added.
@@ -376,12 +418,13 @@ def build():
     routes_preview = ''.join(f'<a class="route-preview" href="{group["url"]}"><span>{len(group["items"]):02d} 篇</span><strong>{esc(group["title"])}</strong><span aria-hidden="true">→</span></a>' for group in series_list[:3])
     body = f'''<main id="main">
 <section class="hero hero-user-art wrap" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">AI INFRA / ENGINEERING NOTES</p><h1 id="hero-title">大模型推理<span>工程手记。</span></h1><p class="hero-description">SGLang 源码、Ascend 910C 部署<br>与 DeepSeek 推理实践。</p><div class="hero-actions"><a class="button-primary" href="{featured_url}">从基础开始 <span aria-hidden="true">↗</span></a><a class="text-link" href="{BASE}articles/">浏览全部文章 →</a></div><div class="hero-stats"><span><strong>{len(articles):02d}</strong> 篇手记</span><span><strong>{len(topics):02d}</strong> 个专题</span><a href="{BASE}feed.xml">RSS 订阅 ↗</a></div></div><div class="hero-art"><img src="{BASE}assets/whale-standing-user.png" alt="蓝发鲸鱼娘穿着蓝白长裙，微笑着向读者挥手" width="270" height="480" fetchpriority="high" decoding="async"></div><span class="hero-caption" aria-hidden="true">FIELD NOTES · SOURCE &amp; SYSTEMS</span></section>
-<div class="home-entry wrap"><a href="{BASE}levels/entry/"><span>01 / START</span><strong>第一次来，从基础开始</strong><span>Token、推理阶段与多卡并行 →</span></a><a href="{BASE}series/"><span>02 / EXPLORE</span><strong>沿着源码，串起系统</strong><span>请求、调度、模型与缓存 →</span></a><a href="{BASE}levels/reference/"><span>03 / REFERENCE</span><strong>遇到概念，随时查阅</strong><span>名词、通信与并行拓扑 →</span></a></div>
+<nav class="problem-entries wrap" aria-label="按当前问题阅读">{guide_tiles}</nav><section class="featured-section wrap" aria-labelledby="featured-title"><div class="section-heading"><div><p class="eyebrow">从这里读起</p><h2 id="featured-title">精选手记</h2></div><a class="text-link" href="{BASE}guides/">找到适合自己的入口 →</a></div><div class="featured-grid">{featured_cards}</div></section>
 <div class="home-columns wrap"><section class="articles-section" aria-labelledby="latest-title"><div class="section-heading"><div><p class="eyebrow">THE JOURNAL</p><h2 id="latest-title">最新手记</h2></div><a href="{BASE}articles/" class="text-link">全部 {len(articles)} 篇 ↗</a></div><div class="article-list home-article-list">{cards}</div><a class="journal-more" href="{BASE}articles/">浏览全部手记<span>{len(articles)} 篇已发布文章 ↗</span></a></section><aside class="home-sidebar" aria-label="阅读入口"><section class="whale-companion" aria-label="Q 版鲸鱼娘"><div class="companion-heading"><span>一只路过的小鲸鱼</span><button class="whale-motion-toggle" type="button" aria-label="播放鲸鱼娘动画" aria-pressed="false" hidden>播放动画</button></div><video class="whale-loop" data-src="{BASE}assets/whale-chibi-loop.mp4" poster="{BASE}assets/whale-chibi-poster.jpg" width="640" height="360" preload="none" muted loop playsinline aria-label="Q 版鲸鱼娘静音循环动画"></video><a class="companion-credit" href="{BASE}credits/">素材来源 ↗</a></section><a class="last-reading" data-last-reading hidden><span>继续上次阅读</span><strong></strong><span>回到阅读位置 →</span></a><section class="sidebar-panel"><p class="eyebrow">BROWSE BY TOPIC</p><h2>按专题探索</h2><div class="topic-tiles">{topic_tiles}</div></section><section class="sidebar-panel atlas-teaser"><span class="mascot mascot-reading" aria-hidden="true"></span><p class="eyebrow">THE READING ATLAS</p><h2>把知识连成一条线</h2><p>按推荐顺序阅读已发布系列。</p>{routes_preview}<a class="text-link" href="{BASE}series/">完整阅读地图 →</a></section><a class="saved-entry" href="{BASE}articles/?saved=1">稍后阅读 <span>打开已收藏的文章 →</span></a></aside></div>
 </main>'''
     if skills:
         skill_section = f'''<section class="home-skills wrap" aria-labelledby="home-skills-title"><div class="section-heading"><div><p class="eyebrow">TOOLS &amp; METHODS</p><h2 id="home-skills-title">可复用的工程方法</h2></div><a class="text-link" href="{BASE}skills/">全部 Skills ↗</a></div><div class="skills-grid">{''.join(skill_card(skill) for skill in skills)}</div></section>'''
         body = body.replace('</main>', skill_section + '</main>')
+    body = body.replace('AI INFRA / ENGINEERING NOTES', 'SGLang · Ascend · DeepSeek').replace('THE JOURNAL', '持续记录').replace('BROWSE BY TOPIC', '按方向查找').replace('THE READING ATLAS', '系列阅读').replace('TOOLS &amp; METHODS', '工程方法')
     series_page = f'''<main id="main" class="archive wrap"><a class="back-link" href="{BASE}">← 首页</a><div class="archive-heading"><div><p class="eyebrow">THE READING ATLAS</p><h1>源码阅读地图</h1><p>从整体请求到模型内部，沿着已发布的文章深入系统。</p></div></div>{knowledge_map}<p class="map-note">这里展示文章的推荐阅读顺序，并非运行时调用图。读完文章后可在文末标记已读。</p></main>'''
     (OUT / 'series').mkdir(exist_ok=True)
     (OUT / 'series/index.html').write_text(shell('源码阅读地图', series_page, 'series-index-page', 'series/'), encoding='utf-8')
@@ -434,6 +477,7 @@ def build():
     error = f'<main id="main" class="error-page wrap"><span class="mascot mascot-lost" aria-hidden="true"></span><span class="eyebrow">404 / PAGE NOT FOUND</span><h1>这一页，游到别处去了。</h1><p>链接可能已经变更，可以从文章目录继续阅读。</p><a class="button-primary" href="{BASE}articles/">浏览文章 →</a></main>'
     (OUT / '404.html').write_text(shell('页面未找到', error, route='404.html'), encoding='utf-8')
     feeds(OUT, articles, ORIGIN, BASE)
+    subprocess.run(['node', str(ROOT / 'scripts/enhance_site.mjs')], cwd=ROOT, check=True)
     print(f'Built {len(articles)} article(s), {len(topics)} topic(s), {len(skills)} skill(s) into {OUT}')
 
 if __name__ == '__main__':

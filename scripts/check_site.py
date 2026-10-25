@@ -10,7 +10,7 @@ ROOT = REPO_ROOT / '_site'
 BASE = '/llm-inference-notes/'
 ORIGIN = 'https://akiyangdev.github.io'
 _redirects_path = REPO_ROOT / 'site/redirects.json'
-REDIRECTS = json.loads(_redirects_path.read_text()) if _redirects_path.exists() else {}
+REDIRECTS = json.loads(_redirects_path.read_text(encoding='utf-8')) if _redirects_path.exists() else {}
 REDIRECT_INDEXES = {
     old.strip('/') + '/index.html': new.strip('/') + '/'
     for old, new in REDIRECTS.items()
@@ -38,7 +38,7 @@ class Page(HTMLParser):
 
 urls = {node.text for node in ET.parse(ROOT / 'sitemap.xml').findall('.//{*}loc')}
 pages = list(ROOT.rglob('*.html'))
-parsed_pages = {path: Page(path.read_text()) for path in pages}
+parsed_pages = {path: Page(path.read_text(encoding='utf-8')) for path in pages}
 for path in pages:
     relative = path.relative_to(ROOT).as_posix()
     route = relative.removesuffix('index.html')
@@ -94,7 +94,7 @@ print(f'Site checks passed: {len(pages)} pages, {len(urls)} sitemap URLs, {len(i
 
 # Tag archives must contain exactly their members, and card links cannot nest.
 import hashlib
-articles = [a for a in json.loads((ROOT / 'search.json').read_text()) if a.get('kind') != 'skill']
+articles = [a for a in json.loads((ROOT / 'search.json').read_text(encoding='utf-8')) if a.get('kind') != 'skill']
 ROLES = {'entry', 'advanced', 'deep', 'reference'}
 assert {a.get('role') for a in articles} <= ROLES, 'Unknown content role in search index'
 assert all(a.get('role') in ROLES for a in articles), 'Every article needs a content role'
@@ -133,15 +133,38 @@ class Cards(HTMLParser):
 for tag in {t for a in articles for t in a['tags']}:
     slug = hashlib.sha256(tag.encode('utf-8')).hexdigest()[:12]
     route = f'tags/{slug}/'
-    parsed = Cards((ROOT / route / 'index.html').read_text())
+    parsed = Cards((ROOT / route / 'index.html').read_text(encoding='utf-8'))
     assert set(parsed.urls) == {a['url'] for a in articles if tag in a['tags']}, tag
     assert parsed.active == [BASE + route], (tag, parsed.active)
 
 for role in ROLES:
     route = f'levels/{role}/'
-    parsed = Cards((ROOT / route / 'index.html').read_text())
+    parsed = Cards((ROOT / route / 'index.html').read_text(encoding='utf-8'))
     assert set(parsed.urls) == {a['url'] for a in articles if a['role'] == role}, role
     assert parsed.active == [BASE + route], (role, parsed.active)
 
-for page in pages: Cards(page.read_text())
+for page in pages: Cards(page.read_text(encoding='utf-8'))
 print('Tag/role membership, selected filters and non-nested navigation checks passed.')
+
+# Public article cards, formulas and highlighting must survive without a CDN.
+import struct
+covers = set()
+math_count = code_count = 0
+for path in article_pages:
+    page = parsed_pages[path]
+    cover = page.meta['og:image']
+    assert '/assets/cards/' in cover and cover not in covers, ('Missing unique article card', path)
+    covers.add(cover)
+    png = ROOT / urlsplit(cover).path.removeprefix(BASE)
+    assert struct.unpack('>II', png.read_bytes()[16:24]) == (1200, 630), png
+    content = path.read_text(encoding='utf-8')
+    math_count += content.count('math-rendered')
+    code_count += content.count('class="hljs') + content.count(' hljs"')
+    assert 'id="toc-dialog"' in content, ('Missing mobile directory', path)
+assert math_count > 0 and code_count > 0, 'Static math/code rendering did not run'
+vendor = ROOT / 'assets/vendor'
+assert (vendor / 'mermaid.js').is_file() and (vendor / 'katex.min.css').is_file()
+assert (vendor / 'fonts').is_dir()
+assert 'cdn.jsdelivr.net' not in (REPO_ROOT / 'site/assets/app.js').read_text(encoding='utf-8')
+assert (ROOT / 'guides/index.html').is_file()
+print(f'Reading checks passed: {len(covers)} unique PNG cards, {math_count} formula blocks, local rendering assets and mobile directories.')
