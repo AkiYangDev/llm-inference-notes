@@ -1,25 +1,18 @@
 # 小 Tensor 为什么保活大内存：SGLang PR #39120 的 View 缓存修复
 
-一个逻辑大小只有 0.8 MiB 的 Tensor，可能让约 7.8 MiB 的底层存储一直无法释放。原因是它来自一个更大的 batch Tensor 的切分：小 Tensor 保留了对整块 Storage 的引用。
+一个逻辑大小只有 0.8 MiB 的 Tensor，为什么会让约 7.8 MiB 内存迟迟不能释放？如果它由一个大 batch Tensor 切分而来，仍然引用整块 Storage，那么只要这个小 Tensor 留在缓存里，大块存储就会继续存活。
 
-SGLang [PR #39120](https://github.com/sgl-project/sglang/pull/39120) 修复了多模态 Embedding Cache 中的这一问题。旧缓存按可见元素大小记账，却可能保活更大的资源；补丁在需要时把入库的 View 复制成独立存储。下面用一个最小例子解释引用、内存计数和复制时机。
+SGLang [PR #39120](https://github.com/sgl-project/sglang/pull/39120) 修复了多模态 Embedding Cache 的这种占用。旧实现按 Tensor 可见元素大小记账，未必覆盖它实际保活的存储；补丁在必要时让入库的 View 拥有独立 Storage。下面从切分 batch 的例子开始，追踪内存为何留下，以及复制应该放在哪里。
 
-本文固定到 `sgl-project/sglang@24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97`。PyTorch View / Storage 语义参考官方 [Tensor Views](https://docs.pytorch.org/docs/main/tensor_view.html)、[Storage](https://docs.pytorch.org/docs/2.14/storage.html) 与 [`Tensor.expand`](https://docs.pytorch.org/docs/stable/generated/torch.Tensor.expand.html) 文档。
+源码固定在 `sgl-project/sglang@24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97`。View 与 Storage 的语义对应 PyTorch 官方 [Tensor Views](https://docs.pytorch.org/docs/main/tensor_view.html)、[Storage](https://docs.pytorch.org/docs/2.14/storage.html) 和 [`Tensor.expand`](https://docs.pytorch.org/docs/stable/generated/torch.Tensor.expand.html) 文档。
 
 ## 一、小 View 怎样保活整个 Batch
 
-先不看 SGLang。假设一次批量多模态编码处理 10 个 item，每个 item 产生 100 个 token，hidden size 为 4096，dtype 为 BF16。
+先构造一个与 SGLang 调用无关的小例子：一次批量多模态编码有 10 个 item，每个产生 100 个 token，hidden size 为 4096，dtype 为 BF16。
 
-整个 Batch Embedding 是：
+合并后的 Batch Embedding 形状为 `[1000,4096]`，大小为 `1000 × 4096 × 2 ≈ 7.81 MiB`。
 
-```text
-[1000, 4096]
-
-1000 × 4096 × 2 bytes
-≈ 7.81 MiB
-```
-
-现在把它拆成 10 份：
+按 item 拆成 10 份：
 
 ```python
 item_embeddings = torch.split(
@@ -29,19 +22,13 @@ item_embeddings = torch.split(
 )
 ```
 
-每个 item 的逻辑 shape 是 `[100, 4096]`，所以：
+每份的逻辑 shape 变为 `[100,4096]`，可见元素只有 `100 × 4096 × 2 ≈ 0.78 MiB`。
 
-```text
-payload
-= 100 × 4096 × 2 bytes
-≈ 0.78 MiB
-```
+只计算 `tensor.numel() * tensor.element_size()`，这个 Entry 大约占 0.78 MiB。问题在于，这个计算没有说明底层存储是否已独立。
 
-如果只看 `tensor.numel() * tensor.element_size()`，你自然会认为这个 Entry 大约只占 0.78 MiB。
+strided Tensor 除了 shape、dtype，还关联 Storage、stride 和 storage offset 等元数据。实际字节保存在 Storage 中，View 可以与 base Tensor 共享它。PyTorch 将 `split()` 列为 View operation，因此切分本身不会替每份数据分配独立存储。
 
-但 PyTorch Tensor 不只有 shape 和 dtype。更完整地看，一个 strided Tensor 还关联着 Storage、stride、storage offset 等元数据；承载底层字节的是 Storage。PyTorch 官方文档也明确说明：View 与 base Tensor 可以共享同一个底层 Storage，而 `split()` 属于 View operation。
-
-所以刚才的结构更接近：
+切分后的引用关系更接近下面这样：
 
 ```text
                     one Batch Storage
@@ -52,112 +39,55 @@ payload
  view0  view1  view2  view3           view8  view9
 ```
 
-创建这些 View 本来是好事：没有额外 copy，`split()` 很便宜。
+短期计算中，这种共享可以省去 copy，让 `split()` 保持便宜。但当某个 View 进入长期缓存，整块存储的生命周期也跟着延长。
 
-问题出现在：**一个短生命周期计算流里的 View 被放进了长期存在的 Cache。**
 
-假设 Batch 计算结束后，只剩 `view3` 还在 Cache：
 
-```text
-batch_embedding 对象不再需要
-        │
-        ▼
-view3 仍然存活
-        │
-        ▼
-它仍引用原来的 Batch Storage
-        │
-        ▼
-整块 Batch Storage 不能释放
-```
+假设 batch 计算结束，其他引用都已释放，Cache 中仍留着 view3。即使已经不需要 batch_embedding 对象，view3 也会继续引用原 Batch Storage，使整块存储无法释放。此时 Entry 的逻辑 payload 只有 0.78 MiB，因它存活的 Storage 却有 7.81 MiB。
 
-于是可能出现：
+如果 10 个 View 都来自同一个 Batch，它们共享一块 7.81 MiB Storage，核算底层存储时只能计一次。
 
-```text
-Cache Entry 逻辑 payload：0.78 MiB
-实际因它而继续存活的 Storage：7.81 MiB
-```
+长期运行时，Cache 还可能分别留下 Batch A、B、C 的一个小 View。每个 Entry 都保活自己的历史 Batch Storage，条目逻辑大小之和便可能远小于实际驻留量。
 
-10 个 View 若来自同一 Batch，会共享同一块 7.81 MiB Storage。统计底层占用时，这块存储只计一次。
-
-危险的是 Cache 长时间运行之后：
-
-```text
-Batch A → 只剩一个小 View 被缓存 → pin 住 Batch A Storage
-Batch B → 只剩一个小 View 被缓存 → pin 住 Batch B Storage
-Batch C → 只剩一个小 View 被缓存 → pin 住 Batch C Storage
-...
-```
-
-这时账面上的多个小 Entry，就可能分别延长多个历史 Batch Storage 的生命周期。
-
-这属于 **unintended retention**：缓存引用延长了 Storage 的生命周期，使整块 Batch 存储持续驻留。
+这类 unintended retention 来自缓存延长了 Storage 的引用生命周期，原本可以随 batch 释放的存储被留了下来。
 
 ## 二、逻辑大小与底层 Storage
 
-缓存记账涉及两个不同的字节数。
+理解旧记账方式，需要先分清两个字节数。
 
-第一个：
+两种字节数对应不同对象：
 
-```python
-tensor.numel() * tensor.element_size()
-```
+| 读取方式 | 表示什么 | 本例 |
+| --- | --- | --- |
+| `tensor.numel() * tensor.element_size()` | Tensor 逻辑视图的 payload；`Tensor.nbytes` 也采用这一定义 | `[100,4096]`，约 0.78 MiB |
+| `tensor.untyped_storage().nbytes()` | backing UntypedStorage 的字节数 | 原 `[1000,4096]` Batch Storage，约 7.81 MiB |
 
-它描述的是 Tensor 逻辑 view 中有多少元素数据。PyTorch 的 `Tensor.nbytes` 也是按 `numel() * element_size()` 定义。
+普通独立 Tensor 的两者通常近似相等，从大 Batch 切出的 View 则可能相差很多。
 
-第二个：
-
-```python
-tensor.untyped_storage().nbytes()
-```
-
-`untyped_storage()` 返回 Tensor 的底层 UntypedStorage；Storage 是保存实际字节的数据容器。
-
-对一个普通独立 Tensor：`payload bytes ≈ storage bytes`
-
-但对一个从大 Batch 切出来的 View：
-
-```text
-View shape: [100, 4096]
-Logical payload: 0.78 MiB
-
-Underlying Storage:
-[1000, 4096]
-Storage bytes: 7.81 MiB
-```
-
-于是：
-
-```text
-Logical Tensor Size
-        ≠
-Physical Backing Storage Size
-```
-
-这也解释了旧版 Cache 为什么会低估 retained memory。修复前的 helper 是：
+旧 Cache 采用下面的 helper，以可见元素计算 Entry 成本：
 
 ```python
 def _get_tensor_size(embedding):
     return embedding.element_size() * embedding.numel()
 ```
 
-也就是默认：`Cache Cost = Tensor Payload`
+也就是按 `Cache Cost = Tensor Payload` 记账。但决定能否释放内存的，还包括 Entry 保留了哪些底层资源。
 
-但 Cache 需要约束的是：`只要这个 Entry 还活着，哪些底层资源必须继续活着？`
 
-`reshape()` 可能返回 View，也可能创建新 Tensor。资源核算因此检查最终 Storage 身份与字节数，确认结果是否仍与原 Tensor 共享存储。
+
+`reshape()` 也可能返回 View，或者创建新的 Tensor。核算资源时仍需检查最终 Storage 的身份与字节数，不能仅凭操作名称判断数据是否独立。
 
 ## 三、缓存记账怎样遗漏真实占用
 
-回到固定 merge commit 的 SGLang 源码。
+沿固定 merge commit 的调用路径看，这个差异就发生在多模态编码结果入库时。
 
-`mm_schedule.py` 在批量多模态编码得到一个整体 Tensor 时，会先：
+`mm_schedule.py` 批量编码得到整体 Tensor 后，先执行：
 
 ```python
 all_miss_embedding = data_embedding_func(miss_items)
 ```
 
-如果返回值不是 per-item list，而是一个整体 Tensor，就会执行：
+当返回结果是一个整体 Tensor，而非 per-item list 时，继续按 item 切分：
 
 ```python
 split_embeddings = torch.split(
@@ -167,9 +97,9 @@ split_embeddings = torch.split(
 )
 ```
 
-固定版本源码甚至直接写了注释：一个 `torch.split` View 会让整个 concatenated buffer 在任意单个 item 仍被缓存时继续存活。对应源码可见 [`mm_schedule.py`](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/python/sglang/srt/managers/mm_schedule.py#L380-L410) 和 [per-item 路径](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/python/sglang/srt/managers/mm_schedule.py#L462-L490)。
+该版本的注释直接指出：只要一个 item 仍被缓存，`torch.split` 产生的 View 就会让整个 concatenated buffer 继续存活。可对应阅读 [`mm_schedule.py`](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/python/sglang/srt/managers/mm_schedule.py#L380-L410) 与 [per-item 路径](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/python/sglang/srt/managers/mm_schedule.py#L462-L490)。
 
-数据流是：
+从整体 Tensor 到缓存 Entry，数据经过以下路径：
 
 ```mermaid
 flowchart TD
@@ -191,37 +121,30 @@ flowchart TD
     V2 -. shares .-> R
 ```
 
-`torch.split()` 通过 View 复用存储，适合短期计算；进入长期缓存后，引用关系延长，整块 Storage 的驻留成本也随之延长。
+`torch.split()` 的共享在短期计算中没有问题；进入长期 Cache 后，View 的引用随 Entry 保留，大块 Storage 也持续驻留。旧实现又按 Entry 的 payload 独立累加，于是预算未能反映这个生命周期。
 
-Root Cause 是：**共享 Storage 的短生命周期 View，被带进了按 Entry 独立记账的长期 Cache，而 accounting model 没有反映这种 ownership / lifetime。**
 
-因此这个 PR 的核心 invariant 可以写成：
 
-> **缓存预算需要覆盖 Entry 实际保活的资源。按 Entry 累加记账时，入库数据的存储占用也应与账面大小对应。**
+修复需要让缓存预算覆盖 Entry 实际保活的资源。既然预算按 Entry 累加，入库数据的存储占用也要与这笔账对应。
 
-这条预算规则涉及两类关系：
 
-```text
-Accounting
-Lifetime
-```
 
-一个缓存条目“拥有”的不只是一个 Python Tensor 对象，它还会延长与该 Tensor 关联资源的 lifetime。
+把 Python Tensor 对象放入缓存，同时也会延长关联资源的生命周期。记账因而既要看共享关系，也要看引用何时释放。
 
 ## 四、在入库前分离不必要的共享存储
 
 PR #39120 的核心改动位于 [`multimodal_cache.py`](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/python/sglang/srt/mem_cache/multimodal_cache.py#L65-L130)。
 
-第一步，把 `_get_tensor_size()` 改成：
+补丁先调整 `_get_tensor_size()`：
 
 ```python
 def _get_tensor_size(embedding):
     return embedding.untyped_storage().nbytes()
 ```
 
-这让已经入库的 Entry 按真实 backing storage 字节数记账。
+已入库 Entry 改为按实际 backing storage 的字节数计入预算。
 
-入库时的处理在 `set()` 中：
+随后在 `set()` 中处理需要接纳的数据：
 
 ```python
 tensor = embedding.embedding
@@ -232,9 +155,9 @@ data_size = min(
 )
 ```
 
-如果 Entry 能被 Cache 接纳，并且：`storage_size > data_size`
+只有 Cache 可以接纳这个 Entry，且满足 `storage_size > data_size` 时，才执行复制：
 
-才做：
+
 
 ```python
 embedding = replace(
@@ -243,69 +166,42 @@ embedding = replace(
 )
 ```
 
-最后重新按 clone 后的实际 Storage 大小计入 `current_size`。
+复制完成后，再按新 Tensor 的实际 Storage 大小更新 `current_size`。
 
 ### 为什么不直接让每个 View 都按完整 `storage_size` 记账？
 
-因为多个 Entry 可能共享同一个 Storage。假设：
+如果 View A、B、C 都引用同一块 100 MiB Storage，每个 Entry 都记 100 MiB，账面就会变成 300 MiB，底层却只有一块。要准确统计共享存储，需要额外维护 Storage identity、引用关系和 per-storage accounting。
 
-```text
-View A ─┐
-View B ─┼──→ same 100 MiB Storage
-View C ─┘
-```
+这个 PR 没有引入整套共享存储记账，而是在需要时把 oversized View 复制成独立 Storage，让长期 Entry 的占用能够单独计算。
 
-如果每个 Entry 都独立记 100 MiB，Cache 账面可能变成 300 MiB，但底层其实只有一块 100 MiB Storage。要彻底做 shared-storage accounting，需要维护 Storage identity、引用关系和 per-storage accounting，复杂度会明显增加。
 
-PR 选择的是另一条更简单的路径：
 
-> **既然 Cache 按 Entry 独立记账，那就让长期缓存的 oversized View 拥有自己的独立 Storage。**
+复制后，Cached Entry 只引用自己的小 Storage，不再因这个 Entry 保活原 Batch Storage。预算也就不必继续追踪该 View 原先共享的整块存储。原 Batch 能否释放，仍取决于是否存在其他引用。
 
-也就是：
-
-```text
-Before
-
-Batch Storage
-████████████████████████████████████
-        ↑
-      small View
-
-After clone
-
-Batch Storage
-████████████████████████████████████
-
-Cached Entry Storage
-████
-```
-
-这是一个很典型的工程取舍：**通过改变 ownership，让 accounting model 重新变得简单而正确。**
-
-从补丁的位置看，复制成本被放在入库时承担：Entry 被接纳且 `storage_size > data_size` 时，才创建独立存储。
+复制成本放在入库阶段：Entry 能被接纳且 `storage_size > data_size` 时才承担。
 
 ### 为什么只 clone 一部分 Tensor？
 
-PR 没有无脑 `clone()` 所有 Entry。
+这一判断也避免了对所有 Entry 一律 `clone()`。各分支分别处理：
 
-- 普通独立 Tensor：`storage_size == payload_size`，不 clone；
-- duplicate key：在更早的位置直接返回，不 clone；
-- Cache 无论如何都无法接纳的 Entry：在 clone 前返回 `False`，不做无意义 copy；
-- oversized backing Storage 的被接纳 Entry：clone 成独立 Storage。
+- 普通独立 Tensor 满足 `storage_size == payload_size`，无需复制；
+- duplicate key 会更早返回；
+- Cache 无法接纳的 Entry 会在复制前返回 `False`；
+- 可以接纳、且 backing Storage 过大的 Entry，才复制为独立 Storage。
 
-短期计算继续共享 View，长期缓存则在需要时取得独立 Storage。
+因此，短期计算仍使用共享 View，只有进入长期缓存且存在过大存储时才分离。
 
 ### `min(storage_size, payload_size)` 为什么重要？
 
-因为还有反方向的情况：逻辑 payload 可以比真实 Storage 大。
+还要考虑相反的大小关系：逻辑 payload 有时会超过真实 Storage。
 
-典型例子是 `expand()`。PyTorch 官方文档明确说明 `expand()` 不分配新内存，而是通过 stride=0 创建 View。
+例如 `expand()` 不分配新内存，而是用 stride=0 创建 View，同一份数据可以在逻辑视图中出现多次。
 
-因此可能有：`payload_size > storage_size`
+这时可能满足 `payload_size > storage_size`。
 
-此时并不存在“小 Tensor pin 大 Storage”的问题。用 `min(storage_size, payload_size)` 可以避免把这种 Tensor 错判成需要 compact 的对象。
+这种 Tensor 没有保活过大的 Storage。使用 `min(storage_size, payload_size)`，可以避免把它误判为需要 compact 的对象。
 
-整个修复流程可以浓缩成：
+将接纳条件、大小比较和预算更新合在一起，修复流程如下：
 
 ```mermaid
 flowchart TD
@@ -332,36 +228,18 @@ flowchart TD
 
 ## 五、验证修复与兼容行为
 
-PR 报告的 CPU Smoke Checks 覆盖普通切片、detached、strided、inference-mode、expanded Tensor 和 LRU 记账，Base / Extra CI 最终通过。验证重点是数值保留、存储独立性与预算更新；GPU 性能和模型精度未单独测量。
+PR 报告的 CPU Smoke Checks 覆盖了普通切片、detached、strided、inference-mode、expanded Tensor 以及 LRU 记账，Base / Extra CI 最终通过。它们检查数值、存储独立性和预算更新；GPU 性能及模型精度没有单独测量。
 
-修复后的 regression test 也从：
+回归测试由 `test_tensor_cache_entries_share_storage()` 改为 `test_tensor_cache_entries_own_storage()`，并断言 Entry 的 `emb.untyped_storage().nbytes()` 与 `emb.numel() * emb.element_size()` 相等。
 
-```python
-test_tensor_cache_entries_share_storage()
-```
+测试由此同时检查数值与缓存 Entry 的 Storage ownership。固定版本可见 [`test_mm_chunked_embedding_unit.py`](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/test/registered/chunked_prefill/test_mm_chunked_embedding_unit.py#L150-L180)。
 
-变成：
-
-```python
-test_tensor_cache_entries_own_storage()
-```
-
-并直接断言：
-
-```python
-emb.untyped_storage().nbytes()
-==
-emb.numel() * emb.element_size()
-```
-
-也就是说，测试不再只验证 Tensor 数值，而是把**缓存 Entry 的 Storage ownership contract**也写进回归测试。对应固定版本测试见 [`test_mm_chunked_embedding_unit.py`](https://github.com/sgl-project/sglang/blob/24b6c1c7f5ba6c95a96acc9e77b4f5efb23eff97/test/registered/chunked_prefill/test_mm_chunked_embedding_unit.py#L150-L180)。
-
-这个断言把资源生命周期也纳入回归检查：数值正确的 Tensor，仍可能引用过大的底层 Storage。对于本 PR 的缓存切分案例，测试同时检查这两件事。
+因为 Tensor 的数值即使正确，也可能继续引用整块过大的 Storage，仅检查计算结果无法覆盖这个缓存问题。
 
 ## 六、把内存预算落到资源所有权
 
-这次修复把三个量对齐了：缓存条目的逻辑大小、它实际保活的 Storage，以及缓存预算用于驱逐的计数。对于文中的切分 View，复制放在“进入长期缓存”的位置，避免短期计算过程提前承担不必要的拷贝。
+补丁在进入长期缓存时分离过大的 backing Storage，并以实际 Storage 更新驱逐预算。这样既让条目的预算与驻留资源对应，也让短期计算继续享受 View 的共享。
 
-检查类似代码时，可以沿引用关系走一遍：谁创建了大 Tensor，哪些 View 共享它，哪个容器延长了引用生命周期，驱逐一个条目后还有谁保活底层存储。只有这些关系明确，才知道按 payload 计数、按 Storage 去重计数，还是在入库时分离存储更合适。
+排查类似占用时，可以从创建大 Tensor 的位置往后追：哪些 View 共享它，哪个容器延长引用，驱逐条目后是否还有其他引用。看清这条生命周期，才能决定按 payload、按 Storage 身份去重，或在入库时复制。
 
-文中的连续 Batch 切分采用 strided Tensor。推广到其他缓存时，再根据 Entry 的共享关系与生命周期选择预算方式：有意复用的 Storage 可以按身份去重记账，需要独立驻留的数据则在入库时复制。
+本文的连续 Batch 切分使用 strided Tensor。其他缓存若有意共享 Storage，可以按身份去重记账；若要求各 Entry 独立驻留，则可以在入库时取得独立存储。选择取决于具体共享关系和生命周期。
