@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [给统计窗口加一个零，为什么会改变负载均衡？](eplb-zero-record-rolling-window.md)：沿 recorder 生命周期和环形覆盖规则，解释 draft 零记录如何占用 target 历史，附真实入窗与副本分配数据。
+
 - [DeepEP 收到了多少路由，不等于模型真正执行了多少有效路由](deepep-received-vs-valid-routes.md)：从 graph padding、零路由权重和双视图计数，解释接收负载为何会掩盖真实专家需求。
 
 - [复用 TP 通信组到底省在哪里？一次 WORLD 与 HCCL 显存分配追踪](ascend-eplb-tp-world-memory.md)：核对 OFF 后续预热与首次 WORLD 分配，附逐 rank 显存数据和迁移、图回放验证。

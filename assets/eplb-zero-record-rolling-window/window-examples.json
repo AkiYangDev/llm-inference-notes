@@ -1,0 +1,64 @@
+{
+  "scope": "Teaching inputs replayed through actual CircularBuffer class with NumPy storage; not service measurements.",
+  "window_examples": {
+    "shift_no_draft": {
+      "sum": [
+        200,
+        200
+      ],
+      "ratio": [
+        0.5,
+        0.5
+      ]
+    },
+    "shift_with_draft": {
+      "sum": [
+        20,
+        180
+      ],
+      "ratio": [
+        0.1,
+        0.9
+      ]
+    },
+    "no_eviction_with_draft": {
+      "sum": [
+        200,
+        200
+      ],
+      "ratio": [
+        0.5,
+        0.5
+      ]
+    },
+    "constant_no_draft": {
+      "sum": [
+        360,
+        40
+      ],
+      "ratio": [
+        0.9,
+        0.1
+      ]
+    },
+    "constant_with_draft": {
+      "sum": [
+        180,
+        20
+      ],
+      "ratio": [
+        0.9,
+        0.1
+      ]
+    }
+  },
+  "threshold_example": {
+    "target_balancedness": 0.5555556416511536,
+    "zero_balancedness": 1.0,
+    "with_equal_zero_rounds": 0.7777778208255768,
+    "rebalance_without_zeros": true,
+    "rebalance_with_zeros": false,
+    "threshold": 0.75,
+    "scope": "CPU example; actual saved service used report=off and threshold=1.0"
+  }
+}

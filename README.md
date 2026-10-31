@@ -24,6 +24,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 - [AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？](docs/performance/aisbench-whole-native-tpot-itl.md)：从单请求时间线、事件间隔到原生稳定段选择，讲清延迟、并发和吞吐的样本与分母。
 
+- [给统计窗口加一个零，为什么会改变负载均衡？](docs/performance/eplb-zero-record-rolling-window.md)：从真实 200 条记录追到七轮副本分配，解释 draft 空记录与 target 窗口的关系。
 - [DeepEP 收到了多少路由，不等于模型真正执行了多少有效路由](docs/performance/deepep-received-vs-valid-routes.md)：结合两卡实测，解释 graph padding 如何混入接收计数，以及有效 TopK 统计怎样还原专家需求。
 - [复用 TP 通信组到底省在哪里？一次 WORLD 与 HCCL 显存分配追踪](docs/performance/ascend-eplb-tp-world-memory.md)：从 OFF 后续预热和首次 WORLD 通信，追踪复用 TP 避免的额外显存分配。
 - [一次 Ascend EPLB 显存优化：为什么逐层处理，仍然堆出了多层临时张量？](docs/performance/ascend-eplb-memory-bounded-staging.md)：解释逐层迁移中的跨 stream 临时张量积压，以及完成事件如何降低缓存水位。

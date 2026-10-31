@@ -727,5 +727,17 @@
     ],
     "topic": "performance",
     "role": "deep"
+  },
+  "docs/performance/eplb-zero-record-rolling-window.md": {
+    "summary": "加零不改变求和，却会占掉环形窗口的位置。用 200 条真实入窗记录和七轮副本复算，追踪 draft 空记录怎样缩短 target 历史。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "投机解码",
+      "DSpark",
+      "统计窗口"
+    ],
+    "topic": "performance",
+    "role": "deep"
   }
 }

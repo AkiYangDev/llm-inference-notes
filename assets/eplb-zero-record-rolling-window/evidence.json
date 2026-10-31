@@ -1,0 +1,115 @@
+{
+  "record_experiment": {
+    "date": "2026-10-31",
+    "version": "59565b93d17a6e5f176b64335b1978993a223e5f",
+    "community_version": "de7055f59645ebe03784b0980e1f222789f468a3",
+    "model": "DeepSeek-V4-Flash-0731 W8A8",
+    "hardware": "Ascend 910C",
+    "logical_devices": 16,
+    "parallelism": "TP16/EP16/attention DP16",
+    "speculation": "DSpark gamma5/verify6",
+    "I": 4000,
+    "W": 1000,
+    "redundant_experts": 16,
+    "requests_per_arm": 16,
+    "concurrency": 16,
+    "input_tokens_range": [
+      511,
+      526
+    ],
+    "output_tokens": 2048,
+    "mode": "integrated service; graph replay; passive append observer",
+    "sample_records_per_rank": 200,
+    "matrix_shape_per_rank": [
+      200,
+      43,
+      272
+    ],
+    "composition": {
+      "A_protected": {
+        "records": 200,
+        "ranks": 16,
+        "window_capacity": 1000,
+        "composition": {
+          "target": 200
+        },
+        "zero_records_by_role": {},
+        "total": 4953600,
+        "observed_forward_events": {
+          "target": 200,
+          "draft": 199
+        }
+      },
+      "B_community": {
+        "records": 200,
+        "ranks": 16,
+        "window_capacity": 1000,
+        "composition": {
+          "target": 100,
+          "draft": 100
+        },
+        "zero_records_by_role": {
+          "draft": 100
+        },
+        "total": 2476800,
+        "observed_forward_events": {
+          "target": 100,
+          "draft": 100
+        }
+      }
+    },
+    "full_tensor_matches_row_receipts": true,
+    "same_initial_placement": true,
+    "community_lifecycle_methods_unchanged": [
+      "with_forward_pass",
+      "_on_forward_pass_start",
+      "_on_forward_pass_end",
+      "_on_hook"
+    ]
+  },
+  "same_run_experiment": {
+    "date": "2026-10-30",
+    "version": "bf8fa56315f86388f1941ff2358ea0fccec65741",
+    "model": "DeepSeek-V4-Flash W8A8",
+    "hardware": "Ascend 910C",
+    "devices_per_P_D": 16,
+    "speculation": "DSpark gamma5/verify6",
+    "requests": 512,
+    "concurrency": 128,
+    "input_tokens": 16388,
+    "output_tokens": 8192,
+    "P_I_W": [
+      50,
+      50
+    ],
+    "D_I_W": [
+      1000,
+      1000
+    ],
+    "balancedness_report": "off",
+    "rebalance_utilization_threshold": 1.0,
+    "comparison": "Same-run windows compared offline; original actual window drives the service."
+  },
+  "source_artifact_sha256": [
+    {
+      "label": "append composition",
+      "sha256": "361a70827f9ef8f88fd528e844ff81d4af371e6b147d76ed6a3892b825bce3b4"
+    },
+    {
+      "label": "matrix validation",
+      "sha256": "f0c0bcb1a3b66cda07f122a8d7e8c6b77a3c57ed556d49de99bcd866fc4c303a"
+    },
+    {
+      "label": "community source equivalence",
+      "sha256": "94c6e49695b32e7508572295cd68087fcc1e73c854c8027a6db003a7abc07527"
+    },
+    {
+      "label": "same-run layout comparison",
+      "sha256": "e3c5d3007bd7b83f3fbfc8eac9f17524263cef450721037617bd13250d9410a3"
+    },
+    {
+      "label": "prior evidence audit",
+      "sha256": "e76b75e3036a2cc447753b57df1486bd4abde3f1e60d49fce2bc997fc8c191aa"
+    }
+  ]
+}
