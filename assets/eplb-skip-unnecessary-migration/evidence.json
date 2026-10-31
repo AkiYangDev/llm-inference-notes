@@ -1,0 +1,27 @@
+{
+  "community_source": {
+    "repository": "sgl-project/sglang",
+    "commit": "fb9846d3e2d66811b372b28c73229e9dbbf54288"
+  },
+  "ascend_source": {
+    "repository": "AkiYangDev/sglang",
+    "commit": "9f4ee2cc165b2072890fac5c90afa2a4550fefce",
+    "pr": "https://github.com/sgl-project/sglang/pull/47574",
+    "status_at_writing": "open"
+  },
+  "source_sha256": {
+    "npu/eplb.py": "9453b0cb3a06cb1dd6afc506e3722c4f3f23f2b6fc3f8dbb4c816c1c2f677bd4",
+    "python/sglang/srt/eplb/eplb_manager.py": "731e16230a38dafaa855663762be658f7a06997bba1ff75482359027e870c18e",
+    "python/sglang/srt/eplb/expert_distribution.py": "c96f229e4e304094c5f9724891646cb7593ad940d5acd5cf8dbf86a02831400c",
+    "python/sglang/srt/eplb/expert_location_updater.py": "b1e03dd4a8dc42d3987c16e3b0fa6dafa40e21f1f0363763bb673cf67a03199c"
+  },
+  "verification": "AST extraction executes the original functions. Elastic state is replaced by a process-local dependency stub; original CPU tensor copies run without distributed communication. No source implementation edits.",
+  "checks": {
+    "threshold_cases": 10,
+    "getter_none_cases": 4,
+    "balancedness_cases": 5,
+    "selector_cases": 8,
+    "generic_local_update_cases": 4,
+    "elastic_same_layout_preserved": true
+  }
+}

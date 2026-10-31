@@ -16,6 +16,7 @@ TP、DP、EP、PP 与数据归属、通信正确性。
 
 ## 专家布局与运行时迁移
 
+- [到了更新间隔，为什么不一定要搬专家？](eplb-skip-unnecessary-migration.md)：从均衡度阈值到整层及本卡筛选，解释更新流程的退出条件。
 - [16 个冗余专家怎么分：从专家热度到副本，再到物理布局](eplb-redundant-expert-allocation.md)：用完整小例子走过逐次副本分配、固定槽位 packing 和映射生成，再核对真实 16 个额外位置的分配。
 
 - [静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？](ascend-dynamic-eplb-weight-migration.md)：沿统计、规划、ND staging、权重回填和metadata提交，理解动态EPLB的正确性与性能边界。

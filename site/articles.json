@@ -763,5 +763,17 @@
     ],
     "topic": "distributed",
     "role": "deep"
+  },
+  "docs/distributed/eplb-skip-unnecessary-migration.md": {
+    "summary": "沿更新间隔、均衡度阈值、整层布局和本卡参与计划，解释哪些检查会跳过迁移，以及每次退出究竟省掉什么。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "MoE",
+      "负载均衡",
+      "Ascend 910C"
+    ],
+    "topic": "distributed",
+    "role": "deep"
   }
 }

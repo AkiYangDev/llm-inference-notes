@@ -1,0 +1,324 @@
+{
+  "scope": "CPU execution of original source functions; synthetic loads and weights; no distributed transport or service throughput measurement",
+  "torch": "2.5.1+cpu",
+  "threshold_cases": [
+    {
+      "threshold": 0.9,
+      "score": null,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 0.9,
+      "score": 0.7,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 0.9,
+      "score": 0.9,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 0.9,
+      "score": 0.95,
+      "continue_rebalance": false
+    },
+    {
+      "threshold": 0.9,
+      "score": 1.0,
+      "continue_rebalance": false
+    },
+    {
+      "threshold": 1.0,
+      "score": null,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 1.0,
+      "score": 0.7,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 1.0,
+      "score": 0.9,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 1.0,
+      "score": 0.95,
+      "continue_rebalance": true
+    },
+    {
+      "threshold": 1.0,
+      "score": 1.0,
+      "continue_rebalance": true
+    }
+  ],
+  "getter_none_cases": [
+    {
+      "report_enabled": false,
+      "threshold": 0.9,
+      "result": null
+    },
+    {
+      "report_enabled": false,
+      "threshold": 1.0,
+      "result": null
+    },
+    {
+      "report_enabled": true,
+      "threshold": 1.0,
+      "result": null
+    },
+    {
+      "report_enabled": true,
+      "threshold": 0.9999999999,
+      "result": null
+    }
+  ],
+  "balancedness_cases": [
+    {
+      "rank_loads": [
+        100,
+        100
+      ],
+      "score": 1.0
+    },
+    {
+      "rank_loads": [
+        180,
+        20
+      ],
+      "score": 0.555555522441864
+    },
+    {
+      "rank_loads": [
+        0,
+        0
+      ],
+      "score": 1.0
+    },
+    {
+      "rank_loads": [
+        900,
+        900
+      ],
+      "score": 1.0
+    },
+    {
+      "rank_loads": [
+        18,
+        2
+      ],
+      "score": 0.5555558204650879
+    }
+  ],
+  "temporal_mean": {
+    "loads": [
+      [
+        900,
+        900
+      ],
+      [
+        18,
+        2
+      ]
+    ],
+    "per_pass_scores": [
+      1.0,
+      0.5555558204650879
+    ],
+    "history_mean": 0.777777910232544,
+    "pooled_load_score": 0.9912853837013245
+  },
+  "generator": {
+    "interval": 4,
+    "rebalance_calls": [
+      5,
+      9,
+      13
+    ],
+    "first_call": 5
+  },
+  "npu_selector": {
+    "old_map": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        0,
+        2
+      ]
+    ],
+    "new_map": [
+      [
+        0,
+        1,
+        0,
+        3,
+        4,
+        5,
+        2,
+        2
+      ]
+    ],
+    "cases": [
+      {
+        "case": "same_layout",
+        "rank": 0,
+        "changed_layers": [],
+        "participating_layers": [],
+        "local_changed": []
+      },
+      {
+        "case": "same_layout",
+        "rank": 1,
+        "changed_layers": [],
+        "participating_layers": [],
+        "local_changed": []
+      },
+      {
+        "case": "same_layout",
+        "rank": 2,
+        "changed_layers": [],
+        "participating_layers": [],
+        "local_changed": []
+      },
+      {
+        "case": "same_layout",
+        "rank": 3,
+        "changed_layers": [],
+        "participating_layers": [],
+        "local_changed": []
+      },
+      {
+        "case": "changed_layout",
+        "rank": 0,
+        "changed_layers": [
+          0
+        ],
+        "participating_layers": [
+          0
+        ],
+        "local_changed": [
+          false
+        ]
+      },
+      {
+        "case": "changed_layout",
+        "rank": 1,
+        "changed_layers": [
+          0
+        ],
+        "participating_layers": [
+          0
+        ],
+        "local_changed": [
+          true
+        ]
+      },
+      {
+        "case": "changed_layout",
+        "rank": 2,
+        "changed_layers": [
+          0
+        ],
+        "participating_layers": [],
+        "local_changed": []
+      },
+      {
+        "case": "changed_layout",
+        "rank": 3,
+        "changed_layers": [
+          0
+        ],
+        "participating_layers": [
+          0
+        ],
+        "local_changed": [
+          true
+        ]
+      }
+    ],
+    "elastic_same_layout": {
+      "changed_layers": [
+        0
+      ],
+      "participating_layers": [
+        0
+      ]
+    }
+  },
+  "generic_local_update": [
+    {
+      "case": "same_layout",
+      "rank": 0,
+      "output": [
+        10,
+        20
+      ],
+      "weight_copy_calls": 0,
+      "debug": [
+        "handle_recv_of_dst_expert_location dst_expert_location=0 case=unchanged",
+        "handle_recv_of_dst_expert_location dst_expert_location=1 case=unchanged",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=0 src_expert_location=0 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=1 src_expert_location=1 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "p2p_op_infos=[(0, []), (1, [])]",
+        "buffer2weight_copy_infos=[]"
+      ]
+    },
+    {
+      "case": "same_layout",
+      "rank": 1,
+      "output": [
+        30,
+        40
+      ],
+      "weight_copy_calls": 0,
+      "debug": [
+        "handle_recv_of_dst_expert_location dst_expert_location=2 case=unchanged",
+        "handle_recv_of_dst_expert_location dst_expert_location=3 case=unchanged",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=2 src_expert_location=2 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=3 src_expert_location=3 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "p2p_op_infos=[(2, []), (3, [])]",
+        "buffer2weight_copy_infos=[]"
+      ]
+    },
+    {
+      "case": "local_swap",
+      "rank": 0,
+      "output": [
+        20,
+        10
+      ],
+      "weight_copy_calls": 2,
+      "debug": [
+        "handle_recv_of_dst_expert_location dst_expert_location=0 case=same-gpu src_expert_location=1",
+        "handle_recv_of_dst_expert_location dst_expert_location=1 case=same-gpu src_expert_location=0",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=0 src_expert_location=0 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=1 src_expert_location=1 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "p2p_op_infos=[(0, []), (1, [])]",
+        "buffer2weight_copy_infos=[(0, 0), (1, 1)]"
+      ]
+    },
+    {
+      "case": "local_swap",
+      "rank": 1,
+      "output": [
+        30,
+        40
+      ],
+      "weight_copy_calls": 0,
+      "debug": [
+        "handle_recv_of_dst_expert_location dst_expert_location=2 case=unchanged",
+        "handle_recv_of_dst_expert_location dst_expert_location=3 case=unchanged",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=2 src_expert_location=2 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "create_isend_ops_of_logical_expert_id logical_expert_id=3 src_expert_location=3 same_node_dst_ranks=[] cross_node_dst_ranks=[]",
+        "p2p_op_infos=[(2, []), (3, [])]",
+        "buffer2weight_copy_infos=[]"
+      ]
+    }
+  ]
+}
