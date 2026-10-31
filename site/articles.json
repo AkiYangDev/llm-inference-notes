@@ -606,7 +606,7 @@
     "seo_summary": "160 条请求已生成完，存专家计数时服务却崩了。沿错误栈追到设备通信，再看 CPU/Gloo 导出怎样保住统计含义。"
   },
   "docs/performance/ascend-910c-cp2-vs-cp4-prefill-throughput.md": {
-    "summary": "复盘CP4/DP4切到CP2/DP8的N480同负载负例：单rank行数、page预算、EP16通信轮次与请求驻留时间，解释TPOT改善却没有吞吐收益。",
+    "summary": "CP4 改成 CP2 后，TPOT 降了，整套 PD 吞吐却略降。沿每 Rank 行数、页预算和通信轮次，看这次联合配置改变了什么。",
     "category": "性能分析",
     "tags": [
       "Ascend 910C",
@@ -618,10 +618,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？",
-    "seo_summary": "Ascend 910C上CP2替代CP4的真实对照：native吞吐-0.91%、whole-1.64%，TPOT降低而TTFT升高；解析CP/DP布局、zigzag补齐、DeepEP分轮与阶段指标。"
+    "seo_summary": "CP4 改成 CP2 后，TPOT 降了，整套 PD 吞吐却略降。沿每 Rank 行数、页预算和通信轮次，看这次联合配置改变了什么。"
   },
   "docs/performance/aisbench-sglang-first-request-to-report.md": {
-    "summary": "从一条请求接通SGLang，到独立配置、JSONL、N/C/r和原生稳态后处理。附小样例，讲清retry的版本语义、实际token长度和原始结果怎样保留。",
+    "summary": "先用一条请求接通 SGLang，再检查独立配置、JSONL 和负载参数。附完整小样例，说明原始结果怎样保存、稳态报告怎样重算。",
     "category": "压测实践",
     "tags": [
       "AISBench",
@@ -634,7 +634,7 @@
     "seo_title": "用AISBench压测SGLang：从第一条请求到一份可信报告"
   },
   "docs/performance/128k-prefix-cache-remaining-costs.md": {
-    "summary": "沿真实128K/1K请求区分复用前缀、新Query和逻辑上下文，解释DeepSeek-V4的SWA/C4/C128历史访问、PD状态交接，以及90%命中之后仍然存在的生成与排队成本。",
+    "summary": "命中了九成输入，为什么仍不能当作一条独立的 12K 请求？沿新 Query、长历史访问和 PD 交接，解释剩下的工作。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -646,10 +646,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？",
-    "seo_summary": "沿真实128K/1K请求区分复用前缀、新Query和逻辑上下文，解释DeepSeek-V4的SWA/C4/C128历史访问、PD状态交接，以及90%命中之后仍然存在的生成与排队成本。"
+    "seo_summary": "命中了九成输入，为什么仍不能当作一条独立的 12K 请求？沿新 Query、长历史访问和 PD 交接，解释剩下的工作。"
   },
   "docs/performance/sglang-stream-acceptance-cache-timing.md": {
-    "summary": "8条请求已带投机开关，SSE却没有sglext。从字段产生、父类解析和writer落盘走到原计时规则，解释metadata-only事件、接受率分母与whole/native窗口。",
+    "summary": "8 条请求已带投机开关，SSE 却没有明细。先查字段有没有返回，再沿原解析和计时路径保存计数，核对接受率与统计窗口。",
     "category": "压测实践",
     "tags": [
       "AISBench",
@@ -663,7 +663,7 @@
     "seo_title": "SGLang流式压测：保留接受率与缓存计数，沿用原计时"
   },
   "docs/distributed/ascend-dynamic-eplb-weight-migration.md": {
-    "summary": "从逻辑专家与物理槽位出发，沿真实Ascend适配解释W8A8/NZ权重暂存、HCCL通信等待、逐层映射提交和Graph地址约束，结合功能验证与正负性能结果分析动态EPLB的成本。",
+    "summary": "服务运行中，怎样把专家搬到新槽位？沿 Ascend 权重暂存、通信等待和映射提交，解释迁移顺序，再看功能验证与性能代价。",
     "category": "分布式工程",
     "tags": [
       "SGLang",
@@ -675,10 +675,10 @@
     "topic": "distributed",
     "role": "deep",
     "seo_title": "静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？",
-    "seo_summary": "动态EPLB怎样搬运专家权重而不破坏路由？结合Ascend W8A8/NZ、ND staging、HCCL和原位metadata更新，解释迁移顺序、验证证据与收益边界。"
+    "seo_summary": "服务运行中，怎样把专家搬到新槽位？沿 Ascend 权重暂存、通信等待和映射提交，解释迁移顺序，再看功能验证与性能代价。"
   },
   "docs/performance/aisbench-whole-native-tpot-itl.md": {
-    "summary": "TPOT 10.4ms、ITL 58.6ms为何同时成立？沿固定AISBench源码解释请求时间线、事件加权、whole/native选样边界、并发封顶与两种输出token/s。",
+    "summary": "TPOT 10.4ms、ITL 58.6ms 为什么能同时成立？沿真实报告和固定源码，分清请求时间线、事件样本与 whole/native 窗口。",
     "category": "压测实践",
     "tags": [
       "AISBench",
@@ -690,7 +690,7 @@
     "topic": "performance",
     "role": "entry",
     "seo_title": "AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？",
-    "seo_summary": "用真实PD报告和离线算例，讲清AISBench的whole、native、TTFT、TPOT、ITL、E2E、系统并发与输出吞吐，以及原生稳定段的窗口边界。"
+    "seo_summary": "TPOT 10.4ms、ITL 58.6ms 为什么能同时成立？沿真实报告和固定源码，分清请求时间线、事件样本与 whole/native 窗口。"
   },
   "docs/performance/ascend-eplb-memory-bounded-staging.md": {
     "summary": "逐层迁移仍让临时张量跨 stream 积压。沿分配地址和完成事件追踪原因，解释 P、D 每芯片缓存驻留量减少约 3.05、3.32 GiB 的实现与实测。",
@@ -717,7 +717,7 @@
     "role": "deep"
   },
   "docs/performance/deepep-received-vs-valid-routes.md": {
-    "summary": "图补齐行的权重为零，专家 ID 却仍然进入 dispatch。用两卡真实通信与图回放计数，解释 64/64 的接收量为何掩盖 64/0 的有效路由负载。",
+    "summary": "图补齐行的权重为零，专家 ID 却仍进入 dispatch。用真实双 Rank 通信与图回放计数，解释 64/64 的接收量为何掩盖 64/0 的有效需求。",
     "category": "性能分析",
     "tags": [
       "Ascend",
@@ -765,7 +765,7 @@
     "role": "deep"
   },
   "docs/distributed/eplb-skip-unnecessary-migration.md": {
-    "summary": "沿更新间隔、均衡度阈值、整层布局和本卡参与计划，解释哪些检查会跳过迁移，以及每次退出究竟省掉什么。",
+    "summary": "到了更新间隔，流程仍可能提前退出。沿均衡度、整层布局和本地 Rank 的参与判断，看每处跳过省下了哪些工作。",
     "category": "分布式工程",
     "tags": [
       "EPLB",
