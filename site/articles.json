@@ -691,5 +691,17 @@
     "role": "entry",
     "seo_title": "AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？",
     "seo_summary": "用真实PD报告和离线算例，讲清AISBench的whole、native、TTFT、TPOT、ITL、E2E、系统并发与输出吞吐，以及原生稳定段的窗口边界。"
+  },
+  "docs/performance/ascend-eplb-memory-bounded-staging.md": {
+    "summary": "逐层迁移仍让临时张量跨 stream 积压。沿分配地址和完成事件追踪原因，解释 P、D 每芯片缓存驻留量减少约 3.05、3.32 GiB 的实现与实测。",
+    "category": "性能分析",
+    "tags": [
+      "Ascend",
+      "EPLB",
+      "显存",
+      "异步执行"
+    ],
+    "topic": "performance",
+    "role": "deep"
   }
 }

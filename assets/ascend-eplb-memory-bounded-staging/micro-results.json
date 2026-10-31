@@ -1,0 +1,128 @@
+{
+  "baseline": {
+    "warm_slowest_rank_ms": [
+      359.9497601389885,
+      357.0192900951952
+    ],
+    "warm_mean_ms": 358.48452511709183,
+    "peak_active_delta_MiB": 8568.0205078125,
+    "reserved_final_mean_MiB": 26062.0,
+    "full_element_correctness": true,
+    "address_reuse": [
+      {
+        "rank": 0,
+        "load_buffers": [
+          {
+            "MiB": 136.0,
+            "allocation_requests": 43,
+            "unique_addresses": 12
+          },
+          {
+            "MiB": 272.0,
+            "allocation_requests": 43,
+            "unique_addresses": 12
+          }
+        ]
+      },
+      {
+        "rank": 1,
+        "load_buffers": [
+          {
+            "MiB": 136.0,
+            "allocation_requests": 43,
+            "unique_addresses": 14
+          },
+          {
+            "MiB": 272.0,
+            "allocation_requests": 43,
+            "unique_addresses": 14
+          }
+        ]
+      }
+    ]
+  },
+  "bounded2": {
+    "warm_slowest_rank_ms": [
+      356.53173993341625,
+      358.91982982866466
+    ],
+    "warm_mean_ms": 357.72578488104045,
+    "peak_active_delta_MiB": 1632.00390625,
+    "reserved_final_mean_MiB": 19602.0,
+    "full_element_correctness": true,
+    "address_reuse": [
+      {
+        "rank": 0,
+        "load_buffers": [
+          {
+            "MiB": 136.0,
+            "allocation_requests": 43,
+            "unique_addresses": 3
+          },
+          {
+            "MiB": 272.0,
+            "allocation_requests": 43,
+            "unique_addresses": 3
+          }
+        ]
+      },
+      {
+        "rank": 1,
+        "load_buffers": [
+          {
+            "MiB": 136.0,
+            "allocation_requests": 43,
+            "unique_addresses": 3
+          },
+          {
+            "MiB": 272.0,
+            "allocation_requests": 43,
+            "unique_addresses": 3
+          }
+        ]
+      }
+    ]
+  },
+  "bounded4": {
+    "warm_slowest_rank_ms": [
+      357.44579997844994,
+      354.1372900363058
+    ],
+    "warm_mean_ms": 355.79154500737786,
+    "peak_active_delta_MiB": 2448.005859375,
+    "reserved_final_mean_MiB": 20422.0,
+    "full_element_correctness": true,
+    "address_reuse": [
+      {
+        "rank": 0,
+        "load_buffers": [
+          {
+            "MiB": 136.0,
+            "allocation_requests": 43,
+            "unique_addresses": 5
+          },
+          {
+            "MiB": 272.0,
+            "allocation_requests": 43,
+            "unique_addresses": 5
+          }
+        ]
+      },
+      {
+        "rank": 1,
+        "load_buffers": [
+          {
+            "MiB": 136.0,
+            "allocation_requests": 43,
+            "unique_addresses": 5
+          },
+          {
+            "MiB": 272.0,
+            "allocation_requests": 43,
+            "unique_addresses": 5
+          }
+        ]
+      }
+    ]
+  }
+}

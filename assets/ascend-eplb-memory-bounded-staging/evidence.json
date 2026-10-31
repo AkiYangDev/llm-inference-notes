@@ -1,0 +1,142 @@
+{
+  "title": "Ascend EPLB bounded staging memory experiment",
+  "experiment_dates": {
+    "baseline": "2026-10-29",
+    "candidate": "2026-10-30"
+  },
+  "baseline_commit": "f6ad2f4f922d0df111dc66153f543a453267455c",
+  "candidate_npu_eplb_py_sha256": "a54f597d326127326ada4f51e3f489c81d5ef641e42688178ec1872b95c7c394",
+  "published_staging_methods_ast_equal_commit": "bf8fa56315f86388f1941ff2358ea0fccec65741",
+  "configuration": {
+    "model": "DeepSeek-V4-Flash-0731 W8A8 / ModelSlim",
+    "hardware": "Ascend 910C",
+    "logical_devices_per_role": 16,
+    "roles": [
+      "prefill",
+      "decode"
+    ],
+    "tp": 16,
+    "ep": 16,
+    "attention_dp": 16,
+    "redundant_experts_per_role": 16,
+    "torch": "2.10.0+cpu",
+    "torch_npu": "2.10.0.post6",
+    "cann": "9.1.0 B243",
+    "requests": 512,
+    "client_concurrency": 128,
+    "input_tokens": 16388,
+    "output_tokens": 8192,
+    "update_interval": {
+      "P": 50,
+      "D": 1000
+    },
+    "statistics_window": {
+      "P": 50,
+      "D": 1000
+    },
+    "kv_token_capacity": {
+      "P": 369024,
+      "D": 524288
+    },
+    "mem_fraction_static": 0.7,
+    "dspark_gamma": 5,
+    "verify_width": 6,
+    "radix_cache": false,
+    "decode_graph_replay": true,
+    "communication_group": "existing TP HCCL in both arms",
+    "decode_hccl_buffsize_mib": 1200,
+    "completed_requests_each_arm": 512,
+    "failed_requests_each_arm": 0
+  },
+  "measurement": {
+    "reserved": "Mean across all 16 ranks per role, after requests drained and before empty_cache",
+    "migration_active_peak": "Maximum attributed migration active bytes from complete update event replays on ranks 0 and 8 per role",
+    "update_time": "Native EPLBManager wall time; slowest of 16 ranks per round; first round separate",
+    "warm_rounds": {
+      "P": [
+        2,
+        3
+      ],
+      "D": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    "allocator_units": "MiB = 2^20 bytes; GiB = 2^30 bytes",
+    "purpose": "Memory and rebalance latency diagnostic with the same observer in both arms"
+  },
+  "results": {
+    "P": {
+      "before_reserved_MiB": 46300.625,
+      "after_reserved_MiB": 43179.125,
+      "saved_MiB": 3121.5,
+      "before_peak_active_MiB": 5712.796875,
+      "after_peak_active_MiB": 2040.796875,
+      "before_update_slowest_rank_ms": [
+        2259.0,
+        905.0,
+        866.0
+      ],
+      "after_update_slowest_rank_ms": [
+        2290.0,
+        854.0,
+        849.0
+      ],
+      "before_warm_update_ms": 885.5,
+      "after_warm_update_ms": 851.5,
+      "before_mean_send_MiB_per_rank_per_update": 15139.51171875,
+      "after_mean_send_MiB_per_rank_per_update": 14973.6884765625
+    },
+    "D": {
+      "before_reserved_MiB": 49951.75,
+      "after_reserved_MiB": 46548.0,
+      "saved_MiB": 3403.75,
+      "before_peak_active_MiB": 5304.796875,
+      "after_peak_active_MiB": 2040.796875,
+      "before_update_slowest_rank_ms": [
+        1711.0,
+        898.0,
+        887.0,
+        924.0,
+        885.0,
+        924.0,
+        923.0
+      ],
+      "after_update_slowest_rank_ms": [
+        1707.0,
+        951.0,
+        902.0,
+        892.0,
+        888.0,
+        882.0,
+        884.0
+      ],
+      "before_warm_update_ms": 906.8333333333334,
+      "after_warm_update_ms": 899.8333333333334,
+      "before_mean_send_MiB_per_rank_per_update": 16287.46372767857,
+      "after_mean_send_MiB_per_rank_per_update": 16279.304966517857
+    }
+  },
+  "verification": {
+    "rank_update_rows": 160,
+    "all_update_allocated_and_active_deltas_zero": true,
+    "complete_candidate_lifecycle_replays": 20,
+    "all_attributed_blocks_eventually_freed": true,
+    "after_empty_cache_reserved_mib_both_arms": {
+      "P": 40264,
+      "D": 44448
+    }
+  },
+  "source_artifact_sha256": {
+    "MEMORY_PER_RANK_COMPARISON.csv": "938bb0d3e32696a407c3b357190b36385ad3524efa34225a7c60ccf11f23e359",
+    "SERVICE_UPDATE_PER_RANK.csv": "4f256ee3fc7e8f7b0828cb0f77ec320c09865093db799deeecf213a1c5fa38ce",
+    "SERVICE_LIFECYCLE_PEAKS.csv": "0d540fbb94f2ce9b1bb06cba16394da191099cc179db52ed09e2720a4a5c0e21",
+    "MICRO_RESULT.json": "0b7fe642b7c56ee1621a86965d3da690954c91bf6c3cc2b45ea68fd9026d5a39",
+    "COMPARISON.json": "066e58875078c99006f948c7dedc1639c081f9edc62757f8873e9fce5154cab1"
+  },
+  "export_note": "Numeric experiment records and source checksums. Private paths, launch receipts, host addresses and credentials excluded."
+}

@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [一次 Ascend EPLB 显存优化：为什么逐层处理，仍然堆出了多层临时张量？](ascend-eplb-memory-bounded-staging.md)：从逐地址分配记录追到异步排队，用完成事件限制跨层临时张量积压，附完整服务对照与逐 rank 数据。
+
 - [AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？](aisbench-whole-native-tpot-itl.md)：结合真实whole/native统计与离线算例，解释TPOT、ITL、并发封顶和系统吞吐。
 
 - [SGLang 流式压测：怎样保留接受率和缓存计数，又不改坏计时](sglang-stream-acceptance-cache-timing.md)：附原解析方法的离线回放，解释metadata-only事件、父类后保留字段、缺失计数与AL/接受率分母。
