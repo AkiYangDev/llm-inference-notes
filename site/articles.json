@@ -715,5 +715,17 @@
     ],
     "topic": "performance",
     "role": "deep"
+  },
+  "docs/performance/deepep-received-vs-valid-routes.md": {
+    "summary": "图补齐行的权重为零，专家 ID 却仍然进入 dispatch。用两卡真实通信与图回放计数，解释 64/64 的接收量为何掩盖 64/0 的有效路由负载。",
+    "category": "性能分析",
+    "tags": [
+      "Ascend",
+      "DeepEP",
+      "EPLB",
+      "路由统计"
+    ],
+    "topic": "performance",
+    "role": "deep"
   }
 }

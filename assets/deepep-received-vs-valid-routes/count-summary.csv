@@ -1,0 +1,9 @@
+layout,valid_rows_per_rank,allocated_rows_per_rank,receiver_global_total,sender_global_total,recorder_graph_replay,combine_exact,receiver_rank0,receiver_rank1,sender_rank0,sender_rank1
+balanced,8,8,128,128,True,True,64,64,64,64
+balanced,4,8,128,64,True,True,64,64,32,32
+balanced,0,8,128,0,True,True,64,64,0,0
+balanced,2,8,128,32,True,True,64,64,16,16
+skew,8,8,128,128,True,True,64,64,64,64
+skew,4,8,128,64,True,True,64,64,64,0
+skew,0,8,128,0,True,True,64,64,0,0
+skew,2,8,128,32,True,True,64,64,32,0
