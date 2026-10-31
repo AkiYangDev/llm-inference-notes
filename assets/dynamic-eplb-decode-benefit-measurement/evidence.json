@@ -1,0 +1,88 @@
+{
+  "dates": [
+    "2026-10-28",
+    "2026-10-29"
+  ],
+  "source": "f6ad2f4f922d0df111dc66153f543a453267455c",
+  "model": "DeepSeek-V4-Flash-0731 W8A8",
+  "hardware": "Ascend 910C",
+  "P_D_logical_devices_each": 16,
+  "native_pair": {
+    "TP_EP_attentionDP": 16,
+    "redundant_experts_per_side": 16,
+    "DSpark_gamma_verify": [
+      5,
+      6
+    ],
+    "ON_P_I_W": [
+      50,
+      50
+    ],
+    "ON_D_I_W": [
+      4000,
+      1000
+    ],
+    "actual_KV_caps_P_D": [
+      369024,
+      524288
+    ],
+    "mem_fraction_static": 0.7,
+    "input_output_tokens": [
+      16388,
+      12288
+    ],
+    "formal_requests_per_arm": 1536,
+    "max_concurrency": 256,
+    "prefix_cache": false,
+    "warmup": "Two short PD/MF rounds, probe, then512 long requests; same corrected client timeout1800s/retry1 for accepted warmups and formal arms.",
+    "task": "Synthetic long-text record-copy task, temperature0 and ignore_eos.",
+    "AIS_version": "3.1.0",
+    "AIS_commit": "e00d1f758310c45580576af291a3126919776c89"
+  },
+  "source_artifact_sha256": [
+    {
+      "label": "non_spec_batch80",
+      "sha256": "093e32316f5c216b1d25524fb92ec9124aefe19f144ed04b7b10eabb8c691924"
+    },
+    {
+      "label": "non_spec_batch240",
+      "sha256": "3f42c38057472d46cc9a76406257762d9bec2507a4750727f64c59aaa42ae52f"
+    },
+    {
+      "label": "DSpark_summary",
+      "sha256": "ada9aa4f86acc9c2ada026d5dc2c1e13572156c4dcb2d04d2263873b28b47641"
+    },
+    {
+      "label": "C128_summary",
+      "sha256": "d6b951351c78d93e91441dadf899b04899abbfde88108b9a8fbe402825a951b6"
+    },
+    {
+      "label": "C256_summary",
+      "sha256": "6e903ef4a71ecad88450a87ad5fd7a86745659db0b9d1d44b0cfe07477c7d09f"
+    },
+    {
+      "label": "OFF_NATIVE_STABLE.json",
+      "sha256": "6f0588adba54e17cc06123d2886c3e5570e0c5502f9c0727548668d75bb8e025"
+    },
+    {
+      "label": "OFF_NATIVE_TELEMETRY.json",
+      "sha256": "773e6c49b1b0afabf1ca3044cb9be50c27493f80c3992a2bf1779772dde91934"
+    },
+    {
+      "label": "ON_NATIVE_STABLE.json",
+      "sha256": "1de4f4f5b8f2890dabc9cc25722fbeb528f282332b8bb920bf074a6bc0337267"
+    },
+    {
+      "label": "ON_NATIVE_TELEMETRY.json",
+      "sha256": "b30f79c342d60f0f279d60c5d954e88f68dde0a77b64e21c7862369257268e04"
+    },
+    {
+      "label": "policy_diagnostic",
+      "sha256": "96488069e328bbcc0873c09d921ce32a5a6c89cd387f1eef95819d0b7e55b511"
+    },
+    {
+      "label": "short_trace_analysis",
+      "sha256": "9daab06abba64e3cbd95cc717f5915e0715317432d5f6b3dfccba63963bb8b3c"
+    }
+  ]
+}

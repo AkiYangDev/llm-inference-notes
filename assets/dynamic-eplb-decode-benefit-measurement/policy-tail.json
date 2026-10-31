@@ -1,0 +1,120 @@
+{
+  "scope": "Non-spec; one chronological diagnostic with recording enabled in all arms; learned B layout as baseline, not a clean OFF. Client330s and device8000-step windows differ.",
+  "steady_tail": [
+    {
+      "name": "r2_frozen_B",
+      "client_window_s": 330,
+      "output_tokens_per_s": 5608.778787878788,
+      "complete_request_cohort": 160,
+      "TTFT_ms": {
+        "N": 160,
+        "mean": 12409.5113091125,
+        "median": 12893.2494785,
+        "p95": 13271.823377,
+        "p99": 13326.793864
+      },
+      "TPOT_ms": {
+        "N": 160,
+        "mean": 43.03860917453907,
+        "median": 43.036943914163615,
+        "p95": 43.05852965641026,
+        "p99": 43.065311162881564
+      },
+      "E2E_ms": {
+        "N": 160,
+        "mean": 188654.81518728126,
+        "median": 189148.679202,
+        "p95": 189533.136705,
+        "p99": 189566.115002
+      },
+      "forward_scope": "Last8000 common forward IDs, a separate scope from the330s client window",
+      "normal_forward_ms": {
+        "N": 8000,
+        "mean": 42.91727009725571,
+        "median": 42.847469329833984,
+        "p95": 43.3243408203125,
+        "p99": 46.03810119628906
+      },
+      "actual_batch_mean": 241.388375,
+      "throughput_change_vs_frozen_percent": 0.0,
+      "TPOT_change_vs_frozen_percent": 0.0
+    },
+    {
+      "name": "r2_I4000W1000",
+      "client_window_s": 330,
+      "output_tokens_per_s": 5556.021212121213,
+      "complete_request_cohort": 176,
+      "TTFT_ms": {
+        "N": 176,
+        "mean": 11462.399197926137,
+        "median": 11649.202734999999,
+        "p95": 13305.83976,
+        "p99": 13323.480626
+      },
+      "TPOT_ms": {
+        "N": 176,
+        "mean": 43.325270602375404,
+        "median": 43.31539353406593,
+        "p95": 43.48582001318681,
+        "p99": 43.49087451843712
+      },
+      "E2E_ms": {
+        "N": 176,
+        "mean": 188881.75753577842,
+        "median": 189047.59007,
+        "p95": 191352.192782,
+        "p99": 191388.444573
+      },
+      "forward_scope": "Last8000 common forward IDs, a separate scope from the330s client window",
+      "normal_forward_ms": {
+        "N": 8000,
+        "mean": 43.013277868747714,
+        "median": 42.92552185058594,
+        "p95": 43.37934112548828,
+        "p99": 46.014678955078125
+      },
+      "actual_batch_mean": 241.3205,
+      "throughput_change_vs_frozen_percent": -0.9406250050650988,
+      "TPOT_change_vs_frozen_percent": 0.666056439402607
+    },
+    {
+      "name": "r2_I4000W4000",
+      "client_window_s": 330,
+      "output_tokens_per_s": 5566.057575757576,
+      "complete_request_cohort": 173,
+      "TTFT_ms": {
+        "N": 173,
+        "mean": 11431.922262971098,
+        "median": 12248.777284,
+        "p95": 12958.256934,
+        "p99": 15035.210161
+      },
+      "TPOT_ms": {
+        "N": 173,
+        "mean": 43.45413419660096,
+        "median": 43.44425163345543,
+        "p95": 43.600972568742364,
+        "p99": 43.626918128693525
+      },
+      "E2E_ms": {
+        "N": 173,
+        "mean": 189379.44721016186,
+        "median": 190123.794751,
+        "p95": 190882.441703,
+        "p99": 192871.142988
+      },
+      "forward_scope": "Last8000 common forward IDs, a separate scope from the330s client window",
+      "normal_forward_ms": {
+        "N": 8000,
+        "mean": 43.134647575378416,
+        "median": 43.02627944946289,
+        "p95": 43.58684158325195,
+        "p99": 46.26551818847656
+      },
+      "actual_batch_mean": 242.11225,
+      "throughput_change_vs_frozen_percent": -0.7616847398855708,
+      "TPOT_change_vs_frozen_percent": 0.9654703765560102
+    }
+  ],
+  "original_repetition_scope": "One chronological window per arm, with baseline return. Use actual batch and drift when interpreting small differences."
+}

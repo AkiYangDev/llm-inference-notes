@@ -739,5 +739,17 @@
     ],
     "topic": "performance",
     "role": "deep"
+  },
+  "docs/performance/dynamic-eplb-decode-benefit-measurement.md": {
+    "summary": "从固定 A/B/A、迁移回本预算到 AISBench 稳态 OFF/ON，结合 batch、I/W 和 DSpark 实验，分清局部计算收益与整服务收益。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "Decode",
+      "DSpark",
+      "AISBench"
+    ],
+    "topic": "performance",
+    "role": "deep"
   }
 }

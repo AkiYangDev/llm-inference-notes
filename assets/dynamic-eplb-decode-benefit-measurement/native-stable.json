@@ -1,0 +1,133 @@
+{
+  "scope": "One paired full P+D service measurement; both sides enable EPLB in ON. Original AIS stable_stage selection, not D-only attribution.",
+  "gamma": 5,
+  "verify_width": 6,
+  "arms": {
+    "OFF": {
+      "whole": {
+        "requests": 1536,
+        "failed": 0,
+        "input_tokens": 25171968,
+        "output_tokens": 18874368
+      },
+      "stable": {
+        "requests": 1280,
+        "duration_s": 1075.7576468558982
+      },
+      "unrounded_latency_ms": {
+        "E2EL": {
+          "Average": 219455.16522659763,
+          "P99": 299852.52679108444
+        },
+        "TTFT": {
+          "Average": 15801.067241185776,
+          "P99": 45957.67327867227
+        },
+        "TPOT": {
+          "Average": 16.574761779556592,
+          "P99": 22.875783358470493
+        },
+        "ITL": {
+          "Average": 95.67703390034742,
+          "P99": 192.71557057742064
+        }
+      },
+      "output_tokens_per_second": 14620.988329453085,
+      "D_native_gauges": {
+        "spec_accept_length": {
+          "sample_values": 1392,
+          "mean": 5.766631568698411,
+          "min": 4.9265625,
+          "max": 6.0,
+          "aggregation": "unweighted native gauge samples across DP ranks and time"
+        },
+        "spec_accept_rate": {
+          "sample_values": 1392,
+          "mean": 0.9533263137396822,
+          "min": 0.7853125,
+          "max": 1.0,
+          "aggregation": "unweighted native gauge samples across DP ranks and time"
+        }
+      },
+      "global_token_weighted_strict_AR": "NOT_OBSERVED",
+      "actual_proposed_token_denominator": "NOT_OBSERVED",
+      "updates": {
+        "P": {
+          "stable_rounds": 0,
+          "stable_max_rank_mean_s": null,
+          "timer_scope": "Native EPLBManager logged timer; slowest rank per round; not full forward blocking time"
+        },
+        "D": {
+          "stable_rounds": 0,
+          "stable_max_rank_mean_s": null,
+          "timer_scope": "Native EPLBManager logged timer; slowest rank per round; not full forward blocking time"
+        }
+      }
+    },
+    "ON": {
+      "whole": {
+        "requests": 1536,
+        "failed": 0,
+        "input_tokens": 25171968,
+        "output_tokens": 18874368
+      },
+      "stable": {
+        "requests": 1280,
+        "duration_s": 1027.2732180759776
+      },
+      "unrounded_latency_ms": {
+        "E2EL": {
+          "Average": 209592.68409339472,
+          "P99": 314341.8921943126
+        },
+        "TTFT": {
+          "Average": 13448.67217171959,
+          "P99": 53047.84149307306
+        },
+        "TPOT": {
+          "Average": 15.963539669705801,
+          "P99": 23.96375566366308
+        },
+        "ITL": {
+          "Average": 92.08709987120066,
+          "P99": 184.05117216985704
+        }
+      },
+      "output_tokens_per_second": 15311.05817151431,
+      "D_native_gauges": {
+        "spec_accept_length": {
+          "sample_values": 1328,
+          "mean": 5.751204104542864,
+          "min": 5.0046875,
+          "max": 6.0,
+          "aggregation": "unweighted native gauge samples across DP ranks and time"
+        },
+        "spec_accept_rate": {
+          "sample_values": 1328,
+          "mean": 0.9502408209085728,
+          "min": 0.8009375,
+          "max": 1.0,
+          "aggregation": "unweighted native gauge samples across DP ranks and time"
+        }
+      },
+      "global_token_weighted_strict_AR": "NOT_OBSERVED",
+      "actual_proposed_token_denominator": "NOT_OBSERVED",
+      "updates": {
+        "P": {
+          "stable_rounds": 11,
+          "stable_max_rank_mean_s": 0.6796363636363637,
+          "timer_scope": "Native EPLBManager logged timer; slowest rank per round; not full forward blocking time"
+        },
+        "D": {
+          "stable_rounds": 3,
+          "stable_max_rank_mean_s": 0.7143333333333333,
+          "timer_scope": "Native EPLBManager logged timer; slowest rank per round; not full forward blocking time"
+        }
+      }
+    }
+  },
+  "changes": {
+    "output_throughput_percent": 4.719720900611923,
+    "mean_TPOT_percent": -3.6876675392383373
+  }
+}
