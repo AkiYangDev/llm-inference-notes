@@ -1,37 +1,37 @@
 # DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么
 
-在一次 DeepSeek-V4-Flash / Ascend 910C 调优中，我们把 P、D 两端的 IndexCache 从关闭改为 `freq2`，保持 N640、C64、3 req/s 和原数据不变。AISBench native 区间的单卡输出吞吐从 **164.10 提高到 172.99 tok/s**，增幅 **5.41%**；mean TPOT 从 18.9ms 降到 17.7ms。完整请求区间的吞吐也提高了 3.45%。这里的单卡按 P8+D8 共 16 张物理卡计算。
+在 DeepSeek-V4-Flash、Ascend 910C 的一次配对中，我们同时将 P、D 的 IndexCache 从关闭改为 `freq2`，保持 N640、C64、3 req/s 和数据不变。native 每卡输出由 164.10 增至 172.99 tok/s，提高 5.41%，mean TPOT 从 18.9ms 降至 17.7ms；whole 吞吐提高 3.45%。每卡均以 P8+D8、16 张物理卡归一化。
 
-这组收益值得保留，但需要先理解它的来源。IndexCache 跳过了部分层本来会重新计算的稀疏 Attention 索引，转而沿用上游层的选择。因此，解释这次优化要同时回答两个问题：哪些工作确实少做了，以及模型的计算行为发生了什么变化。
+这项候选减少了部分 c4 层的稀疏索引计算，改用前面层的历史位置选择。因而需要一起核对性能和行为：省去哪些计算，复用又改变了当前层原本独立作出的哪些选择。
 
-本文沿实际使用的源码快照展开。对应公开实现是 [Ascend/sglang PR #1332](https://github.com/Ascend/sglang/pull/1332)，实验绑定的是该 PR 的历史提交 `63bc1055c89aabcb62cb70f42032b8639053b94c`，不是其后续更新版本。以下源码结论以这个快照及当时安装源的一致性记录为准。这项能力来自已有实现；本次工作的重点是启用、核对生效路径并完成同负载对照。
+实现来自 [Ascend/sglang PR #1332](https://github.com/Ascend/sglang/pull/1332)，本次绑定历史提交 `63bc1055c89aabcb62cb70f42032b8639053b94c` 及安装源一致性记录，没有采用该 PR 后来的更新。功能本身已有，本次完成启用、生效核查和同负载对照。
 
 ## 1. 先分清楚：这里缓存的是哪一种 TopK
 
-DeepSeek-V4 的推理路径里有几种容易混淆的“选择”。MoE Router 选择执行哪些专家，稀疏 Attention 的 indexer 选择读取哪些历史位置，Prefix Cache 则复用已算过的请求前缀。IndexCache freq2 作用于第二种选择。
+MoE Router 选专家，稀疏 Attention indexer 选历史位置，Prefix Cache 复用请求前缀。IndexCache freq2 缓存的是第二种选择，需要与另两种机制区分。
 
-在本文对应的 NPU 实现中，压缩比为 4 的 c4 层会运行 indexer，得到 TopK 历史位置索引，交给后续稀疏 Attention。可以把一次选择想成“当前这个 Query 值得看哪些压缩历史位置”。后端通过 `c4_topk_indices` 传递这些位置，Attention 消费它们作为 `cmp_sparse_indices`。理解完整寻址路径可以先读 [DeepSeek-V4 Attention：Query、缓存写入与历史寻址](../sglang/deepseek-v4-attention-source-analysis.md)。
+本 NPU 实现中，压缩比为 4 的 c4 层会运行 indexer，返回 TopK 历史位置。它们经 `c4_topk_indices` 传递，再作为 Attention 的 `cmp_sparse_indices`，决定当前 Query 读取哪些压缩历史。完整寻址可对照[Attention 文章](../sglang/deepseek-v4-attention-source-analysis.md)。
 
-IndexCache 保存的是这份位置清单。它不保存最终 Attention 输出，也没有把一层的 KV 值搬给另一层使用。源码里的压缩 KV 仍按 `layer.layer_id` 取出；复用层把上游选出的“位置”用于当前层自己的历史表示，然后继续执行当前层 Attention。
+共享的是索引清单。Attention 输出仍需计算，KV 仍按 `layer.layer_id` 读取当前层。复用层沿用前层选出的位置，在本层自己的历史表示上继续计算。
 
-例如，上游 c4 层认为位置 `[7, 18, 39, …]` 重要，下游复用层直接采用这组位置。下游若独立运行 indexer，原本可能选出另一组位置。这就是性能机会，也是后面必须讨论精度边界的原因。
+例如前层选出 `[7, 18, 39, …]`，后层直接使用这组位置，而它独立运行 indexer 时可能选出另一组。跳过选择节省工作，也改变计算行为，后面仍需验证质量。
 
-所以，这轮实验的请求前缀命中率仍然可以为 0。`cache0` 说明没有通过请求前缀复用减少 Prefill；它并不要求关闭模型内部的跨层索引复用。将两种缓存混在一起，会误判收益来源。
+这与请求缓存没有冲突。本轮 `cache0` 表示未通过前缀复用减少 Prefill，并不要求关闭模型内部跨层索引复用，因此不能据 cache0 排除 IndexCache 的作用。
 
 ## 2. freq2 按 c4 层计数，不按 Token 计数
 
-调度规则位于 [`csa_layer_skips_topk`](https://github.com/Ascend/sglang/blob/63bc1055c89aabcb62cb70f42032b8639053b94c/python/sglang/srt/configs/model_config.py#L391)。它先检查 `use_index_cache`，再检查当前层的 `compress_ratios[layer_id]` 是否等于 4。只有满足条件的层，才进入复用调度。
+[`csa_layer_skips_topk`](https://github.com/Ascend/sglang/blob/63bc1055c89aabcb62cb70f42032b8639053b94c/python/sglang/srt/configs/model_config.py#L391)先检查 `use_index_cache`，再判断 `compress_ratios[layer_id]` 是否为 4。只有符合条件的 c4 层参与调度。
 
-决定 `freq2` 行为的核心变量是 `indexer_seq_idx`：当前层之前有多少个 c4 层。下面是省略参数检查后的等价调度示意，不能替代完整实现：
+核心计数 `indexer_seq_idx` 表示此前已有多少 c4 层。省略参数检查后，可用下面的等价示意说明，完整逻辑仍以源码为准：
 
 ```python
 indexer_seq_idx = sum(r == 4 for r in compress_ratios[:layer_id])
 skip_topk = indexer_seq_idx % index_topk_freq != 0
 ```
 
-当频率为 2 时，每两个 c4 层组成一组：前一个重新选择，后一个复用。因此，“每两个 Token 更新一次索引”和“Transformer 原始层号逢偶数就跳过”都不符合这里的实现。
+频率 2 将连续 c4 层两两分组，前层重新选择，后层复用。计数既不按 token，也不按 Transformer 原始层号的奇偶。
 
-本次模型共有 21 个符合条件的 c4 层，原始层号从 0 开始计数。生效调度如下：
+本模型有 21 个符合条件的 c4 层，原层号从 0 开始，其调度为：
 
 | c4 序号 | 原始层号 | freq2 动作 | 使用的选择 |
 | --- | --- | --- | --- |
@@ -42,17 +42,17 @@ skip_topk = indexer_seq_idx % index_topk_freq != 0
 | … | … | 按同一规则继续 | … |
 | 20 | 42 | 重新计算 | 第 42 层自己的 TopK |
 
-最终是 **11 个 c4 层计算、10 个 c4 层复用**。这个数字表示静态层访问中的选择次数，不能直接翻译成模型计算量减少 47.62%。实际调用还受 Prefill 分块、批次和运行模式影响，模型也有大量不属于 indexer 的计算。
+因此静态层序列中有 11 层计算、10 层复用。它只表示选择调用的分配，不代表整模型工作量减少 47.62%；实际调用还依赖分块、batch 与运行模式，其他模型计算照常存在。
 
-实现还支持 `index_topk_pattern`：模式字符串存在时，它优先于频率，首字符必须是 `F`，相应位置的 `S` 表示复用，超出字符串的层恢复计算。因此配置里即使写了 `index_topk_freq=2`，也要确认没有另一个 pattern 改变调度。本次使用的是无显式 pattern 的频率路径。
+若设置 `index_topk_pattern`，模式优先于频率：首字符须为 `F`，相应 `S` 位置复用，超出模式长度后恢复计算。所以设置 `index_topk_freq=2` 还需检查 pattern。本次未指定 pattern，走纯频率路径。
 
-另一条重要边界在 [C4Indexer 构造函数](https://github.com/Ascend/sglang/blob/63bc1055c89aabcb62cb70f42032b8639053b94c/python/sglang/srt/layers/attention/dsv4/indexer.py#L1204)：MTP/NextN 层被排除。不能因为服务使用 DSpark，就推断 Target 和 Draft 都按相同层表跳过计算。这里的 21 层统计针对符合条件的模型主干 c4 层。
+[C4Indexer 构造函数](https://github.com/Ascend/sglang/blob/63bc1055c89aabcb62cb70f42032b8639053b94c/python/sglang/srt/layers/attention/dsv4/indexer.py#L1204)排除了 MTP/NextN。上述 21 层属于主干，不能因为启用 DSpark，就把同一调度表也套到 Draft。
 
 ## 3. 沿一次 Forward 看：省掉选择，保留状态更新
 
-真正决定收益范围的是 [NPU 后端的 `forward_c4_indexer`](https://github.com/Ascend/sglang/blob/63bc1055c89aabcb62cb70f42032b8639053b94c/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L944)。普通层先准备 indexer 所需的 Query、权重和压缩状态，再执行 `_forward_indexer`；启用 IndexCache 后，结果会写入跨层共享缓冲区 `_index_cache_topk`。
+[NPU forward_c4_indexer](https://github.com/Ascend/sglang/blob/63bc1055c89aabcb62cb70f42032b8639053b94c/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L944)在需要重新选择的 c4 层准备 Query、权重与压缩状态，再调用 `_forward_indexer`。启用 IndexCache 时，将结果写入共享 `_index_cache_topk`。
 
-到下一个需要复用的 c4 层，路径发生分叉。`_forward_prepare` 和多流版本都检查 `skip_topk`，直接省掉供 indexer 使用的 Query 计算、权重投影及相关缩放；随后不再运行 `_forward_indexer`，而是把共享缓冲区的当前切片放到 `forward_metadata.c4_topk_indices`。
+后续复用层由 `_forward_prepare` 及多流版本检查 `skip_topk`，跳过 indexer Query、权重投影和相关缩放。随后不执行 `_forward_indexer`，直接将共享缓冲的对应切片交给 `forward_metadata.c4_topk_indices`。
 
 ```mermaid
 flowchart TD
@@ -66,31 +66,31 @@ flowchart TD
     G --> H
 ```
 
-这里最容易被“跳过 indexer”一句话掩盖的是 compressor。源码并没有允许复用层把它一并取消：若 `skip_compressor=False`，复用分支仍调用 `c4_indexer.compressor(x, forward_batch)`，完成当前层所需的 indexer 压缩状态更新。
+但 compressor 仍有工作。`skip_compressor=False` 时，即使复用 TopK，分支也会调用 `c4_indexer.compressor(x, forward_batch)`，更新当前层的 indexer 压缩状态。
 
-为什么还要维护这份状态？因为后续批次或后续 Forward 可能需要读取当前层的历史；本轮省掉一次选择，并不意味着当前层历史可以停止前进。把“暂时不算 TopK”误改成“整个模块什么都不做”，会把局部复用变成状态缺失。
+这些状态可能在后续 batch 或 forward 被读取。省去本轮索引选择，并不允许当前层历史停止更新；若连模块一起跳过，就会从索引复用变成状态缺失。
 
-`skip_compressor=True` 有另一种来源：CP full-metadata 路径可能已经通过 `forward_indexer_compressor` 执行过 compressor，此处应避免重复执行。历史补丁允许 `skip_topk` 与 `skip_compressor` 同时存在，正是为了兼容这个先后关系。它表达的是“状态已在前面更新”，不能理解成“复用层不需要更新状态”。
+`skip_compressor=True` 则可能说明 CP full-metadata 已通过 `forward_indexer_compressor` 完成更新，避免这里重复。补丁允许它与 `skip_topk` 同时成立，是为了兼容前序已执行的状态操作。
 
-这条路径也解释了为什么不能把 IndexCache 限定为 Decode 优化。实际调用链从模型的 indexer 进入后端，入口只对 IDLE 提前返回，没有把功能限制在 Decode 或 Target Verify。Prefill/EXTEND 同样可以到达复用分支；是否进入 CP 协议、一次处理多少 Token，则由相应运行配置决定。本轮 P、D 同时开启，因此最终收益也不能只归给 D。
+入口只对 IDLE 提前返回，没有限于 Decode 或 Target Verify，Prefill/EXTEND 也可进入复用。具体 CP 协议和 token 量由运行配置决定。因此本功能不只属于 Decode，本次两端同时启用，结果也只能归于 P、D 联合设置。
 
 ## 4. Graph 下为什么还要管缓冲区的生命周期
 
-跨层复用需要一份共享存储，缓存的生存范围也必须说清。在 eager 路径中，后端按需要分配或扩容 `[num_tokens, index_topk]` 的 int32 缓冲区，普通计算层写入，后面的复用层读取。本次 `index_topk` 为 512，它控制每行索引的宽度；`freq2` 控制哪些层重新计算，两者是不同维度。
+Eager 下按需分配或扩容 `[num_tokens,index_topk]` 的 int32 缓冲，由重新选择的 c4 层写入，复用层读取。本次 `index_topk=512` 控制每行索引宽度，`freq2` 控制重新选择的层序，两项不能混用。
 
-Graph 路径不能只把 Python 属性重新指向任意新 Tensor。补丁在图元数据初始化时，把 `_index_cache_topk` 绑定到稳定的 `c4_topk_indices` 图缓冲切片，相关算子才能按图中的存储关系读写。图元数据刷新处也不再无条件把这份共享索引填成 `-1`。
+Graph 则要求稳定存储。补丁在图元数据初始化时，将 `_index_cache_topk` 绑定到 `c4_topk_indices` 的固定图缓冲切片，同时取消刷新时无条件填 `-1`。只更换 Python Tensor 引用并不能建立图内正确读写。
 
-这处变化的重点是写入和读取之间的关系。如果刚写好的索引在下游消费前被重置，复用层读到的就不是前面选择的结果。反过来，保留存储也不意味着可以把上一批的选择直接拿给下一批：调度保证首个符合条件的 c4 层重新计算，后续复用依赖本轮上游写入。
+前层写出的结果必须保留到下游消费，不能提前清空。同样，也不能让下一批读取上一批选择：首个符合条件的 c4 层会重新计算，后续复用依赖本轮写入。
 
-因此，IndexCache 的主要复用范围是**一次 Forward 内的 c4 层序列**。物理缓冲区可以跨次存在，内容的有效性却来自当前 Forward 的计算顺序。批次行数、请求排列和图档位变化时，正确的切片与刷新关系必须继续成立。仅看到一个常驻 Tensor，不能推导出“跨请求缓存命中”。
+因此主要复用发生在一次 Forward 的 c4 层序列内。物理存储可以跨轮保留，内容有效性仍由当前顺序保证。批次大小、请求排列或图档位改变时，切片与刷新必须匹配，常驻 Tensor 不等于跨请求命中。
 
-这也是移植该能力时应一起核对层调度、前向路径和 Graph 元数据的原因。只复制 `skip_topk` 的条件表达式，会漏掉真正承载数据的存储关系。
+移植时需将层调度、前向和图元数据一起核对。复制 `skip_topk` 条件，却遗漏共享存储绑定，仍无法保证复用正确。
 
 ## 5. 同负载实测提高了多少，哪些指标没有一起变好
 
-这轮对照使用 DeepSeek-V4-Flash W8A8、真实 PD 分离，P8+D8 共 16 张物理卡。正文 16384 Token，实际 Chat 输入 16388 Token，固定输出 1024 Token；请求前缀命中率为 0。双方都发送 640 条请求，C64、到达速率 3 req/s，保持草稿 3 个、验证宽度 4 的投机配置及其他约定参数不变，只切换 P、D 的 IndexCache 设置。
+性能配对使用相同 DeepSeek-V4-Flash W8A8、真实 PD，P8+D8 共 16 张卡。正文 16384、Chat 输入 16388、输出 1024 token，缓存 0；各发 640 条，C64、3 req/s，草稿 3/验证 4 及其他约定配置一致，仅切换两端 IndexCache。
 
-native 是 AISBench 所选稳定区间，whole 是全部正式请求区间。两者各保留自己的分母；不能拿其中更好的数字替代另一种区间。
+whole 覆盖全部正式请求，native 使用 AISBench 稳态选样，各有自己的请求和时间分母：
 
 | 指标 | OFF native | freq2 native | OFF whole | freq2 whole |
 | --- | ---: | ---: | ---: | ---: |
@@ -105,29 +105,29 @@ native 是 AISBench 所选稳定区间，whole 是全部正式请求区间。两
 | AL（whole 计数代理） | 未采对应窗口 | 未采对应窗口 | 3.1367 | 3.1786 |
 | 严格 Draft 接受率 | NOT_OBSERVED | NOT_OBSERVED | NOT_OBSERVED | NOT_OBSERVED |
 
-whole 两轮均为 640 成功、0 失败、前缀缓存命中率 0%。表中 whole 系统吞吐及 D8 数值由保存的 PD16 原值乘相应卡数得到；[配套 CSV](../../assets/deepseek-v4-indexcache-freq2/matched-results.csv)保留更多原值与计算口径。
+两轮 whole 都是 640 成功、0 失败、缓存 0%。系统总吞吐与 D8 值由保存的 PD16 原值按卡数换算，更多原值及口径见[配套 CSV](../../assets/deepseek-v4-indexcache-freq2/matched-results.csv)。
 
-尾部时延也能帮助理解变化：native TTFT P90 从 6419.9ms 增至 6559.1ms，TPOT P90 从 21.2ms 降至 20.0ms，ITL P90 从 72.4ms 降至 70.3ms。ITL 是流式到达间隔，不能用它替代 TPOT，也不能把它当成 Draft 或 Verify 的阶段耗时。
+native 尾部同样有得有失：TTFT P90 从 6419.9ms 升至 6559.1ms，TPOT P90 从 21.2ms 降至 20.0ms，ITL P90 从 72.4ms 降至 70.3ms。ITL 按流式事件间隔统计，未测量独立 Draft 或 Verify 阶段。
 
-这组数据支持的判断是：在这套负载下，开启 freq2 后，输出吞吐和生成阶段时延改善，TTFT 没有同步改善。native 提升 5.41%，whole 提升 3.45%，两个区间方向一致；但它们仍来自各一次对照，native 纳入的请求集合也不同，不能写成多次复现的普遍收益。
+当前负载中，生成延迟和输出吞吐改善，TTFT 则未改善。native +5.41%、whole +3.45% 方向一致，但每臂只跑一次，native 选样也不同，尚不足以称为多次复现的通用收益。
 
-接受指标还有额外限制。whole AL 代理分别来自 `655360 / 208933` 和 `655360 / 206180`，即保存的生成 Token 总计数与 Verify 调用计数之比。它没有提供逐请求严格 Draft 分母，不能通过 `(AL-1)/gamma` 换算成实测接受率，更不能凭 AL 略升就宣布精度改善。本文不据此重建 native AL。
+whole AL 代理为 `655360 / 208933`、`655360 / 206180`，仅使用生成总数与 Verify 次数。没有逐请求严格 Draft 分母，不能以 `(AL-1)/gamma` 补实测接受率或 native AL；AL 略升也未验证精度。
 
-P、D 同时切换也意味着归因只能停在这项联合设置。端到端 TPOT 下降与减少 indexer 工作的机制相符，但本轮没有独立 P-only、D-only 对照，也没有隔离的算子耗时，无法给出“收益有多少来自 P”的百分比。后续多个优化叠加后取得的更高成绩，不能全部记到 IndexCache 账上。
+TPOT 下降与减少 indexer 的机制相容，但未做 P-only、D-only 或隔离算子计时，无法量化两端各贡献多少。后续叠加其他优化的成绩，也不能全部归给 IndexCache。
 
 ## 6. 为什么少算近一半 indexer 层，只换来约 5% 吞吐
 
-首先，被跳过的是一部分 c4 层的选择工作。当前层的 Attention、必要 compressor 更新、Dense/MoE 计算、通信、KV 传输和调度仍然存在；计算层还需要把新 TopK 写入共享缓冲区。没有一条源码路径支持“跳过 indexer 就跳过了这一层”。
+被省去的是部分 c4 选择。当前层 Attention、必要 compressor、Dense/MoE、通信、KV 传输和调度仍执行，计算层还会写新 TopK。因此不能把 10 个复用层理解为 10 个完整模型层都被跳过。
 
-其次，局部工作减少能否转化为系统吞吐，取决于它是否处在当时的关键路径。P 供给不足时，D 少做一些选择并不自动增加可生成的请求数；如果减少的工作原本与其他流重叠，收益也不会等于那段算子时间。本文没有用局部跳过次数反推端到端时间。
+局部减少能否提高系统产出，还取决于关键路径。P 供给不足时，D 少做选择未必增加活跃请求；原本与别流重叠的工作减少后，也不会按累计算子时间直接增加吞吐。
 
-因此，freq4 或更高频率也不能沿 5.41% 线性外推。更多复用层意味着更少的新选择，也意味着更长的跨层复用距离；性能收益可能受别的阶段限制，质量变化则可能扩大。下一档应当由当前性能和任务质量共同决定，不能只按“跳得更多”排序。
+freq4 等更高频率因此不能按 5.41% 线性外推。跨层距离扩大可能减少更多选择，也可能扩大质量差异，而性能会逐渐受其他阶段限制。下一档需同时看任务质量与实际耗时。
 
-这轮还有真实实验成本：加载与两轮 MF 合计约 621.33s，64 条 typed route 验证约 335.21s，正式负载约 269.33s，总生命周期约 1352.00s。它们是本次执行记录，不能写成所有环境必需的固定流程；但保留这些数字，才能看见一次约 5% 的性能判断花了多少时间。已经得到有效对照后，重复相同长测是否值得，要看它能否改变保留决策。
+这次加载与两轮 MF 约 621.33s，64 条 typed route 约 335.21s，正式约 269.33s，全程约 1352.00s。它们是本环境的实际成本，不是固定流程；已有有效配对后，是否值得重复长测，应看结果会不会改变保留决定。
 
 ## 7. 配置可以很短，验收必须包含行为变化
 
-本次启用时向 P、D 两端传入的模型覆盖内容如下。它是 JSON 配置片段，需要通过当前版本已支持的模型覆盖入口合入实际启动参数，而不是直接改写原权重目录的配置文件：
+P、D 当时传入以下模型覆盖片段，经已有覆盖入口合入启动参数，没有直接修改权重目录配置：
 
 ```json
 {
@@ -136,15 +136,15 @@ P、D 同时切换也意味着归因只能停在这项联合设置。端到端 T
 }
 ```
 
-运行时应核对最终 `json_model_override_args`，并检查日志给出的 `c4_layers`、`skip_layers` 和 `skip_layer_ids`。本次对应 21 个 c4 层、10 个复用层，复用原始层号为 `[4, 8, 12, 16, 20, 24, 28, 32, 36, 40]`。只看到基础脚本里出现 `freq2`，不足以证明最终加载的模型采用了该调度。
+运行时核对最终 `json_model_override_args` 及日志 `c4_layers`、`skip_layers`、`skip_layer_ids`。本次为 21 个 c4、10 个复用层，原层号 `[4, 8, 12, 16, 20, 24, 28, 32, 36, 40]`。脚本出现 `freq2` 并不能单独证明模型按此执行。
 
-对照侧使用关闭状态。不要未经核对就把“开启且 freq1”当成完全相同的 OFF：freq1 虽然不跳过 c4 选择，后端的启用分支仍可能执行共享缓冲更新，运行路径不必完全相同。升级版本时也应重新核对默认值和有效 pattern，本文历史快照中未设置 `use_index_cache` 的默认行为是关闭。
+基线应使用关闭状态。开启 freq1 虽不跳过选择，后端仍可能写共享缓冲，不一定等同 OFF。历史快照未设 `use_index_cache` 时默认为关闭；升级后需重查默认和 pattern。
 
-更关键的验收是任务质量。这里沿用了上游层的选择，当前层本应独立计算的稀疏索引发生了替换。模型权重没变、量化没变、请求全部成功，都不能证明替换前后输出等价。投机验证即便按当前 Target 正确工作，也不能证明启用 IndexCache 的 Target 与关闭时相同。
+质量验收更不能省略。复用替换了当前层本来独立选择的稀疏位置，权重与量化未变、HTTP 全成功都不足以证明输出等价。投机验证按当前 Target 正确执行，也未证明启用和关闭的 Target 相同。
 
-本轮完整精度状态是 **NOT_EVALUATED**。因此保留的是一个有同负载性能证据的候选，不能称为无损加速。若要用于实际业务，下一步应在同权重、同采样和同输入条件下比较有代表性的任务：关注长上下文检索、答案正确率及业务容忍的输出差异；状态路径还应覆盖 Prefill、Verify 和 Graph 切换。上述内容是质量验收建议，本文没有宣称已经完成这些测试。
+本轮精度状态仍为 NOT_EVALUATED，只能保留为有性能依据的候选，不能称作无损。业务验收可固定权重、采样和输入，覆盖长上下文检索、答案正确性、可容忍差异，以及 Prefill、Verify、Graph 状态切换。这些是待做建议，本文未声称完成。
 
-这次实验留下的经验很具体：freq2 通过复用相邻 c4 层的历史位置选择，省掉部分 indexer 工作，获得了约 5.41% 的 native 吞吐收益；compressor 状态更新和当前层 Attention 仍然继续执行。理解这个边界，才能既解释为什么它有效，也知道在把它变成默认配置前还缺哪一份证据。
+目前能确认的是：freq2 复用相邻 c4 层的历史位置，减少部分选择工作，本次 native 提高约 5.41%，compressor 更新和本层 Attention 继续执行。是否设为默认，还需补充质量对照。
 
 ## 源码与配套材料
 
