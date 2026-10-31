@@ -1,18 +1,18 @@
 # Prefill 与 Decode 为什么性能不同：从计算形状到执行开销
 
-Prefill 和 Decode 使用同一份模型权重，却把不同形状的工作交给设备。Prefill 一次处理较多新 Token；普通 Decode 中，每条请求一轮通常只提供一个新 Token，同时还要读取已有历史。
+Prefill 和 Decode 使用同一份权重，设备收到的工作形状却差很多。Prefill 一次可以计算许多新 Token；普通 Decode 中，每条请求一轮通常只新增一个 Token，还需要访问此前积累的历史状态。
 
-例如同样一层矩阵乘，2048 个 Prompt Token 可以一起复用权重，单条 Decode 请求却只能先算当前这一个 Token。进入 MoE 后，这些 Token 又会分散给不同专家，每个专家实际收到的行数可能更少。理解这两次形状变化，才能判断时间更可能花在计算、数据搬运还是反复提交任务上。下面从矩阵形状推到 DeepSeek-V4-Flash 的滑窗与压缩历史，再讨论怎样用 Profile 核对。
+以一层矩阵乘为例，2048 个 Prompt Token 能共同复用一份权重，单条 Decode 请求当前却只有一行输入。进入 MoE 后，这些输入还会被路由到不同专家，单个专家可能只分到很少几行。要判断耗时来自计算、搬运还是反复提交任务，可以先把这两次形状变化算清，再追踪 DeepSeek-V4-Flash 的滑窗、压缩历史和实际执行开销。
 
-第一次接触这两个阶段，可以先读前两节，抓住“每轮有多少新 Token、权重被复用了多少次”这条主线。已经在看性能日志时，可以直接进入后面的 Attention 历史读取、执行开销与 Profile 对照；遇到陌生术语，再查[推理基础设施名词表](ai-infra-working-glossary.md)。
+刚接触推理性能时，可以先读前两节，理解一轮有多少新 Token、这些行如何复用权重。已经在分析日志和时间线，则可以从后面的 Attention 历史访问与 Profile 对照读起。术语可随时查[推理基础设施名词表](ai-infra-working-glossary.md)。
 
-本文主要固定到 SGLang commit <code>b86a30afbae389eec8763f4bcf38f14904d2d00c</code>，模型以 DeepSeek-V4-Flash-0731 为具体案例，核对日期为 2026-09-21。
+源码主要固定在 SGLang commit <code>b86a30afbae389eec8763f4bcf38f14904d2d00c</code>，具体案例采用 DeepSeek-V4-Flash-0731，核对日期为 2026-09-21。
 
-为了把 Shape 对算术强度的影响单独讲清楚，部分 GEMM 示例会统一使用 BF16 bytes 做思想实验。官方 DeepSeek-V4-Flash checkpoint 实际包含 FP8 / FP4 等量化配置，不同 Ascend 部署也可能采用 W8A8 等路径；dtype 会改变数值系数，但不会改变“大 M 更容易复用 Weight、小 M 更难摊薄 Weight / Launch 成本”的基本结论。
+为单独观察 Shape 对算术强度的影响，部分 GEMM 例子把数据统一按 BF16 字节数估算。这是思想实验：官方 DeepSeek-V4-Flash checkpoint 含 FP8 / FP4 等量化配置，Ascend 部署也可能走 W8A8 等路径。dtype 会改变系数；大 M 能让更多输入复用权重，小 M 更难分摊权重读取和 Launch 成本，这层关系仍然成立。
 
 ## 一、新 Token 数怎样改变计算形状
 
-假设用户输入 2048 个 Prompt Token，然后让模型生成 512 个 Output Token。
+假设输入有 2048 个 Prompt Token，目标生成 512 个 Output Token，请求先后经过以下阶段：
 
 ~~~mermaid
 flowchart TD
@@ -27,20 +27,13 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G
 ~~~
 
-Prefill 可以把大量 Prompt Token 一起送进模型。普通自回归 Decode 按顺序推进：Token(t+1) 依赖 Token(t) 的 Sampling 结果。对单个 Request 来说，Decode 更接近：
+Prefill 能一起计算已经给定的 Prompt Token。普通自回归 Decode 则需要先得到 Token(t) 的 Sampling 结果，才知道下一轮该输入什么。对单条请求，第 1、2、3 轮通常各有一枚新输入，后续仍依次推进。
 
-~~~text
-Step 1: 1 个新 Token
-Step 2: 1 个新 Token
-Step 3: 1 个新 Token
-...
-~~~
+这就是自回归依赖（Autoregressive Dependency）。把不同请求组成 Batch，能增加当前轮的输入行数，但每条请求未来的 Token 仍要等前面的结果。
 
-这种“先得到当前 Token，才能计算下一个 Token”的依赖，叫自回归依赖（Autoregressive Dependency）。把不同请求合成一个 Batch 可以增加同一轮的工作量，却不能直接提前知道每条请求未来的 Token。
+这个区别也体现在 SGLang 的 Runtime 中。固定版本 <code>forward_batch_info.py</code> 把 <code>ForwardMode.EXTEND</code> 注释为通常意义上的 Prefill，把 <code>ForwardMode.DECODE</code> 解释为 Decode one token；<code>ForwardMode.MIXED</code> 则用于 Chunked Prefill 等包含 Extend / Decode 的混合批次。
 
-SGLang 的 Runtime 直接保留了这个区别。当前 <code>forward_batch_info.py</code> 中，<code>ForwardMode.EXTEND</code> 的源码注释明确把它称作通常意义上的 Prefill，而 <code>ForwardMode.DECODE</code> 就是 Decode one token。现实系统还存在 <code>ForwardMode.MIXED</code>，用于 Chunked Prefill 等同时包含 Extend / Decode 的批次。
-
-更关键的是 Scheduler 怎么数 Token。当前 DP Attention batch 准备逻辑里：
+Scheduler 准备 DP Attention batch 时，对两种阶段分别计数：
 
 ~~~python
 if local_batch.forward_mode.is_decode():
@@ -49,35 +42,19 @@ else:
     num_tokens = local_batch.extend_num_tokens
 ~~~
 
-因此，在这里讨论的普通 Decode 中，64 条活跃请求一轮约提供 64 行新 Token；一次 Prefill / Extend 则可能提供 512、2048、8192 行甚至更多。这里数的是当前批次的新 Token 行，不能把请求总上下文长度当作矩阵乘的 M；多卡分片、Graph 填充还可能改变某个 Rank 上实际执行的尺寸。
+按这里的普通 Decode 路径，64 条活跃请求约提供 64 行新 Token；Prefill / Extend 一轮则可能有 512、2048、8192 行，或者更多。矩阵乘的 M 要看当前新输入，不能直接拿总上下文长度代入。落到某个 Rank 后，分片和 Graph 填充还会继续改变执行尺寸。
 
-先忽略分片和填充，两种阶段的 M 可以概括为：
+暂且忽略分片与填充，Prefill 的 M 可以达到数千，普通 Decode 的 M 则近似等于当前活跃请求数。
 
-~~~text
-Prefill:
-M ≈ thousands
+同一层权重面对的输入行数已经不同。接下来权重复用以及专家负载的差别，都是从这里开始的。
 
-Decode:
-M ≈ active_requests
-~~~
+Ascend 910C 的 DeepSeek-V4 Attention Backend 也按阶段准备 metadata。Extend 根据各 Request 的 <code>extend_seq_lens</code> 构造 Query prefix sum，普通 Decode 则构造 `actual_seq_lengths_q_pa = [0,1,2,...,B]`，将每条请求表示成一个 Query row。
 
-同一份权重面对的输入行数，已经相差很多。后面讨论权重复用和专家负载时，都从这个区别出发。
-
-Ascend 910C 的 DeepSeek-V4 Attention Backend 也把这个差异编码进 metadata。Extend 路径按每个 Request 的 <code>extend_seq_lens</code> 构造 Query prefix sum；普通 Decode 则直接构造：
-
-~~~text
-actual_seq_lengths_q_pa
-=
-[0, 1, 2, ..., B]
-~~~
-
-这相当于告诉后端：每个 Decode Request 当前只有一个 Query row。
-
-从 Scheduler 组批、ForwardBatch 输入到 Attention Geometry，两阶段已经形成了不同的工作形状。
+因此，Scheduler 的 Token 计数、ForwardBatch 输入和 Attention 接收的 Query 形状，是同一差异在不同层的体现。
 
 ## 二、Dense GEMM：M 与权重复用
 
-Transformer 里的大量计算最终都会落成矩阵乘：
+先看模型中常见的矩阵乘：
 
 ~~~text
 Y = XW
@@ -87,37 +64,19 @@ W: [K,N]
 Y: [M,N]
 ~~~
 
-M 表示参与这次矩阵乘的输入行数，可以理解为多少行 Token 表示共同使用一份权重。K 是输入特征维度，N 是输出特征维度。下面用 DeepSeek-V4-Flash 的 Attention 投影说明：
+M 是这次输入的行数，也就是多少行 Token 表示一起使用权重；K 是输入特征维度，N 是输出特征维度。DeepSeek-V4-Flash 的几个 Attention 投影可以写成下面的形状。
 
-<code>wq_a</code>：
+| 投影 | 输入 | 权重的逻辑全局形状 |
+| --- | --- | --- |
+| `wq_a` | [M,4096] | [4096,1024] |
+| `wkv` | [M,4096] | [4096,512] |
+| `wq_b` | [M,1024] | [1024,32768] |
 
-~~~text
-[M,4096]
-×
-[4096,1024]
-~~~
+<code>wq_b</code> 实际每个 Rank 的 N 还受 <code>attn_tp_size</code> 影响。M 主要随当前处理阶段和负载变化，K/N 则需要结合模型结构与并行布局看。
 
-<code>wkv</code>：
+现在只改变 M，并假设 <code>wq_a</code> 的 X、W、Y 全部使用 BF16，每元素 2 Byte。矩阵乘计算量约为 `FLOPs ≈ 2MKN`。
 
-~~~text
-[M,4096]
-×
-[4096,512]
-~~~
-
-<code>wq_b</code> 的逻辑全局 shape：
-
-~~~text
-[M,1024]
-×
-[1024,32768]
-~~~
-
-实际每 Rank 的 N 还会受 <code>attn_tp_size</code> 影响。这里要区分两个维度：M 主要由当前 workload phase 决定，而 K/N 由模型结构和并行布局共同决定。
-
-为了只观察 M 的影响，假设 <code>wq_a</code> 的 X / W / Y 都按 BF16 计算，每元素 2 Byte。计算量约为：`FLOPs ≈ 2MKN`
-
-最低限度的数据流量近似：`Bytes ≈ 2 × (MK + KN + MN)`
+若只计输入、权重、输出各一次读写，数据量约为 `Bytes ≈ 2 × (MK + KN + MN)`，可得：
 
 ~~~text
 AI
@@ -127,7 +86,7 @@ AI
 [2(MK + KN + MN)]
 ~~~
 
-代入 K=4096、N=1024：
+将 K=4096、N=1024 代入：
 
 | M | 理想 Arithmetic Intensity |
 | ---: | ---: |
@@ -137,15 +96,15 @@ AI
 | 512 | ≈ 315 FLOP/B |
 | 2048 | ≈ 585 FLOP/B |
 
-Arithmetic Intensity（算术强度，简称 AI）表示每搬运一字节数据完成多少计算。表中是只计输入、权重、输出各一次读写的理想估算，单位 FLOP/B；它不是 Ascend 910C 实测值，也没有计入 Cache、Tiling、通信和量化 Scale 等影响。M=1 时，一份大权重只服务一行输入；M=2048 时，读来的权重可以服务更多行，所以每字节对应的计算更多。
+Arithmetic Intensity（算术强度，简称 AI）衡量每搬运一字节完成多少计算，单位为 FLOP/B。这张表是理想估算，未计入 Cache、Tiling、通信、量化 Scale 等因素，也不是 Ascend 910C 的实测值。M=1 时，整份权重只服务一行；M=2048 时，同一份权重可以服务更多行，计算量相对搬运量就更大。
 
-当 M 远小于 K/N 时，Weight traffic 通常是主要项，于是可以近似：`AI ≈ 2M / b_w`
+当 M 远小于 K/N、权重读取占主要部分时，上式还可以近似为 `AI ≈ 2M / b_w`。
 
-其中 <code>b_w</code> 是每个 Weight 元素的字节数。BF16 Weight 下大约有 AI≈M；INT8 Weight 下大约有 AI≈2M。
+<code>b_w</code> 表示每个权重元素的字节数。BF16 下近似 AI≈M，INT8 下则近似 AI≈2M。
 
-这也解释了为什么 Quantization 对 Decode 很有吸引力：小 M 下 Weight bandwidth 压力大，减小 Weight bytes 很可能有价值。但真实 W8A8 还要支付 Dynamic Quant、Scale、Tiling、Launch 和 Epilogue 等额外成本，这些开销共同决定最终 TPOT，实际收益取决于省下的权重读取成本能否覆盖量化开销。
+小 M 时，减少 Weight bytes 有机会缓解带宽压力，这也是量化适合 Decode 的一个原因。不过 W8A8 还会引入 Dynamic Quant、Scale、Tiling、Launch、Epilogue 等成本。最终 TPOT 能否下降，需要看节省的权重读取能否覆盖这些额外工作。
 
-Continuous Batching 把不同请求本轮的 Token 合起来，增加 M，也就有机会提高 Dense GEMM 的算术强度。用 Roofline 模型理解时，可以先看设备有效计算能力与有效带宽的比值，也叫转折点（Ridge Point）：
+Continuous Batching 将多条请求当前的 Token 合并，增大 M，因而有机会提高 Dense GEMM 的算术强度。可以再用 Roofline 的转折点（Ridge Point）判断限制来自哪边，它等于设备有效计算能力与有效带宽之比：
 
 ~~~text
 R_eff
@@ -155,7 +114,7 @@ effective FLOP/s
 effective Byte/s
 ~~~
 
-当算术强度低于这个比值，带宽上限更容易先限制性能；高于它，计算能力更可能先成为限制。只在权重流量占主导的简单模型里，转折点对应的 M 近似为：
+算术强度低于这个比值时，更容易先碰到带宽上限；高于它时，计算能力更可能先形成限制。在权重流量占主导的简化模型中，可进一步估算对应的 M：
 
 ~~~text
 M_crossover
@@ -163,21 +122,15 @@ M_crossover
 R_eff × b_w / 2
 ~~~
 
-但真实 crossover 还取决于 CANN Tiling、Weight Layout、Cache、Quantization、Kernel Occupancy、TP / DP 与通信。在目标配置上做 batch sweep，可以观察这些因素共同作用下的转折点。
+实际转折点还受到 CANN Tiling、Weight Layout、Cache、Quantization、Kernel Occupancy、TP / DP 和通信影响，需要在目标配置上做 batch sweep 观察。
 
 ## 三、MoE：总 Token 怎样分散到 Expert
 
-Dense Linear 的 M 还是这一轮的总 Token 数。MoE 决定 Expert GEMM Shape 的却是：
+Dense Linear 可以共同处理当前一轮的输入行。MoE 路由后，每个 Expert GEMM 的 `M_e` 则是 Expert e 当前实际收到的 Token 行数。
 
-~~~text
-M_e
-=
-Expert e 当前实际收到多少 Token
-~~~
+计算平均 `M_e` 时，Token 总数和专家数量必须取自同一个 EP 通信域。
 
-估算平均 `M_e` 时，分子取同一 EP 通信域的 Token 总量，分母也按该域的专家数量计算。
-
-DeepSeek-V4-Flash 的公开配置是：
+DeepSeek-V4-Flash 的公开配置为：
 
 ~~~text
 256 routed experts
@@ -186,7 +139,7 @@ moe_intermediate_size = 2048
 hidden_size = 4096
 ~~~
 
-一个 routed expert 的逻辑 W13 可以近似看成：
+单个 routed expert 的 W13 逻辑形状近似为：
 
 ~~~text
 [M_e,4096]
@@ -194,7 +147,7 @@ hidden_size = 4096
 [4096,4096]
 ~~~
 
-这里 4096 的输出来自 Gate + Up 两个 2048 分支。W2 则近似：
+输出维度 4096 来自 Gate、Up 各 2048 的两个分支，之后 W2 的形状近似为：
 
 ~~~text
 [M_e,2048]
@@ -202,39 +155,20 @@ hidden_size = 4096
 [2048,4096]
 ~~~
 
-每个 Token 被送到 6 个 routed experts，因此一轮总 token-expert assignments 约为 6M。
+每个 Token 激活 6 个 routed experts，因此 M 个 Token 约产生 6M 个 token-expert assignments。
 
-为了建立 Shape 直觉，先假设 Router 完全均匀。真实流量不会如此均匀，这个假设只用于算平均值。
+先假定 Router 完全均匀，用平均值建立尺寸直觉；真实请求的路由分布还会有偏斜。
 
-Prefill 如果 M=2048：
+把 Prefill 的 M=2048 与 64 条活跃请求的普通 Decode 并排计算：
 
-~~~text
-2048 × 6
-=
-12288 assignments
+| 阶段 | M | Token–Expert assignments | 平均 M_e |
+| --- | ---: | ---: | ---: |
+| Prefill | 2048 | 2048×6=12288 | 12288/256=48 |
+| Decode | 64 | 64×6=384 | 384/256=1.5 |
 
-12288 / 256
-=
-48 rows / expert
-~~~
+平均数可以是 1.5，实际单个专家收到的行数仍是整数：有些没有 Token，有些会收到多个。
 
-即平均 M_e≈48。
-
-Decode 如果有 64 个 active requests：
-
-~~~text
-64 × 6
-=
-384 assignments
-
-384 / 256
-=
-1.5 rows / expert
-~~~
-
-即平均 M_e≈1.5。这里的 1.5 是跨专家的平均数，实际某个专家收到的行数仍是整数；有的可能没有 Token，有的会收到多个。
-
-继续把 W13 按 BF16 估算，得到下表。M_e=1.5 这一行只是把平均负载代入公式，用于比较量级，不表示 Kernel 真能执行半行：
+仍以 BF16 估算 W13，得到下表。M_e=1.5 只是将平均负载代入公式比较量级，不代表 Kernel 会执行半行。
 
 | Expert M_e | AI |
 | ---: | ---: |
@@ -243,9 +177,9 @@ Decode 如果有 64 个 active requests：
 | 6 | ≈ 6.0 FLOP/B |
 | 48 | ≈ 46.9 FLOP/B |
 
-于是 DeepSeek-V4 的 Prefill / Decode 差异不只是 Dense M=2048 vs M=64，还可能变成 Expert M_e≈48 vs M_e≈1.5。
+因此，从 Prefill 变为 Decode，不仅 Dense 的 M 从 2048 变为 64，平均 Expert M_e 还可能从约 48 降到约 1.5。
 
-真实 Router 还会产生不均衡：
+实际路由会进一步产生不均衡，例如：
 
 ~~~text
 Expert 0: 0
@@ -256,13 +190,13 @@ Expert 4: 13
 ...
 ~~~
 
-这意味着某些专家没有工作，另一些专家只做很小的 GEMM。GroupedMatmul 虽然能组织多组专家计算，仍要面对各组尺寸过小或不均衡的问题；跨 Rank 执行时，还要叠加 Dispatch / Combine 通信与等待。总 Token 数相同，不同的专家负载分布也可能产生不同耗时。
+有的专家没有工作，有的只做很小的 GEMM。GroupedMatmul 可以统一组织多组计算，却仍要处理各组过小或不均衡的尺寸。跨 Rank 时又增加 Dispatch / Combine 以及等待，所以即使总 Token 数相同，专家分布不同也会改变耗时。
 
-分析 DeepSeek-V4 Decode 时，将 global batch size 与各专家的负载分布一起记录，包括 Expert Token Histogram，以及 mean / median / p90 / max M_e 和 empty expert ratio。这也是 EPLB 与 MoE runtime 优化为什么会直接影响 Decode 性能。
+分析 DeepSeek-V4 Decode 时，除了 global batch size，还应记录 Expert Token Histogram、mean / median / p90 / max M_e 和 empty expert ratio。EPLB 或 MoE runtime 的调整会改变这部分执行条件，最终可能影响 Decode 性能。
 
 ## 四、长上下文下的滑窗与压缩历史
 
-普通 MHA 的入门模型常常这样解释 Decode：
+入门时通常用普通 MHA 描述 Decode 的历史读取：
 
 ~~~text
 Q_new: [1,d]
@@ -272,7 +206,7 @@ K_cache[0:L]
 V_cache[0:L]
 ~~~
 
-在这个入门模型里，上下文长度 L 翻倍，读取历史 KV 的工作量也近似翻倍。DeepSeek-V4 对历史状态使用了滑窗和压缩，不能直接沿用这个比例。下面分别算它需要访问的几类数据。
+这个模型中，上下文 L 翻倍，历史 KV 读取量也大致翻倍。DeepSeek-V4 使用滑窗和压缩历史，需要分别计算各条路径，才能判断上下文增长带来什么成本。
 
 DeepSeek-V4-Flash 的公开配置包含：
 
@@ -285,25 +219,17 @@ compress_ratios =
 [0, 0, 4, 128, 4, 128, ...]
 ~~~
 
-当前 SGLang Ascend DSV4 路径因此会出现 SWA、C4 compressed history、C128 compressed history、C4 Lightning Indexer 和 Compressor state。
+对应的 SGLang Ascend DSV4 路径会涉及 SWA、C4 compressed history、C128 compressed history、C4 Lightning Indexer，以及 Compressor state。
 
-DeepSeek-V4 的 qk_nope_head_dim=448、qk_rope_head_dim=64，总 row width 为 512。在本文关注的 Ascend 910C 非-arch35 PA_ND 路径里，源码使用 BF16 KV row，因此一个 logical KV row 大约：
+DeepSeek-V4 的 qk_nope_head_dim=448、qk_rope_head_dim=64，合起来一行宽度为 512。本文关注 Ascend 910C 的非 arch35 PA_ND 路径，其 KV row 使用 BF16，因此单行 logical payload 约为 `512 × 2 = 1024 Bytes`，即 1 KiB。
 
-~~~text
-512 × 2 Bytes
-=
-1024 Bytes
-≈
-1 KiB
-~~~
+较新的 arch35 分支采用 packed FP8 KV 布局，后续字节数不能直接套过去。另外，这里估算的是 logical payload，不等于实际 HBM transaction；Cache、Prefetch、Page Layout、Tiling、量化格式及多 Head 复用都会影响真实搬运。
 
-较新的 arch35 分支会使用 packed FP8 KV 布局，因此下面的字节数只适用于本文关注的 910C 路径。更重要的是，下面计算的是 logical payload scale，而不是实际 HBM transaction。Cache 命中、Prefetch、Page Layout、Tiling、量化格式和多 Head 复用都会改变真实搬运量。
+SWA 把历史窗口限制在约 128 rows，按 sliding_window=128 粗估，logical payload 约 128 KiB。这部分不会随上下文从 32K 增到 128K、1M 而无限线性增加。
 
-SWA 的历史读取是有界的。公开配置的 sliding_window=128，意味着原始 SWA branch 的历史窗口大约被限制在 128 rows，粗略 logical payload 约 128 KiB。它不会随着 32K、128K、1M Context 无限线性增长。
+C4 的 compress_ratio=4，长度 L 对应约 ceil(L/4) 个压缩位置。不过 NPU DSV4 backend 最终用 <code>c4_topk_indices</code> 选择历史，公开配置 index_topk=512，因此长上下文下最终 C4 Attention 消费的 compressed rows 上限约为 512。
 
-C4 则不同。compress_ratio=4，长度 L 的 Context 对应约 ceil(L/4) 个 compressed positions。当前 NPU DSV4 backend 的 C4 Attention 最终会使用 <code>c4_topk_indices</code>，公开配置 index_topk=512，所以长 Context 下最终 C4 Attention 消费的 compressed rows 上限约为 512。
-
-如果只看最终 Attention 的 logical KV payload：
+只计最终 Attention 读取的逻辑 KV 数据，可估为：
 
 ~~~text
 SWA:
@@ -318,19 +244,11 @@ C4 top-k:
 640 KiB / query / C4 layer
 ~~~
 
-这里估算的只是最终 Attention 选中后的数据量。上下文继续增长时，C4 路径还要先从更长的压缩历史中找出 Top-K，这部分工作由 Indexer 承担。不能因为最终只读取固定数量的候选，就认为整条 C4 路径成本不再增长。
+固定的候选上限只约束最终 Attention。候选先要由 Indexer 从压缩历史中找出来，上下文增长仍会增加这部分工作。
 
-C4 Lightning Indexer 面对的 key history 规模大约是 ceil(L/4)。公开配置 index_head_dim=128。在本文关注的 910C 路径里，Indexer storage 使用 INT8 key + FP16 scale，因此每个 compressed index row 的原始 payload 约为：
+C4 Lightning Indexer 面对约 ceil(L/4) 个历史 key，公开配置 index_head_dim=128。在本文的 910C 路径中，Indexer storage 用 INT8 key 和 FP16 scale，每行原始 payload 约为 `128 Bytes INT8 key + 2 Bytes scale = 130 Bytes`。
 
-~~~text
-128 Bytes INT8 key
-+
-2 Bytes scale
-≈
-130 Bytes
-~~~
-
-于是 logical key payload 规模大约：`ceil(L/4) × 130 Bytes`
+整个逻辑 key 数据量约为 `ceil(L/4) × 130 Bytes`：
 
 | Context L | C4 Index rows | Logical key payload |
 | ---: | ---: | ---: |
@@ -339,13 +257,13 @@ C4 Lightning Indexer 面对的 key history 规模大约是 ceil(L/4)。公开配
 | 128K | 32768 | ≈ 4.1 MiB |
 | 1M | 262144 | ≈ 32.5 MiB |
 
-表中计算的是逻辑 key 数据量，实际 HBM 流量与耗时还取决于缓存及算子访问方式。可以看到，最终 C4 Sparse Attention 的候选数受 Top-K 限制，而选出候选之前，Indexer 面对的历史规模仍随 Context 增长。两部分要分开看。
+这张表同样没有给出实际 HBM 流量或耗时，二者还依赖缓存和算子访问方式。它说明，最终 Sparse Attention 只用 Top-K 候选，选候选之前的 Indexer 历史规模却仍在增长。
 
-因此，长 Context Decode 的 Profile 应分别记录 Lightning Indexer 和最终 Sparse Attention 的耗时。
+因此看长上下文 Decode 的 Profile 时，应分别统计 Lightning Indexer 和最终 Sparse Attention。
 
-C128 又是另一种 Shape。compress_ratio=128，当前 Ascend backend 对 C128 设置 <code>cmp_sparse_indices=None</code>，也就是读取完整的 C128 compressed history。长度 L 对应 ceil(L/128) 个 compressed rows。
+C128 的处理又不同。compress_ratio=128，Ascend backend 设置 <code>cmp_sparse_indices=None</code>，读取完整 C128 compressed history。长度 L 对应约 ceil(L/128) 行。
 
-logical payload 可以近似成：
+加上 SWA 后，logical payload 近似为：
 
 ~~~text
 128 KiB SWA
@@ -360,15 +278,15 @@ ceil(L/128) × 1 KiB
 | 128K | ≈ 1.13 MiB |
 | 1M | ≈ 8.13 MiB |
 
-它仍然随 Context 增长，但增长斜率已经从 1 row / original token 压缩成 1 row / 128 original tokens。
+它仍随上下文增长，但每增加 128 个原始 Token 才增加约一行压缩历史。
 
-DSV4 Compressor 还有第三类数据：单独的 FP32 state cache。源码中非-online state 的 last_dim 为：`2 × (1 + overlap) × head_dim`
+此外，DSV4 Compressor 单独维护 FP32 state cache。源码中非 online state 的 last_dim 为 `2 × (1 + overlap) × head_dim`。
 
-C4 的 overlap=True，因此一行大约是 2048 FP32，也就是约 8 KiB；C128 的 overlap=False，一行约 1024 FP32，也就是约 4 KiB。
+C4 使用 overlap=True，一行约 2048 个 FP32，即约 8 KiB；C128 使用 overlap=False，一行约 1024 个 FP32，即约 4 KiB。
 
-每步实际访问的 state rows 随 Compressor Plan、Ring State、当前位置和融合算子而变，可以用当步 metadata 与 trace 对齐。
+每步实际访问多少 state rows，还要看 Compressor Plan、Ring State、当前位置和融合算子，可用该步 metadata 与 trace 核对。
 
-把整轮涉及的 Attention 工作归类，可以写成下面的成本分解。C4 与 C128 对应不同类型的层，应分别统计相应层的耗时；这个式子不是说每一层都依次执行所有分支，也没有把通信和计算重叠展开：
+将这些工作放到一起，可得到下面的成本分解。C4、C128 属于不同类型的层，需要分别统计；这里并不表示每一层依次执行所有分支，也没有展开通信与计算的重叠。
 
 ~~~text
 T_decode_attention(L)
@@ -388,57 +306,29 @@ T_Compressor_State
 metadata / page table / cache effects
 ~~~
 
-DeepSeek-V4 仍然会随着 Context 变长承受越来越重的历史状态成本，但增长发生在哪个子模块、以什么斜率增长，已经与标准 MHA 完全不同。
+历史状态的成本仍会随上下文增加，但具体由哪个子模块增长、增长多快，需要沿这些路径分别判断，不能继续套用标准 MHA 的比例。
 
 ## 五、跨 Token 依赖与重复开销
 
-即使暂时忽略 KV / compressed history，Decode 仍然有一个无法逃避的问题：未来 Token 尚不存在。
+除了历史状态，Decode 还受跨 Token 依赖约束：下一轮输入需要等待当前轮确认。
 
-第 t 个输出 Token 的链路是：
+第 t 个输出要经过 Forward、Logits 和 Sampling 才能得到 Token_t。接着将它送入 Embedding 与下一轮 Forward，才能采样 Token_t+1。这条依赖链决定了单请求未来的输出无法预先全部作为输入。
 
-~~~text
-Forward
-  ↓
-Logits
-  ↓
-Sampling
-  ↓
-Token_t
-~~~
+如果首个输出在 Prefill 末尾采样得到，生成 1000 个输出 Token 通常还要约 999 轮 Decode，停止条件等也会影响最终轮数。这些轮次前后相依，未来的 1000 个 Token 还不能像 Prompt 一样直接组成输入。
 
-只有 Token_t 确认以后，下一轮才能开始：
+每轮除了 GEMM，还可能经过 Scheduler、ForwardBatch preparation、Graph replay / launch、Attention metadata、Collective、DeepEP、Sampling 和 State publication。每项即使只有几微秒或几十微秒，反复执行几百到几千轮，也可能成为 TPOT 的组成部分。
 
-~~~text
-Token_t
-  ↓
-Embedding
-  ↓
-Forward
-  ↓
-Token_t+1
-~~~
+Prefill 同样需要 Launch、Runtime dispatch、metadata 和 collective，但一轮 2048-token Prefill 能把相关开销分摊给更多 Token。
 
-因此普通生成要反复沿这条依赖推进。若首个输出 Token 由 Prefill 末尾采样得到，生成 1000 个输出 Token 通常还需要约 999 轮 Decode；具体轮数还会受停止条件等影响。这里的重点是这些轮次前后依赖，不能像 Prompt 那样直接把未来 1000 个 Token 一次送入模型。
+因此还要比较每次 launch 能完成多少有效工作，不能只数启动了多少个 Kernel。
 
-每一步不只有 GEMM，还可能包含 Scheduler、ForwardBatch preparation、Graph replay / launch、Attention metadata、Collective、DeepEP、Sampling 和 State publication。即使每项成本只有几微秒或几十微秒，重复几百到几千次以后都可能进入 TPOT。
+Graph Replay 减少重复提交，Kernel Fusion 减少算子启动及中间数据搬运，Host Overlap、Multi-Stream 尝试重叠独立的准备、计算和通信。它们受依赖和资源竞争约束，是否改善 TPOT，要看整轮关键路径有没有缩短。
 
-Prefill 更容易摊薄这些固定成本。一轮 2048-token Prefill 也需要 Launch、Runtime dispatch、metadata 和 collective，但这些成本可以被 2048 个 Token 共同承担。
-
-所以 Prefill / Decode 差异不只有 Compute vs Memory，还有：
-
-~~~text
-large useful work / launch
-vs
-small useful work / launch
-~~~
-
-Graph Replay 可以减少重复提交，Kernel Fusion 可以减少算子启动与中间搬运，Host Overlap 和 Multi-Stream 则尝试把相互独立的准备、计算或通信重叠起来。它们针对的成本不同，也受依赖与资源竞争限制；只有缩短了整轮关键路径，才能改善 TPOT。
-
-同样的逻辑也解释了 Chunked Prefill。一个巨大的 Prefill 往往硬件利用率很好，但如果它一次占设备太久，正在流式输出的 Decode Request 就只能等待。Chunked Prefill 将长输入分成较短的计算批次，给对尾延迟敏感的 Decode 留出调度机会。
+Chunked Prefill 也在调节这笔开销。巨大的 Prefill 可能充分利用设备，却让正在流式生成的请求等待过久；拆成较短批次，能给 Decode 留出调度机会，同时需要权衡额外轮次。
 
 ## 六、常见优化分别作用在哪里
 
-把前面的因果关系放到一起：
+将前面的关系连起来，可以得到：
 
 ~~~mermaid
 flowchart TD
@@ -469,21 +359,21 @@ flowchart TD
     D7 --> TPOT
 ~~~
 
-沿图中的不同环节，可以分清常见优化各自改动了什么。KV Cache 保存过去 Token 的状态，避免重复计算；Paged Cache 管理不同长度请求的物理缓存空间，Radix Cache 进一步复用请求间命中的前缀。它们处理的是状态存储与复用。
+图中各环节对应的优化并不相同。KV Cache 保存已计算的历史状态；Paged Cache 管理不同长度请求的物理空间；Radix Cache 进一步复用请求间命中的前缀。它们主要改变状态的存储与复用。
 
-Continuous Batching 则把不同请求当前的 Decode Token 合起来，增加 M；Chunked Prefill 控制一轮 Prefill 的工作量，给正在流式输出的 Decode 留出调度机会。两者都改变组批方式，但前者主要增加同轮有效工作，后者还要权衡大批效率与请求等待。
+Continuous Batching 合并多条请求当前的 Decode Token，增加 M；Chunked Prefill 则控制单轮 Prefill 工作量，让已有 Decode 请求获得调度机会。两者都影响组批，但优化方向和代价不同。
 
-Quantization 减少权重等数据的字节数，收益取决于 M、M_e、Tiling 和额外量化成本。Speculative Decoding 提前提出候选，让一次 Target 验证尝试推进多个 Token；它增加了 Draft、Verify 与状态整理的工作，需要比较整个周期的成本。
+Quantization 减少权重等数据的字节数，收益还取决于 M、M_e、Tiling 和量化本身的成本。Speculative Decoding 用一次 Target 验证尝试推进多个候选，同时增加 Draft、Verify 与状态整理，需要按整个周期比较。
 
-PD Disaggregation 把 Prefill 与 Decode 放到不同资源池，使两边可以分别选择组批与并行参数，同时引入 KV 传输和请求交接成本。选择哪种优化，要回到当前瓶颈：是权重复用不足、历史状态访问太重、调度等待，还是每轮固定开销过高。
+PD Disaggregation 让 Prefill、Decode 分别使用资源池和组批、并行参数，也带来 KV 传输及请求交接。该选哪条路径，要先辨明当前时间花在权重复用、历史访问、调度等待还是重复执行开销上。
 
 ## 七、用 Profile 判断实际瓶颈
 
-前面推导的是工作量形状与可能的瓶颈，本文没有给出目标配置下的实测利用率。要判断 Ascend 910C 上究竟哪一项限制性能，需要把算子耗时和硬件指标放回同一轮执行。
+上文推导了形状及可能的限制，没有给出目标配置的实测利用率。判断 Ascend 910C 上的实际瓶颈，需要把硬件指标、算子耗时与整轮执行对齐。
 
-Ascend Profiling 中，可以先查看目标产品和工具版本实际支持的流水指标：`mac_ratio` 表示 Cube / Matrix 指令周期占比，`vec_ratio` 表示 Vector 指令周期占比，`mte2_ratio` 描述 MTE2 数据搬运相关周期占比。它们解释的是算子内部的工作比例，需要与算子总耗时一起读。
+Ascend Profiling 可先查看目标产品、工具版本支持的流水指标：`mac_ratio` 是 Cube / Matrix 指令周期占比，`vec_ratio` 是 Vector 指令周期占比，`mte2_ratio` 是 MTE2 数据搬运相关周期占比。它们描述算子内部的工作，还需结合总耗时阅读。
 
-官方还定义了下面的 `memory_bound` 比值：
+官方定义的 `memory_bound` 比值如下：
 
 ~~~text
 memory_bound
@@ -493,47 +383,23 @@ mte2_ratio
 max(mac_ratio, vec_ratio)
 ~~~
 
-在支持该字段的采集口径中，<code>memory_bound &gt; 1</code> 表示数据搬运相对主要计算流水形成了压力。字段是否提供、流水名称和支持范围会随产品与工具版本变化，缺失时应保留 N/A，不能当作零或直接推断没有瓶颈。它也不能单独代替整轮 Decode 的关键路径分析；可对照[官方指标与产品支持说明](https://www.hiascend.com/doc_center/source/en/CANNCommunityEdition/910/devaids/Profiling/atlasprofiling_16_0069.html)。
+在支持这一口径的采集中，<code>memory_bound &gt; 1</code> 表示相对主要计算流水，数据搬运形成了压力。产品和工具版本决定字段及流水名称，未提供时应记 N/A，不能按零解读。判断整轮 Decode 的关键路径，还需要其他证据；字段范围可查[官方指标与产品支持说明](https://www.hiascend.com/doc_center/source/en/CANNCommunityEdition/910/devaids/Profiling/atlasprofiling_16_0069.html)。
 
-如果要验证这些形状推导，可以按下面的方案设计对照；本文没有执行这组 sweep。先固定 checkpoint、quantization、TP / DP / EP、CANN、Attention backend 和 MoE 通信配置，同时对齐请求长度、缓存命中、请求数与统计区间。
+可以按下面的对照验证形状推导，但本文没有执行这组 sweep。先固定 checkpoint、quantization、TP / DP / EP、CANN、Attention backend 和 MoE 通信配置，再对齐请求长度、缓存命中、请求数及统计区间。
 
-Prefill sweep：
+Prefill 可将新输入行数 M 设为 128、512、1024、2048、4096、8192，比较各尺寸。
 
-~~~text
-new tokens M:
+分别观察 Dense GEMM、GroupedMatmul、Attention、Lightning Indexer、Compressor、Collective 的 latency、mac_ratio、vec_ratio、mte2_ratio 和 memory_bound。
 
-128
-512
-1024
-2048
-4096
-8192
-~~~
+Decode 则先固定 Context，例如 8K、32K、128K，再将活跃请求数 B 设为 1、2、4、8、16、32、64、128。
 
-观察 Dense GEMM、GroupedMatmul、Attention、Lightning Indexer、Compressor、Collective 对应的 latency、mac_ratio、vec_ratio、mte2_ratio 和 memory_bound。
+记录 Dense M、Expert M_e histogram、Dense GEMM latency、GroupedMatmul latency、Attention latency、Indexer latency、DeepEP / HCCL、Host Gap、TPOT 及 output tok/s，才能对照算子变化与端到端收益。
 
-Decode sweep 则固定 Context，例如 8K、32K、128K，再 sweep active requests：
+这里至少要分清三种 crossover：Dense GEMM 的转折、以 Expert M_e distribution 为横轴的 MoE 转折，以及端到端 Decode 的转折。
 
-~~~text
-B:
+Dense GEMM 即使已经更偏向 Compute-heavy，Attention、C4 Indexer、DeepEP 或 Host Gap 仍可能占据关键路径，限制整轮速度。
 
-1
-2
-4
-8
-16
-32
-64
-128
-~~~
-
-同时记录 Dense M、Expert M_e histogram、Dense GEMM latency、GroupedMatmul latency、Attention latency、Indexer latency、DeepEP / HCCL、Host Gap、TPOT 和 output tok/s。
-
-“Decode crossover”至少有三种。第一种是 Dense GEMM crossover；第二种是 MoE crossover，此时横轴是 Expert M_e distribution；第三种才是 End-to-End Decode crossover。
-
-即使 Dense GEMM 已经进入更偏 Compute-heavy 的区域，如果 Attention、C4 Indexer、DeepEP 或 Host Gap 仍然占据 Critical Path，这些阶段仍可能限制整轮 Decode 的速度。
-
-随着 Batch 增大，Dense 和 Expert GEMM 可以提高权重复用，单个算子也可能跨过有效 Roofline 的转折点。整轮 Decode 是否因此更快，还取决于 Attention 历史读取、Indexer、通信与 Host Gap。用 Batch × Context 的组合实验观察这些组成部分，才能找到目标配置的性能转折点。
+Batch 增加后，Dense 和 Expert GEMM 可能更充分地复用权重；Context 增长又会改变历史访问和索引工作。将 Batch × Context 放在一起观察，并保留整轮指标，才有机会找到目标配置真正有用的性能转折点。
 
 ### 源码与资料入口
 
