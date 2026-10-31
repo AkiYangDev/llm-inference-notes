@@ -703,5 +703,17 @@
     ],
     "topic": "performance",
     "role": "deep"
+  },
+  "docs/performance/ascend-eplb-tp-world-memory.md": {
+    "summary": "OFF 后续也会分配 TP 资源，复用为什么还能省显存？用启动记录和四组 16-rank 实验，追踪默认 WORLD 首次通信的几个 GiB。",
+    "category": "性能分析",
+    "tags": [
+      "Ascend",
+      "EPLB",
+      "HCCL",
+      "显存"
+    ],
+    "topic": "performance",
+    "role": "deep"
   }
 }

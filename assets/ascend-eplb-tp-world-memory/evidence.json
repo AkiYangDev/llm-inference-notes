@@ -1,0 +1,26 @@
+{
+  "dates": {
+    "service": "2026-10-29",
+    "micro": "2026-10-30"
+  },
+  "service_commit": "f6ad2f4f922d0df111dc66153f543a453267455c",
+  "micro_workspace_base": "796ec868e9509b82dde99272f2d3fe75927370f6",
+  "micro_has_local_staging_changes": true,
+  "source_id": "f6d3a584ce239d4cbc713996663a7de181d3bfdc6f4862bf52a6dc1e75efee65",
+  "source_sha256": {
+    "options": "155bf3330d5dde913194237f34b1afba18dd6d9163e2a49b02c5613b607629ce",
+    "updater": "e73826a124569d3b4d6916c67d734fe05336b9745d457b1ebb83129ee12f57b7",
+    "staging": "d19343f6ce515dc6e9dc80a77bc0bc1f6e1091fb83a5eed05a33cec25956e39b"
+  },
+  "measurement": "Device free-memory delta relative to completed TP all_reduce; MiB per logical device, 16 ranks per run. Four independent runs.",
+  "source_artifact_sha256": {
+    "source.json": "b43987473a031743d96fc0e7f04ca21fca68dcc046f25962f054da4bcdedf0e1",
+    "SUMMARY.json": "911e87e49bef81979364cd9f4d85aed405850bcd3c6d975ba0f94c2c1dd7bd6f",
+    "MEMORY_PER_RANK.csv": "58010c89daba93ef525569b6e826829e656f0b6122285f1b6e4112a244c288d0",
+    "OFF_LATE_RESULT.json": "a32b6fb1e178c116a2c05569e3c59b93f5d9ba016b5e394233411e7e5fa780ae"
+  },
+  "public_data": {
+    "memory-per-rank.csv": "Host identifiers replaced with P/D; A/B replaced with TP/WORLD. Numeric values unchanged.",
+    "off-late-results.json": "Only late activation numerical results retained."
+  }
+}

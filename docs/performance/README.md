@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [复用 TP 通信组到底省在哪里？一次 WORLD 与 HCCL 显存分配追踪](ascend-eplb-tp-world-memory.md)：核对 OFF 后续预热与首次 WORLD 分配，附逐 rank 显存数据和迁移、图回放验证。
+
 - [一次 Ascend EPLB 显存优化：为什么逐层处理，仍然堆出了多层临时张量？](ascend-eplb-memory-bounded-staging.md)：从逐地址分配记录追到异步排队，用完成事件限制跨层临时张量积压，附完整服务对照与逐 rank 数据。
 
 - [AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？](aisbench-whole-native-tpot-itl.md)：结合真实whole/native统计与离线算例，解释TPOT、ITL、并发封顶和系统吞吐。

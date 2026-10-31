@@ -1,0 +1,41 @@
+{
+  "unit": "MiB per logical device",
+  "ranks_per_role": 16,
+  "requests_completed": 512,
+  "results": {
+    "P": {
+      "total": {
+        "mean": 32.311767578125,
+        "min": 31.15234375,
+        "max": 33.3671875
+      },
+      "all_reduce": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "p2p": {
+        "mean": 32.311767578125,
+        "min": 31.15234375,
+        "max": 33.3671875
+      }
+    },
+    "D": {
+      "total": {
+        "mean": 32.126953125,
+        "min": 30.96875,
+        "max": 33.68359375
+      },
+      "all_reduce": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "p2p": {
+        "mean": 32.126953125,
+        "min": 30.96875,
+        "max": 33.68359375
+      }
+    }
+  }
+}
