@@ -1,19 +1,19 @@
 # Ascend 910C 投机解码：Graph、多流与通信的执行依赖
 
-在 Ascend 910C 上，一轮投机解码会经过 Draft、Verify、Accept 和状态提交。Graph Replay 可以减少重复提交开销，多流可以重叠独立工作，但候选依赖、缓存准备和通信等待仍会约束下一步何时开始。
+Ascend 910C 的一次投机周期需要 Draft、Verify、Accept 和提交。Graph 减少重复提交，多流利用独立工作，但下阶段仍需等待候选、缓存和通信结果。
 
-本文沿 DeepSeek-V4 的 EAGLE/NextN 路径标出这些依赖：图里捕获了哪些 forward，Plan Stream 能与谁重叠，DeepEP 的等待点在哪里。源码可以确定执行关系；哪一段成为实际关键路径，还要把设备时间线与这些关系对齐。
+下面沿 V4 EAGLE/NextN 标出这些依赖：各 Graph 捕获什么，Plan Stream 等在哪里，DeepEP 结果何时被消费。源码能确定调用关系，哪段真正最长仍需设备时间线。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
 
-> **源码基线**：本文固定基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-21。主线讨论 DeepSeek-V4 + EAGLE / NextN + Ascend 910C + `dsv4` backend。图中展示由 Stream、Event、Wait 和 Graph 调用推导的依赖关系；耗时与重叠比例由设备时间线测量。
+> 源码固定到 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-21。主线是 V4、EAGLE/NextN、Ascend 910C、dsv4。图由 Stream、Event、Wait、Graph 调用推导，仅表达依赖，时长与重叠比例需另测。
 
 </details>
 
 ## 一、Graph、Stream 与通信各自负责什么
 
-Graph、Stream 与通信分别处理不同的执行成本。先看它们在一轮 EAGLE 中的位置：
+先把各机制放回周期中的职责：
 
 | 机制 | 本文对应的执行方式 |
 | --- | --- |
@@ -24,9 +24,9 @@ Graph、Stream 与通信分别处理不同的执行成本。先看它们在一�
 | DeepEP 异步通信 | 分开发起与等待，在中间安排独立计算 |
 | Draft-Extend Graph | 用重复启动成本的节省，交换捕获与 workspace 内存开销 |
 
-后文依次展开捕获宽度、等待位置和配置入口。
+下文按捕获宽度、等待边界和配置入口展开。
 
-把六个结论放在一起，可以先得到一轮稳态 EAGLE 的骨架：
+稳态骨架为：
 
 ```text
 上一轮 confirmed state
@@ -53,23 +53,23 @@ Draft Extend Forward / Graph
 下一轮 candidate1
 ```
 
-优化问题因此变成：
+沿这条链，重点寻找各分支汇合时仍在等待谁，以及哪些规划、通信已被独立工作覆盖。
 
-> **每一个 Fork 最后在哪里 Join？哪条 branch 最长？哪些 communication / planning 已经被其他工作覆盖，哪些仍然暴露在 Critical Path 上？**
+
 
 ## 二、Draft Graph 捕获哪些 NextN Forward
 
-DeepSeek-V4 的 EAGLE Draft 在 NPU 上有专门 Runner：`EAGLEDraftNpuGraphRunner`
+NPU Draft 使用 `EAGLEDraftNpuGraphRunner`，入口见 [`eagle_draft_npu_graph_runner.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/graph_runner/eagle_draft_npu_graph_runner.py)。
 
-固定源码：
 
-[`eagle_draft_npu_graph_runner.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/graph_runner/eagle_draft_npu_graph_runner.py)
 
-它继承通用 `EAGLEDraftCudaGraphRunner`，但在 NPU 路径上底层使用的是 `torch.npu.NPUGraph`。这里沿用历史 CUDA 类名，底层运行的是 NPU Graph。
 
-从 Capture Body 可以数清捕获的 Forward 次数。
 
-`EAGLEDraftCudaGraphRunner.capture_one_shape()` 最终捕获：
+它继承 CUDA 命名的通用 Runner，但实际底层为 `torch.npu.NPUGraph`。
+
+先看 Capture Body。
+
+捕获目标为：
 
 ```python
 def run_once():
@@ -81,15 +81,15 @@ def run_once():
     return ret
 ```
 
-也就是说，一次 Draft Graph Replay 包住的是整个 `draft_forward()`，而不是单独某一次 `draft_runner.forward()`。
+一次 Replay 覆盖整个 draft_forward，而不是单独一回模型 forward。
 
-固定源码：
 
-[`EAGLEDraftCudaGraphRunner.capture_one_shape()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py)
+
+对应实现见 [`EAGLEDraftCudaGraphRunner.capture_one_shape()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py)。
 
 ### `draft_forward()` 的 NextN Forward 次数
 
-主循环：
+rollout 循环的关键顺序为：
 
 ```python
 for i in range(self.speculative_num_steps):
@@ -104,101 +104,40 @@ for i in range(self.speculative_num_steps):
     ).logits_output
 ```
 
-固定入口：
 
-[`EagleDraftWorker.draft_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py#L778-L951)
 
-对应计数为：
+入口见 [`EagleDraftWorker.draft_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py#L778-L951)。
 
-```text
-NextN model forward count inside Draft Graph
-=
-speculative_num_steps - 1
-```
+循环先选择候选，到最后一次迭代便退出，因此 Graph 内的 NextN Forward 次数为 `speculative_num_steps - 1`。首候选由前一阶段 Draft Extend 产生，成本不在当前 Draft Graph 内。
 
-例如官方常见：
+以常见的 `num_steps=2, topk=1, num_draft_tokens=3` 为例，进入 Replay 前已有 candidate1，Graph 只需再执行一次 NextN 得到 candidate2，随后整理结果。若 num_steps=3，就需要两次 NextN，依次得到 candidate2 和 candidate3。
 
-```text
-num_steps = 2
-topk = 1
-num_draft_tokens = 3
-```
+| num_steps | Graph 内候选阶段数 | Graph 内 NextN Forward 次数 |
+| ---: | ---: | ---: |
+| 2 | 2 | 1 |
+| 3 | 3 | 2 |
 
-这一轮 Draft Graph 实际是：
-
-```text
-进入 Graph 前：
-candidate1 已由上一轮 Draft Extend 准备好
-
-Graph Replay：
-candidate1
-    ↓
-1 × NextN forward
-    ↓
-candidate2
-    ↓
-organize draft result
-```
-
-不是两次 NextN forward。
-
-如果 `num_steps=3`，则是：
-
-```text
-candidate1
-    ↓
-NextN forward #1
-    ↓
-candidate2
-    ↓
-NextN forward #2
-    ↓
-candidate3
-```
-
-Graph Capture 覆盖完整 rollout，其中候选阶段数与模型 Forward 次数分别为：
-
-```text
-candidate stage 数 = num_steps
-
-真正的 NextN model forward 数 = num_steps - 1
-```
-
-第一枚 candidate 的成本属于上一轮 Draft Extend，而不是这一轮 Draft Graph。
+候选阶段数与模型调用数相差一，是因为循环第一次选择候选时已经有了 seed。
 
 ### Draft Graph 的静态宽度是什么
 
-Draft Decode 的 per-request width 统一由：
+Draft Decode 的逐请求宽度由下列函数决定。[`resolve_num_tokens_per_req()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L90-L119)
 
-```python
-resolve_num_tokens_per_req(
-    phase="draft_decode"
-)
-```
+`resolve_num_tokens_per_req(phase="draft_decode")`
 
-解析为：`speculative_eagle_topk`
+它返回 `speculative_eagle_topk`。
 
-固定源码：
 
-[`resolve_num_tokens_per_req()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L90-L119)
 
-因此当前官方 `topk=1` 时，一次 NextN Draft forward 的输入宽度是 1 token / request，但 Graph body 内会执行 `num_steps-1` 次 NextN forward。
 
-这正是 Graph 对轻量 Draft 特别有价值的原因：
 
-```text
-NextN compute 很轻
-        ↓
-固定 Python / launch / metadata overhead
-占比容易变高
-        ↓
-Capture 整个小循环
-比只优化某个单独 kernel 更有意义
-```
+所以 topk=1 时每次 NextN 每请求一行，Graph 内再顺序运行 num_steps−1 次。
+
+NextN 较轻时，Python、launch 和 metadata 的固定开销容易占较大比重。捕获整个小循环，可以合并这部分重复提交；收益仍需看实际执行时间。
 
 ### Graph/Eager 选择本身也可能是分布式一致性状态
 
-`EAGLEDraftNpuGraphRunner.can_run_graph()` 在特定 DSA IndexShare + DP Attention 场景下，会把本地 `can_run_graph && seed_ready` 做成一个整数，然后对 model TP group：
+特定 DSA IndexShare+DPA 下，can_run_graph 将本地可运行且 seed_ready 的结果在 model TP 组归约：
 
 ```python
 torch.distributed.all_reduce(
@@ -208,30 +147,23 @@ torch.distributed.all_reduce(
 )
 ```
 
-原因是 Draft forward 里仍包含 TP / EP collective。
+Draft 仍有 TP/EP collective。
 
-如果同一个 distributed forward 中出现：
+若同一次 Forward 中 Rank0 选 Graph、Rank1 选 Eager，就可能破坏通信次序，因此 Graph/Eager 路由也需要协作一致。
 
-```text
-Rank0 → Graph
-Rank1 → Eager
-```
 
-collective 调用次序可能失去一致性。
 
-因此：
 
-> **Graph/Eager route 本身也可能属于 speculative control plane，必须在协作 Rank 间收敛。**
 
 ## 三、Verify Graph 的 Batch Bucket 与 Token 宽度
 
-Draft 完成以后，Target Verify 会进入通用 `DecodeCudaGraphRunner / NPUGraphRunner`。
+Draft 后，Target 进入通用 Decode / NPU Graph Runner。
 
-固定 NPU 入口：
 
-[`NPUGraphRunner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)
 
-Target Runner 初始化时：
+NPU 入口见 [`NPUGraphRunner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)。
+
+初始化设置：
 
 ```python
 self.captured_req_width
@@ -241,52 +173,34 @@ model_runner.decode_num_tokens_per_req(
 )
 ```
 
-对于普通 EAGLE Target：
+普通 EAGLE Target 的 `captured_req_width = speculative_num_draft_tokens`。
 
-```text
-captured_req_width
-=
-speculative_num_draft_tokens
-```
 
-固定来源：
 
 - [`ModelRunner.decode_num_tokens_per_req()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L825-L846)
 - [`resolve_num_tokens_per_req()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L90-L119)
 
-因此如果 `num_draft_tokens=3`，每个请求 Target Verify 的 Graph 宽度固定是 3 rows。
+例如 `num_draft_tokens=3`，每请求 Verify 固定三行。
 
 ### 当前 EAGLE 不是 Ragged Verify
 
-这一点必须和 DSpark 区分。
+这里需与 DSpark Ragged 分开。
 
-`SpeculativeAlgorithm.supports_ragged_verify()` 在固定版本中：
+算法能力判断为：
 
 ```python
 return self.is_dspark()
 ```
 
-固定源码：
 
-[`spec_info.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_info.py#L160-L164)
 
-所以当前 EAGLE / NextN Target Verify 不是：
+实现见 [`spec_info.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_info.py#L160-L164)。
 
-```text
-Req0 verify 2 tokens
-Req1 verify 3 tokens
-Req2 verify 1 token
-        ↓
-按 sum(verify_lens) 选择 token bucket
-```
-
-而是每个 request 固定 Verify `num_draft_tokens` rows。
-
-Accept Length 在 Verify 之后产生，因此本轮 EAGLE Verify 仍按捕获的固定宽度执行，接受较短只影响后续提交。
+因此本篇 EAGLE 每请求仍执行固定的 num_draft_tokens 行，不会把 Req0/1/2 的 Verify 长度 2/3/1 压紧成六行，再按总 Token 数选择 bucket。接受长度在 Verify 后才得到，只影响提交，无法减少已经执行的窗口。
 
 ### 普通 EAGLE Graph 首先按 Request Batch Size 选 Bucket
 
-非 Ragged path 的 `load_batch()`：
+non-ragged load_batch 首先按请求数选档：
 
 ```python
 raw_num_token
@@ -305,45 +219,15 @@ padded_num_tokens
 bs * captured_req_width
 ```
 
-固定源码：
 
-[`DecodeCudaGraphRunner.load_batch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py)
 
-假设：
+实现见 [`DecodeCudaGraphRunner.load_batch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py)。
 
-```text
-raw_bs = 5
-num_draft_tokens = 3
-
-Graph request buckets:
-1, 2, 4, 8
-```
-
-则：
-
-```text
-真实 Verify rows = 5 × 3 = 15
-
-Graph bucket = 8 requests
-
-Graph replay rows = 8 × 3 = 24
-```
-
-其中 9 rows 来自 bucket padding。
-
-所以 Graph 的收益和代价同时存在：
-
-```text
-收益：
-减少 launch / Python / control overhead
-
-代价：
-执行 padded request slots 对应的额外 token rows
-```
+例如 raw_bs=5、num_draft_tokens=3，请求 bucket 为 1、2、4、8：真实 Verify 有 `5 × 3 = 15` 行，选中 bucket=8 后，Replay 执行 `8 × 3 = 24` 行，其中九行为 padding。Graph 节省 launch、Python 和控制开销，也付出了这些额外行的执行成本。
 
 ### DP Attention 下 admission 甚至不是本 Rank 的 raw_bs
 
-如果需要 MLP TP gather，`can_run_graph()` 会用：
+需要 MLP TP gather 时，准入还使用：
 
 ```python
 cuda_graph_bs
@@ -353,65 +237,43 @@ max(
 )
 ```
 
-也就是 Attention-DP 各 Rank 原始 request count 的最大值。
+即相关 Attention-DP 的 raw 请求计数最大值。
 
-随后相关 Rank 进入兼容这个 global-max geometry 的 Graph bucket。
+各参与者据此进入兼容 global-max 几何的 bucket。
 
-因此对 DP Attention + Speculation，Graph padding 还承担一个分布式目的：
+padding 也为 captured collective 提供兼容形状，不能只按本地利用率评价。
 
-> **让协作 Rank 在同一 captured collective geometry 上 replay。**
 
-分析 Target Verify Graph 时，将本地请求数与下面几项一起核对：
 
-```text
-DP group 最大 Request Count
-×
-固定 Verify Width
-×
-Capture Bucket
-```
+核算时先取相关 DP 参与者中的最大请求数，再将它向上匹配 Capture bucket，最后乘固定 Verify Width。bucket 是请求数对齐后的结果，不应再与最大请求数相乘。
 
 ### `--cuda-graph-bs-decode` 在这里是 Request Bucket，不是 EAGLE Verify Token Bucket
 
-固定 DeepSeek-V4 Ascend best-practice 中可以看到：`--cuda-graph-bs-decode 1 2 4 8`
+固定 best-practice 有 `--cuda-graph-bs-decode 1 2 4 8`，另有 `1 2 4 8 10`。
 
-或：`1 2 4 8 10`
 
-在当前普通 EAGLE 路径里，这些 key 首先表示 captured request slots。
 
-若 `num_draft_tokens=3`，Target Verify 对应的 token rows 才是：`bucket_bs × 3`
+这些 key 在普通 EAGLE 中首先计请求槽位。
 
-DSpark Ragged Verify 则按 `graph_num_tokens tier` 组织工作，相关成本模型在 DSpark 专题中展开。
+宽度为 3 时，Token 行数才是 `bucket_bs × 3`。
+
+DSpark Ragged 的支持路径另按 graph_num_tokens tier，具体设备适用性见对应专题。
 
 ## 四、Plan Stream 与计算的依赖关系
 
-环境变量：`SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1`
+`SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1` 通过 `torch.get_device_module(device).Stream()` 创建独立 Plan Stream。
 
-会创建：
 
-```python
-plan_stream
-=
-torch.get_device_module(device).Stream()
-```
 
-固定源码：
+入口见 [`get_plan_stream()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L1132-L1140)。
 
-[`get_plan_stream()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_utils.py#L1132-L1140)
+独立 Stream 提供执行位置，能否并发取决于具体 wait。
 
-但“有第二条 Stream”并不意味着任何两个阶段真的在设备上并行。
 
-关键要看 `wait_stream` 在哪里。
 
 ### Verify Planning 等待 Draft 结果
 
-`run_eagle_verify()` 一开始拿到当前 compute stream：
-
-```python
-fwd_stream = current_stream()
-```
-
-随后：
+`run_eagle_verify` 先取 `fwd_stream = current_stream()`，随后让 planning 等待当前流已提交的工作：
 
 ```python
 with plan_stream_ctx:
@@ -422,9 +284,9 @@ with plan_stream_ctx:
     eagle_prepare_for_verify(...)
 ```
 
-源码注释明确说明：Verify Prep 会读取 Draft 生成的 Tree metadata，因此不能在 Draft frontier 完成以前开始。
+Prep 要读取 Draft Tree metadata，必须等 frontier 完成。
 
-Plan 完成后，main stream 又：
+planning 完成后，main 又等待：
 
 ```python
 current_stream().wait_stream(
@@ -432,77 +294,43 @@ current_stream().wait_stream(
 )
 ```
 
-才启动 Target Verify。
+之后才能启动 Target。
 
-固定源码：
 
-[`run_eagle_verify()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_common.py#L462-L675)
 
-Device dependency 实际是：
+实现见 [`run_eagle_verify()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_common.py#L462-L675)。
 
-```text
-Main Stream
-Draft
-████████████
-            │
-            ▼
+设备顺序为 `Draft → Verify Plan → Target Verify`。Draft compute 与 Verify Prep 在这条路径没有设备重叠。
 
-Plan Stream
-            Verify Plan
-            ███████
-                   │
-                   ▼
+Plan Stream 主要提供以下组织方式：
 
-Main Stream
-                   Target Verify
-                   ███████████████
-```
+- 将规划工作放到独立流；
+- 避免不必要的 Host 阻塞；
+- 明确 metadata 交接；
+- 用流依赖表达顺序。
 
-因此不存在 Draft Compute 与 Verify Planning 的设备重叠。
-
-Plan Stream 在这里的意义更接近：
-
-- 把 planning device work 放到独立 stream；
-- 减少不必要的 Host blocking；
-- 明确 metadata ownership；
-- 用 Stream dependency 而不是 Host 同步表达执行顺序。
-
-但真实的数据依赖仍然位于 critical path。
+必要依赖依然在关键路径上。
 
 ### Draft-Extend Planning：这里反而真的可以跨阶段 overlap
 
-Verify 完成后，`_draft_extend_for_decode()` 先构造 `EagleDraftExtendInput`、`select_index` 和 `next_token_ids`，然后直接：
+Verify 后，Draft Extend 先构造输入、select_index 和 next_token_ids，再直接进入计划流：
 
 ```python
 with self.plan_stream_ctx:
     forward_batch = prepare_for_draft_extend(...)
 ```
 
-注意这里在 planning 之前**没有**：
+这里 planning 前没有调用 `plan_stream.wait_stream(current_stream)`。
 
-```python
-plan_stream.wait_stream(
-    current_stream
-)
-```
 
-固定源码：
 
-[`_draft_extend_for_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py)
+入口见 [`_draft_extend_for_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py)。
 
-Python 从 `run_eagle_verify()` 返回，并不表示之前 enqueue 的 NPU kernels 已经执行完成。设备执行是异步的，因此 Plan Stream 上的 Draft-Extend Planning 可以与 Main Stream 上尚未完成的 Target Verify / Accept tail 形成并发，只要 Planning 本身不读取那些尚未 ready 的 Device value。
+Python 返回不代表已入队 NPU 工作完成。因此只要 Prep 不读取尚未 ready 的值，就可能与 main 上剩余 Verify/Accept tail 并发。
 
-源码还专门把：
+实现先在主流处理 `next_token_ids = batch_result.next_token_ids.to(torch.int64)`，再进入 Plan Stream，避免在其中引入额外跨流同步或 data race。
 
-```python
-next_token_ids
-=
-batch_result.next_token_ids.to(torch.int64)
-```
-
-放在进入 Plan Stream **之前**，并写明这是为了避免在 Plan Stream 内发生额外 cross-stream synchronization / data race。
-
-随后进入 Draft Extend Forward 前：
+而 Extend 模型执行前还会等待：
 
 ```python
 current_stream().wait_stream(
@@ -510,57 +338,26 @@ current_stream().wait_stream(
 )
 ```
 
-因此更准确的 Timeline 是：
+两种规划的差别在于开始前的依赖：
 
-```text
-Main Stream
-Target Verify
-████████████████
-        Accept kernels
-        ████████
-                │
+| 规划阶段 | 开始前等待 | 模型执行前等待 | 可重叠的部分 |
+| --- | --- | --- | --- |
+| Verify Prep | Plan 等 Draft 所在流 | Target 等 Plan | 此路径的 Draft compute 与 Verify Prep 串行 |
+| Draft-Extend Prep | 此处没有先等主流尾部 | Extend 等 Plan 与所需结果 | 可能与已提交的 Verify/Accept 主流尾部并发 |
 
-Plan Stream
-        Draft-Extend Planning
-        ███████████
-                │
-
-Main Stream
-                wait(plan)
-                    │
-                    ▼
-             Draft Extend Forward
-             ███████████
-```
-
-两种 Planning 的依赖分别是：
-
-```text
-Verify Prep:
-Draft → Plan → Verify
-严格依赖
-
-Draft-Extend Prep:
-Target Verify / Accept main-stream tail
-        ∥
-Draft-Extend Planning
-        ↓
-Join
-        ↓
-Draft Extend Compute
-```
+这里描述源码允许的依赖关系，实际重叠区间仍需在 NPU 时间线上确认。
 
 ## 五、Target 与 Draft 的多流路径
 
-`SGLANG_NPU_USE_MULTI_STREAM=1` 控制 DeepSeek-V4 **单个模型 Layer 内部**的局部并行。Plan Stream 处理投机阶段的计划工作，两者的作用范围不同。
+`SGLANG_NPU_USE_MULTI_STREAM=1` 控制单模型层内部工作，与跨阶段 Plan Stream 的范围不同。
 
-Target DeepSeek-V4 Model 初始化时，只要 NPU 环境变量开启，就创建一组 `alt_streams`，并把它传进每个 `DeepseekV4DecoderLayer`。
+Target 初始化开启该选项后，建立 alt_streams 并传给各 Decoder Layer。
 
-固定源码：
 
-[`DeepseekV4Model.__init__()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py)
 
-Attention Layer 收到 alt streams 后，NPU eligibility 是：
+入口见 [`DeepseekV4Model.__init__()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py)。
+
+Attention 还按以下条件准入：
 
 ```python
 _is_npu
@@ -571,50 +368,35 @@ and not forward_batch.forward_mode
     .is_extend_or_draft_extend_or_mixed()
 ```
 
-固定源码：
 
-[`DeepSeek-V4 Attention forward`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py)
 
-这里有两个容易误读的地方。
+实现见 [`DeepSeek-V4 Attention forward`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py)。
+
+需连同模式 helper 和模型传参一起看。
 
 ### `TARGET_VERIFY` 没有被排除
 
-`ForwardMode.is_extend()` 确实把 `TARGET_VERIFY` 看成 extend-family。
+is_extend() 将 TARGET_VERIFY 归为 extend-family。
 
-但 Multi-Stream 条件调用的不是 `is_extend()`，而是：`is_extend_or_draft_extend_or_mixed()`
+多流条件却调用 `is_extend_or_draft_extend_or_mixed()`。
 
-这个 helper 的默认参数：`include_draft_extend_v2 = False`
+它默认 `include_draft_extend_v2 = False`。
 
-所以默认只排除：
+因而这一层排除 `EXTEND`、`MIXED`、`SPLIT_PREFILL`，没有排除 `TARGET_VERIFY`。
 
-```text
-EXTEND
-MIXED
-SPLIT_PREFILL
-```
 
-并不排除 `TARGET_VERIFY`。
 
-固定源码：
+helper 定义见 [`ForwardMode`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L176-L275)。
 
-[`ForwardMode`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L176-L275)
-
-所以 Target Model 的：
-
-```text
-DECODE
-TARGET_VERIFY
-```
-
-都可以满足 mode 这一层条件。
+所以 Target 的 `DECODE` 与 `TARGET_VERIFY` 均可满足这一模式条件，还需检查环境、行数及层条件。
 
 ### `DRAFT_EXTEND_V2` 也没有被 helper 默认排除，但 NextN 自己没有 alt streams
 
-更反直觉的是，`DRAFT_EXTEND_V2` 在默认参数下也不被这个 helper 排除。
+DRAFT_EXTEND_V2 默认也未被 helper 排除。
 
-ForwardMode 之外，还要检查模型是否创建并传入 alt streams。
+最终可达性还取决于模型是否传入 alt_streams。
 
-但 DeepSeek-V4 NextN Model 构造唯一 decoder layer 时显式：
+NextN 创建唯一层时明确设置：
 
 ```python
 self.decoder = DeepseekV4DecoderLayer(
@@ -624,13 +406,13 @@ self.decoder = DeepseekV4DecoderLayer(
 )
 ```
 
-固定源码：
 
-[`deepseek_v4_nextn.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_nextn.py#L97-L105)
 
-所以 NextN layer 内 `self.alt_streams=None`。
+入口见 [`deepseek_v4_nextn.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_nextn.py#L97-L105)。
 
-最终实际可达性是：
+所以 NextN 的 alt_streams=None，不能只从 helper 判断它已走多流。
+
+各阶段可对照为：
 
 | Phase | ForwardMode | Model | Attention NPU Multi-Stream |
 | --- | --- | --- | --- |
@@ -642,33 +424,28 @@ self.decoder = DeepseekV4DecoderLayer(
 
 ### Target 多流中的独立计算分支
 
-进入 `_forward_prepare_multi_stream_npu()` 后：
+Target 将准备工作分到三条流：
 
-```text
-stream_kv
-→ KV projection / Norm / RoPE / KV cache store
+| 流 | 工作 |
+| --- | --- |
+| `stream_kv` | KV projection、Norm、RoPE、KV cache store |
+| `stream_q` | Q projection、RMSNorm、RoPE |
+| current stream | Indexer / Compressor |
 
-stream_q
-→ Q projection / RMSNorm / RoPE
-
-current stream
-→ Indexer / Compressor
-```
-
-最后：
+最后汇合：
 
 ```python
 current_stream.wait_stream(stream_kv)
 current_stream.wait_stream(stream_q)
 ```
 
-才进入 downstream Attention。
+才执行 Attention。
 
-固定源码：
 
-[`_forward_prepare_multi_stream_npu()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1537-L1635)
 
-因此局部 Critical Path 理想模型更接近：
+实现见 [`_forward_prepare_multi_stream_npu()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L1537-L1635)。
+
+局部理想模型为：
 
 ```text
 T_prepare
@@ -682,47 +459,41 @@ max(
 )
 ```
 
-而不是三者相加。
+不会简单相加三个分支。
 
-这些分支可并发提交，实际重叠程度随 Cube / Vector 资源竞争、HBM 带宽、Kernel Occupancy、CANN 调度与 Token 行数变化。用 Profiler 对齐开始、结束与汇合点，就能量出其中暴露的等待。
+实际重叠还受 Cube/Vector 争用、HBM、occupancy、CANN 调度、行数影响，需从开始、结束和 join 量暴露等待。
 
-另外固定源码中非 Blackwell 的 Multi-Stream row limit 是 64。这里判断的是当前 Layer 的 `x.shape[0]`，不是服务器的 `max_running_requests`。
+固定非 Blackwell 分支的 row limit 为 64，检查的是当前 x.shape[0]，不是 max_running_requests。
 
 ## 六、DeepEP 从异步 Launch 到等待结果
 
-DeepSeek-V4 Target Verify 还会进入 MoE。
+Verify 还进入 MoE，官方 recipe 采用：
 
-官方 Ascend recipe 使用：
+
 
 ```text
 --moe-a2a-backend deepep
 --deepep-mode auto
 ```
 
-FusedMoE 创建 DeepEP dispatcher 时传入：
+创建 Dispatcher 时传入：
 
 ```python
 async_finish=True
 return_recv_hook=True
 ```
 
-固定入口：
 
-[`fused_moe_triton/layer.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/fused_moe_triton/layer.py)
 
-但这两个参数并不意味着：
+入口见 [`fused_moe_triton/layer.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/fused_moe_triton/layer.py)。
 
-```text
-Dispatch
-∥
-Routed Expert GEMM
-```
+异步 Launch 不会解除 Dispatch 与 Routed Expert GEMM 的数据依赖，后者必须拿到接收的 Token。
 
-天然并行。
+
 
 ### Normal DeepEP：通信异步 Launch，但 Expert 前仍必须 Wait
 
-Normal dispatcher：
+Normal 执行顺序为：
 
 ```python
 previous_event = Buffer.capture()
@@ -734,49 +505,29 @@ buffer.dispatch(
 )
 ```
 
-通信可以在 Communication Stream 上启动。
+通信可在 Comm Stream 启动。
 
-但 `dispatch_b()` 随后：
+消费专家输入前，dispatch_b 仍调用：
 
 ```python
 event.current_stream_wait()
 ```
 
-然后才返回 Expert 输入。
+等待接收完成。
 
-固定源码：
 
-[`_DeepEPDispatcherImplNormal`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L537-L735)
 
-因此真实依赖仍然是：
+实现见 [`_DeepEPDispatcherImplNormal`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L537-L735)。
 
-```text
-DeepEP Dispatch
-        ↓
-recv complete barrier
-        ↓
-Routed Expert GEMM
-```
+`async_finish` 分开 Launch 与 Wait，专家 GEMM 仍在接收完成后执行。Combine 同样先异步发起，再由 `event.current_stream_wait()` 保证后续 hidden consumer 能读到结果。
 
-`async_finish=True` 将 Launch 与 Wait 分开；Routed Expert 仍在接收完成后开始计算。
+因此能覆盖多少通信，取决于等待前可安排多少独立工作。
 
-Combine 也是同样结构：
 
-```text
-Combine async launch
-        ↓
-event.current_stream_wait()
-        ↓
-combined hidden consumer
-```
-
-所以 Normal mode 的 async API 主要提供：
-
-> **把 communication 放到 communication stream 执行的能力；能隐藏多少，取决于 Wait 之前有没有别的 independent work。**
 
 ### Shared Expert 正好是一个独立 branch
 
-DeepSeek MoE 在 Shared Expert 没有 fuse 到 routed path 时，可以把 Shared Expert 放到 alt stream：
+shared expert 未融合时，可以放到 alt stream：
 
 ```python
 self.alt_stream.wait_stream(
@@ -789,22 +540,13 @@ with alt_stream:
     _forward_shared_experts(...)
 ```
 
-随后主路径继续：
+主路径继续执行 TopK、Dispatch、Routed Experts 和 Combine，最终与 shared 输出相加前再等待 shared branch。
 
-```text
-TopK
-→ DeepEP Dispatch
-→ Routed Experts
-→ Combine
-```
 
-最终再等待 Shared Expert output。
 
-固定源码：
+实现见 [`DeepseekV2MoE.forward_deepep()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v2.py#L1418-L1665)。
 
-[`DeepseekV2MoE.forward_deepep()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v2.py#L1418-L1665)
-
-因此可能形成：
+两路可能形成：
 
 ```text
 Routed path
@@ -818,19 +560,11 @@ Shared Expert
 ████████████████
 ```
 
-这里 Shared Expert 可以覆盖 Routed Path 的一部分时间，其中也可能包含 Communication。
-
-对齐耗时时，同时记录 DeepEP 总时长与以下等待：
-
-```text
-通信结束以后
-还有多少 Tail
-没有被 independent compute 覆盖
-```
+Shared Expert 可覆盖 routed 路径的一部分，其中可能包含通信。分析时既要记录通信总时长，也要量出汇合点暴露的等待：通信结束后，究竟还有多少尾部没有被独立计算覆盖。
 
 ### Low-Latency DeepEP：`recv_hook` 把 Wait 推迟到 Consumer Boundary
 
-Low-latency dispatch 调用：
+low_latency 采用：
 
 ```python
 buffer.low_latency_dispatch(
@@ -840,58 +574,21 @@ buffer.low_latency_dispatch(
 )
 ```
 
-得到：
+它返回 event 与 hook。外层依次调用 `dispatch_a()`、`deepep_dispatch_hooks`、`dispatch_b()`，到 dispatch_b 才执行 `hook()`，完成接收后允许专家消费。
 
-```text
-event
-hook
-```
+实现见 [`_DeepEPDispatcherImplLowLatency`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)。
 
-外层 `DeepEPDispatcher.dispatch()` 的顺序是：
+从 `low_latency_dispatch` 发起到 `recv_hook()` 执行之间，可插入不依赖接收结果的工作；SBO 可利用这个空隙安排 Shared Expert。
 
-```text
-dispatch_a()
-    ↓
-deepep_dispatch_hooks
-    ↓
-dispatch_b()
-```
+因此 recv_hook 移动的是消费等待点，通信仍需在结果使用前完成。
 
-而 Low-Latency `dispatch_b()`：
 
-```python
-hook()
-```
 
-才等待 / 完成接收。
-
-固定源码：
-
-[`_DeepEPDispatcherImplLowLatency`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)
-
-这提供了一个真实 overlap slot：
-
-```text
-low_latency_dispatch launch
-        ↓
-[ dispatch hook 可执行 independent work ]
-        ↓
-recv_hook()
-        ↓
-Expert consumes received tokens
-```
-
-SBO 路径正是利用这个 slot，把 Shared Expert 等独立计算放进 Communication 等待窗口。
-
-`recv_hook` 将等待留到接收数据被消费的位置：
-
-> **把 Wait Point 从 Communication Launch 处推迟到消费 recv buffer 的边界，让中间可以插入与 recv 数据无关的 Compute。**
-
-Combine 侧也是同样思想；有 `overlap_args` 时 Low-Latency combine 可以切到 overlap stream，最终仍在 Consumer Boundary Join。
+Combine 的 overlap_args 也可协调 overlap stream，最终仍要 join。
 
 ### 应该看 Exposed Communication，不是 Total Communication
 
-如果某段 Communication 时间是 `T_comm`，同时独立计算能覆盖 `T_independent`，理想情况下暴露在 Critical Path 上的是：
+理想情况下，总通信 T_comm 与独立计算 T_independent 的关系为：
 
 ```text
 T_exposed_comm
@@ -902,48 +599,48 @@ max(
 )
 ```
 
-如果 async launch 后立刻 Wait：`T_independent = 0`
+若 launch 后立刻等，`T_independent = 0`，暴露部分近似等于 T_comm。
 
-那么：`T_exposed_comm ≈ T_comm`
 
-所以“async”并不自动带来性能收益。
+
+所以异步接口存在，尚不能证明收益。
 
 ## 七、Draft-Extend Graph 的配置与版本差异
 
-固定版本 Ascend DeepSeek-V4 best-practice 中，部分 workload 可以看到：
+固定 best-practice 某些负载还写有：
 
 ```bash
 export SGLANG_DISABLE_DRAFT_EXTEND_GRAPH=1
 ```
 
-同时还开启：
+并配置：
 
 ```bash
 export SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1
 export SGLANG_NPU_USE_MULTI_STREAM=1
 ```
 
-并使用 EAGLE、NPU Graph 和 DeepEP。
+同时使用 EAGLE、NPU Graph、DeepEP。
 
-第一眼很容易解释成：
+但这不能直接解释成该旧变量已生效，或对应负载已测得关闭更快。
 
-> “这个 workload 实测发现 Draft Extend Graph 更慢，所以官方关闭。”
 
-实际调用路径还需要进一步区分。
+
+
 
 ### Runtime 读取的环境变量名
 
-固定 `environ.py` 注册的是：`SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH`
+Runtime 真正注册的是 `SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH`。
 
-其源码注释：
+注释说明其用途：
 
-> Kill-switch for draft-extend cuda graph. Escape hatch for setups where the capture's memory pool costs more than the graph saves, e.g. DeepEP MoE workspace captured at full dispatch capacity.
+> 当捕获内存池的成本超过 Graph 节省时，可用此开关回退，例如按完整 Dispatch 容量捕获 DeepEP MoE workspace 的情况。
 
-固定源码：
 
-[`environ.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/environ.py#L1371-L1375)
 
-EAGLE Worker 创建 Draft-Extend Graph 时检查的也是：
+定义见 [`environ.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/environ.py#L1371-L1375)。
+
+创建 Graph 也检查该名称：
 
 ```python
 not envs
@@ -951,81 +648,31 @@ not envs
     .get()
 ```
 
-固定入口：
 
-[`EagleDraftWorker._capture_cuda_graphs()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py)
 
-但固定版本 best-practice 页面写的是：`SGLANG_DISABLE_DRAFT_EXTEND_GRAPH`
+调用处见 [`EagleDraftWorker._capture_cuda_graphs()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_worker_v2.py)。
 
-少了 `_CUDA_`。
+文档却使用 `SGLANG_DISABLE_DRAFT_EXTEND_GRAPH`，少了 `_CUDA_`。
 
-在这个 commit 的仓库里没有找到旧名字对应的 `EnvBoolWithAlias`、consumer 或 translation。
 
-因此这条文档配置存在明显的：`doc / runtime env-name drift`
 
-该版本应使用 Runtime 读取的 `SGLANG_DISABLE_DRAFT_EXTEND_CUDA_GRAPH` 控制开关。部署脚本若沿用旧名，需要在启动日志中检查实际 Graph 状态。
+该提交未发现旧名的 alias、consumer 或 translation。
+
+因此确认的是文档与 Runtime 名称漂移。
+
+此版本控制应使用 Runtime 名称，并在启动日志查实际 Graph 状态，不能只看脚本变量。
 
 ### 但“为什么需要这个 Kill Switch”有明确源码依据
 
-正确 Runtime flag 的注释已经给出设计动机：
+NextN Extend 较短时，Graph 省下的 launch/control 时间可能有限；某些 DeepEP MoE workspace 却会按完整 Dispatch 容量捕获，增加常驻内存占用。判断是否启用，应分别比较时间、padding/replay preparation 和显存代价。
 
-```text
-Draft-Extend Graph Capture
-        ↓
-静态 memory pool / workspace
-        ↓
-某些 MoE / DeepEP workspace
-按 full dispatch capacity 捕获
-        ↓
-常驻 footprint 变大
-        ↓
-Graph 节省的 launch latency
-可能不值这份 memory cost
-```
-
-Draft Extend 本身又只是 NextN 的一段相对短 Forward。
-
-所以它容易落入这样的 Trade-off：
-
-```text
-Graph benefit
-=
-saved launch/control overhead
--
-capture memory cost
--
-padding cost
--
-replay preparation cost
-```
-
-当：
-
-```text
-Draft Extend compute 很短
-+
-DeepEP workspace capture 很大
-```
-
-时：
-
-```text
-Draft Decode Graph       ON
-Target Verify Graph      ON
-Draft Extend             Eager
-```
-
-完全可能是合理 operating point。
-
-但要强调：
-
-> 这是 **Runtime Kill-Switch 的设计动机**，不是对固定 best-practice 那个旧变量名已经生效的证明。
+如果捕获内存过大，而 Extend 本身很短，可以保留 Draft Decode Graph 与 Target Verify Graph，让 Draft Extend 回到 Eager。这个组合有源码动机，仍需在目标负载下比较，不能据此断言文档旧变量已生效或关闭已经更快。
 
 ### Draft-Extend Graph 自己也有独立静态宽度
 
-它的 Graph Runner `EAGLEDraftExtendCudaGraphRunner` 不是按 `num_steps + 1` 捕获。
+Draft-Extend Runner 的静态宽度也需单独看：
 
-源码明确：
+捕获使用：
 
 ```python
 captured_req_width
@@ -1035,19 +682,19 @@ resolve_num_tokens_per_req(
 )
 ```
 
-也就是：`speculative_num_draft_tokens`
+即 `speculative_num_draft_tokens`，而不是自行用 num_steps+1 代入。
 
-固定源码：
 
-[`EAGLEDraftExtendCudaGraphRunner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py)
 
-这意味着即使最终 `accept_lens` 较短，Draft Extend Graph 的 Buffer / Capture Geometry 仍按照完整 speculative width 设计； LM Head 只在 selected last-accepted rows 上做后续处理。
+入口见 [`EAGLEDraftExtendCudaGraphRunner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py)。
 
-评估 Draft-Extend Graph 时，将捕获和 workspace 的内存开销与实际节省的启动时间一起比较。
+即使接受较短，buffer、capture 仍按完整窗口，后续 LM Head 再选择最后有效行。
+
+应将节省的启动时间与捕获、workspace 的占用一起比较。
 
 ## 八、将执行依赖与实测时间线对齐
 
-下图只表达阶段依赖，不按长度表示耗时。实际重叠范围需要与 Profiler 时间线对照。
+下图只标依赖，线长不代表时长：
 
 ```mermaid
 flowchart TD
@@ -1066,9 +713,9 @@ flowchart TD
 | Routed MoE | Dispatch、Expert GEMM、Combine | GEMM 等待收到 Token；后续消费等待 Combine |
 | Shared Expert | 可独立执行的专家计算 | 与 routed 输出合并前完成 |
 
-Plan Stream 是否形成跨阶段重叠，取决于调用与等待位置。NextN Draft 没有接入这组 alt streams，使用自身的执行路径。
+Plan 是否跨阶段并发需看 wait 位置，NextN 又未接入 Target alt_streams，应各自沿执行路径核对。
 
-拿 Ascend Profiler 分析一轮 speculative decode 时，可以按这个顺序看：
+对齐 Profile 时可依次检查：
 
 | 观察点 | 对应源码问题 |
 | --- | --- |
@@ -1082,9 +729,9 @@ Plan Stream 是否形成跨阶段重叠，取决于调用与等待位置。NextN
 | Rank control | 是否因为某 Rank Graph fallback 导致整个 TP group 一起 eager？ |
 | Draft Extend | Graph 还是 eager？Capture memory / workspace 是否值得？ |
 
-把一轮时间线对齐以后，再用有效输出量衡量收益：同一批次条件下，每个输出 Token 的平均成本约为本轮关键路径耗时除以有效推进长度。Graph 减少启动与控制开销，多流利用独立工作，异步通信将等待推迟到消费边界；这些机制能否缩短周期，要看最终汇合点仍在等待谁。
+同一批次下，每输出 Token 成本近似等于周期关键路径除以有效推进。Graph、多流、异步通信分别减少提交、安排独立工作、延后等待，最终收益取决于汇合点仍需等多久。
 
-记录实验时，将候选宽度、图档位、接受长度与依赖等待一起保留。只看 acceptance rate，或者把各 Stream 的耗时直接相加，都会遗漏影响端到端性能的部分。
+因此同时保留候选宽度、bucket、接受长度和依赖等待，不把接受率或各流 duration 累加当作端到端性能。
 
 ### 源码阅读入口
 

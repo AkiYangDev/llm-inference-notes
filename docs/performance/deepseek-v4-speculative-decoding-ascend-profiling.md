@@ -1,15 +1,13 @@
 # 在 Ascend 910C 上分析 DSpark：从阶段计时到 NPU 时间线
 
-开启 DSpark 后，吞吐变化只是排查入口。要知道下一步该优化哪里，还需要把一轮执行拆开：Draft 和 Verify 的计时覆盖了什么，Accept 与 Commit 在哪里运行，通信和 Host 准备留下了多少未被覆盖的等待。
+DSpark 开启后，吞吐变化只能说明整段服务结果。要决定接着优化哪里，还需知道 Draft、Verify 的计时范围，Accept、Commit 是否在图内，以及主机准备和通信等待怎样进入一轮耗时。
 
-下面按一次 Profiling 的工作顺序展开：先建立阶段边界，再采集稳定 Decode 窗口，把框架记录与 NPU 时间线对齐，最后用对照实验检验判断。重点是把耗时归到具体依赖上，而不是只按 Kernel 总时长排序。
+下面沿 Profiling 顺序建立阶段边界、选择稳定 Decode 窗口、对齐 NPU 时间线，再用对照实验检验判断。算子累计时长有助于查工作量，归因则需回到阻塞下一次输出的依赖。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
 
-> **源码基线与适用范围**
->
-> 本文基于 sgl-project/sglang @ ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e，核对日期为 2026-09-21。重点讨论 SGLang SRT 文本推理路径下的 DeepSeek-V4 + DSpark + Ascend 910C。本文所有“当前实现”结论都固定到该 commit；Profiler 截图与具体毫秒数必须在目标机器上实测，本文不会把源码推导伪装成硬件实测结果。
+> 源码固定到 sgl-project/sglang @ ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e，核对日期为 2026-09-21。主线为 SGLang SRT 文本推理、V4 DSpark、Ascend 910C。以下解释均针对该版本，设备截图与毫秒数需目标环境实测，本文只提供源码分析及采集方法。
 
 </details>
 
@@ -17,7 +15,7 @@
 
 ### 一轮执行的起止
 
-当前 [DSparkWorkerV2](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py) 的 Decode 主线可以抽象成：
+Decode 主线可展开为：[DSparkWorkerV2](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
 ~~~mermaid
 flowchart TD
@@ -33,7 +31,7 @@ flowchart TD
     J --> A
 ~~~
 
-源码里已经显式插入两个阶段计时边界：
+源码给 Draft、Target Verify 插入阶段边界：
 
 ~~~python
 with self._draft_context(), self._observers.segment(InfoSegment.DRAFT):
@@ -43,7 +41,7 @@ with self._observers.segment(InfoSegment.TARGET_VERIFY):
     target_verify = ...
 ~~~
 
-因此 SGLang 自己已经给出了第一层性能模型：
+因此可先分为：
 
 ~~~text
 DSpark Step
@@ -52,11 +50,11 @@ DSpark Step
 └── Segment 外部的 Accept / Commit / 其他工作
 ~~~
 
-最直觉的公式是：`T_step = T_draft + T_verify + T_accept + T_commit`
+逻辑上常写 `T_step = T_draft + T_verify + T_accept + T_commit`。
 
-这四类描述逻辑阶段。设备异步执行时，多条 Stream 上的计算与通信可以重叠；Event elapsed time 测量起止点之间的设备时间，各 Stream 的 Kernel Duration 则分别累计工作时长。
+但这些是职责分类。异步多流可重叠，Event 测起止区间，Kernel duration 则累计各自工作，二者不能直接换算墙钟。
 
-要区分：
+需要分别看：
 
 ~~~text
 Kernel Duration Sum
@@ -68,11 +66,7 @@ End-to-End Step Wall Time
 
 ### Event 时间覆盖什么
 
-当前 DSpark 阶段计时代码位于：
-
-[dspark_observability.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_observability.py)
-
-它定义了 STEP、DRAFT、TARGET_VERIFY 三个 segment，并用 Event 记录设备时间：
+`STEP`、`DRAFT`、`TARGET_VERIFY` 通过设备 Event 记录起止。实现见 [dspark_observability.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_observability.py)，主要动作如下：
 
 ~~~python
 start = torch.cuda.Event(enable_timing=True)
@@ -84,50 +78,22 @@ end = torch.cuda.Event(enable_timing=True)
 end.record()
 ~~~
 
-读取时：
+读取记录时，才等待 End 并计算 elapsed：
 
 ~~~python
 end.synchronize()
 elapsed_ms = start.elapsed_time(end)
 ~~~
 
-问题是：这是 Ascend 910C，为什么仍然写 torch.cuda.Event？
+<a id="npu-transfer_to_npu"></a>
 
-#### NPU 文本路径会加载 transfer_to_npu
+这里的 CUDA 风格命名经过 NPU 兼容映射。标准 SRT NPU 初始化先执行 `from torch_npu.contrib import transfer_to_npu`，再用 `torch.cuda.is_available = lambda: False` 覆盖 capability 判断，避免兼容层使它误报 CUDA 可用。[npu/utils.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/utils.py)
 
-SGLang NPU 初始化在：
+Ascend PyTorch 的兼容模块包含 `torch.cuda` 到 `torch_npu.npu` 的接口映射，因此这条路径中的 `torch.cuda.Event` 实际使用 NPU Event。[transfer_to_npu.py](https://github.com/Ascend/pytorch/blob/77037e26c8b39b4d5e1856bb23d601b67f7ee5a9/torch_npu/contrib/transfer_to_npu.py)
 
-[npu/utils.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/utils.py)
+<a id="event-elapsed-kernel-duration"></a>
 
-标准 SRT 文本路径会加载：
-
-~~~python
-from torch_npu.contrib import transfer_to_npu
-~~~
-
-随后又显式执行：
-
-~~~python
-torch.cuda.is_available = lambda: False
-~~~
-
-避免兼容层把 CUDA capability 判断错误地变成 True。
-
-Ascend PyTorch 的 [transfer_to_npu.py](https://github.com/Ascend/pytorch/blob/77037e26c8b39b4d5e1856bb23d601b67f7ee5a9/torch_npu/contrib/transfer_to_npu.py) 会把 CUDA 风格接口映射到 NPU 接口，其中包括 torch.cuda → torch_npu.npu 的兼容映射。
-
-因此在本文讨论的标准 SGLang NPU 文本路径中，DSpark observability 写出的 torch.cuda.Event，运行时语义实际上是 NPU Event。
-
-#### Event elapsed 不是所有 Kernel duration 的求和
-
-两个 Event 都在调用 record() 时记录到当前执行流。
-
-所以 draft_gpu_ms 更准确的含义是：
-
-> **Draft segment 入口 Event 与出口 Event 在当前执行流上的设备 elapsed time。**
-
-Target Verify 同理。
-
-可以画成：
+`record()` 将起止 Event 放进当前执行流，`draft_gpu_ms` 测的是 Draft 入口到出口在该流上的设备 elapsed，Target Verify 同理。side stream 若在 End 之前通过依赖汇合，其工作或等待就会影响这段时间；若工作跨过 End，它的完整 Kernel duration 则超出了这个 segment。
 
 ~~~text
 Current Stream:
@@ -144,65 +110,25 @@ Draft Start Event
 Draft End Event ◄───────────────────────┘
 ~~~
 
-如果 side stream 工作在 Draft End Event 前通过 event / stream dependency 被重新 join，它会影响阶段 elapsed。
+所以 Event elapsed 可以作为源码阶段的设备计时参照，却不等于 Python wall time、所有流 Busy Time 之和，也不等于全部 Draft / Verify Kernel duration 的累计。比较阶段时间与算子统计时，要先对齐各自覆盖的区间。
 
-side stream 的工作若跨过 Draft End，完整 Kernel Duration 就跨越了 `draft_gpu_ms` 的计时范围。对齐时按 Event 起止点截取对应区间。
+<a id="endsynchronize-draft-verify"></a>
 
-所以 draft_gpu_ms / target_verify_gpu_ms 不是：
+还要区分记录和读取：segment 退出时只记录 End，`end.synchronize()` 在之后的 `_drain_pending()` 中执行。因此这段计时不会在 Draft→Verify 边界立即插入 Device Synchronize。详细观测仍有成本，常规压测与 Profile 结果应分别保留。
 
-1. Python wall time；
-2. 所有 NPU Stream 的 Busy Time 总和；
-3. 所有 Draft / Verify Kernel Duration 的加总。
+<a id="gpu"></a>
 
-更合适的称呼是：
-
-> **源码阶段定义下的 current-stream device elapsed anchor。**
-
-#### end.synchronize() 不在 Draft → Verify 边界立即发生
-
-另一个必须核清的问题是 end.synchronize() 会不会强制 Draft 与 Verify 串行。
-
-当前实现中，segment 结束只 record End Event。 end.synchronize() 在后续读取 record 的 _drain_pending() 过程中发生。
-
-因此：
-
-> **计时 Event 本身不会在 Draft → Verify 边界立即插入一次 Device Synchronize。**
-
-不过开启详细 observability 仍然有测量成本，所以正式 benchmark 应区分“常规运行结果”和“详细 Profile 结果”。
-
-#### 如何正确使用三个 GPU 时间
-
-当前最有用的是同时记录：
-
-~~~text
-step_gpu_ms
-draft_gpu_ms
-target_verify_gpu_ms
-~~~
-
-不要默认：
-
-~~~text
-step_gpu_ms
-=
-draft_gpu_ms
-+
-target_verify_gpu_ms
-~~~
-
-因为当前 Ascend 还有一个明确位于两个 segment 之外的尾部：`Accept / Finalize / TP Sync / Commit`
-
-这正是下一节的核心。
+可以同时保留 `step_gpu_ms`、`draft_gpu_ms`、`target_verify_gpu_ms`，但不能预设后两项相加就是整步时间。固定 Ascend 路径的 Accept、Finalize、TP Sync、Commit 位于两个 segment 之外，这些尾部还需单独定位。
 
 ## 二、采集稳定的 Decode 窗口
 
 ### 先看 DSpark Observability
 
-先用阶段记录找到稳定的慢窗口，再针对该窗口采集 msprof，定位会更集中。
+先用框架阶段记录找到稳定慢窗口，再针对它采设备 trace。
 
-先利用 SGLang 自带的 DSpark 分阶段记录把问题缩小。
 
-当前可记录：
+
+可用记录项为：
 
 ~~~text
 core
@@ -213,13 +139,13 @@ target_verify_gpu_time
 reqs
 ~~~
 
-Profile 实验环境可以启用：
+在 Profile 环境可设置：
 
 ~~~bash
 export SGLANG_DSPARK_DEBUG_DUMP=core,step_cpu_time,step_gpu_time,draft_gpu_time,target_verify_gpu_time,reqs
 ~~~
 
-[DecodeStepRecord](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_observability.py) 会提供：
+DecodeStepRecord 包含以下字段。[DecodeStepRecord](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_observability.py)
 
 ~~~text
 forward_ct
@@ -244,14 +170,14 @@ commit_lens
 ...
 ~~~
 
-第一张性能表应该长这样：
+阶段表可以先这样记录：
 
 | Step | BS | Verify Tokens | Step GPU | Draft GPU | Verify GPU | Unattributed Step Time | Avg Commit |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | N | ... | ... | ... | ... | ... | ... | ... |
 | N+1 | ... | ... | ... | ... | ... | ... | ... |
 
-其中：
+其中差值为：
 
 ~~~text
 Unattributed Step Time
@@ -263,19 +189,19 @@ Draft GPU
 Target Verify GPU
 ~~~
 
-它用于发现阶段外时间的变化，具体归因再交给时间线。
+它帮助发现计时段外的变化，具体属于哪项仍需时间线。
 
-在当前 Ascend 路径中尤其有价值，因为我们已经确认 Accept / Commit 位于 Target Verify segment 之外。
+当前 NPU Accept/Commit 在 Verify 外，这个差值尤其值得对齐。
 
 #### step_cpu_ms 不是 NPU Event 时间
 
-step_cpu_ms 来自 Host monotonic clock 的 step 间隔。
+step_cpu_ms 来自主机 monotonic clock 的步间隔。
 
-因此：`step_cpu_ms > step_gpu_ms`
+出现 `step_cpu_ms > step_gpu_ms`，并不能单独证明 Event 或 Profiler 有误。
 
-并不自动说明 NPU profiler 错了。
 
-中间可能包含：
+
+两者之间还可能包含：
 
 ~~~text
 Host preparation
@@ -287,19 +213,19 @@ Observability overhead
 
 ### 采集 SGLang Ascend Trace
 
-SGLang 当前 Ascend Profiling 入口：
+Ascend 采集入口见 [Ascend Performance Profiling Guide](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/docs/docs/hardware-platforms/ascend-npus/optimization/profiling.mdx)。
 
-[Ascend Performance Profiling Guide](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/docs/docs/hardware-platforms/ascend-npus/optimization/profiling.mdx)
 
-先设置：
+
+例如先设置：
 
 ~~~bash
 export SGLANG_TORCH_PROFILER_DIR=/tmp/dsv4_dspark_profile
 ~~~
 
-让服务完成模型加载、分布式初始化、Graph Capture、Warmup、Prefill 和最初几轮 Decode，再抓稳定窗口。
+让加载、通信初始化、Graph Capture、Warmup、Prefill 和初始 Decode 完成，再采稳定部分。
 
-例如：
+采集请求示例为：
 
 ~~~bash
 curl -X POST http://127.0.0.1:30000/start_profile \
@@ -313,13 +239,13 @@ curl -X POST http://127.0.0.1:30000/start_profile \
   }'
 ~~~
 
-Ascend 环境仍使用 CPU / GPU 这个 Profiler Activity 表达，是因为 torch_npu compatibility patch 会把对应 CUDA profiler activity 映射到 NPU activity。
+CPU/GPU activity 名称同样由 torch_npu 兼容映射为对应 NPU activity。
 
 #### 为什么 detailed_annotations 很重要
 
-Target Verify 的 workload 同时取决于 BS、Verify 宽度、历史长度与 Graph Padding。
+BS 只描述请求数，Verify 工作还随下列条件改变：
 
-Speculative Verify 还取决于：
+
 
 ~~~text
 verify width / verify_lens
@@ -330,89 +256,36 @@ N_Q
 N_KV
 ~~~
 
-所以两个 BS 相同的 Verify Step，Device Work 可能完全不同。
+所以相同 BS 的两步未必执行相同设备工作。
 
 ### 进入设备时间线
 
-SGLang internal record 回答：
+内部记录先帮助缩小范围：是 Draft、Verify 变慢，还是两个 segment 以外的时间增加？进入设备流后，先把同一轮工作对应起来，再追具体等待。
 
-~~~text
-Draft 慢？
-Verify 慢？
-还是 segment 外尾部变大？
-~~~
+<a id="step-wall-window"></a>
+<a id="forward_ct-bs-verify-tokens-dspark-record"></a>
 
-接下来才值得进入 CANN / NPU Timeline。
+选择稳定的 Step N、N+1、N+2，界定各步的墙钟区间，再以 `forward_ct`、BS 和 Verify Token 数对应 DSpark record。相同 BS 未必有相同验证宽度或历史长度，不能把不同负载的步骤直接比较。
 
-建议顺序如下。
+<a id="target-verify-eager-tail"></a>
 
-#### 先定位 Step Wall Window
+固定 NPU 路径的 Accept/Commit 没有 folded 进 Verify Graph。若未归属差值变大，先确定新增区间是否出现在 Verify Graph 结束之后，再定位 Accept、Sync、Commit 的具体工作。
 
-先找稳定的 Step N / N+1 / N+2，不要一上来做 Operator Ranking。
+<a id="replay-host-gap-graphupdate"></a>
 
-#### 用 forward_ct / BS / verify tokens 对齐 DSpark record
+Replay 前的 Host gap 则沿 batch、buffer、metadata、bucket 与 launch 查起。DSV4 已绕过 generic `graph.update`，下一节会展开这一分支差异。
 
-这样 Timeline 中的某一个异常 Step 才有 workload context。
+<a id="deepep"></a>
 
-#### 重点看 Target Verify 后面的 eager tail
-
-当前 NPU Accept / Commit 不 folded，所以：
-
-~~~text
-Verify Graph End
-        ↓
-Accept / Sync / Commit tail
-~~~
-
-本身就是重要分析对象。
-
-如果 Unattributed Step Time 很大，先在时间线上确认多出的时间是否确实位于这一段，再检查 Accept / Commit。
-
-#### Replay 前有 Host gap时，不要先找 graph.update
-
-DSV4 当前绕开 generic graph.update 分支。
-
-先检查 batch、buffer、metadata、shape/bucket 和 replay launch。
-
-#### DeepEP 看“等了多久”，不只看“通信跑了多久”
-
-应该标：
-
-~~~text
-communication issue
-        ↓
-in-flight interval
-        ↓
-hook / wait
-~~~
-
-如果到 hook / wait 时通信已经基本完成，exposed comm 很小。
-
-如果 hook 后还需要长时间等待，通信就真实暴露在 Critical Path 上。
+通信需要同时标出发起、in-flight 和 hook / wait 三个位置。到消费点时数据若已到，暴露等待可能很少；仍在等待的部分才会延长关键路径。仅看通信任务总时长，无法还原本轮被它阻塞多久。
 
 ## 三、区分 Verify Graph 与图外工作
 
 ### Accept 与 Commit 的位置
 
-这一点决定了后处理应怎样计时。
+共享实现提供 `DsparkVerifyEpilogue`，支持将接受、Finalize、输出与部分 Commit 注入 Verify 捕获。Ascend 是否使用它，取决于 Worker 创建条件。相关实现见 [dspark_verify.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_verify.py) 和 [dspark_worker_v2.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)。
 
-跨平台 DSpark 源码里确实存在 DsparkVerifyEpilogue，它可以在支持路径上把 Accept、Finalize、Out Token，甚至某些 Commit 注入动作捕获进 Target Verify Graph。
-
-入口在：
-
-[dspark_verify.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_verify.py)
-
-在 Ascend 910C 路径上，继续检查实例创建条件：
-
-> **NPU 上它会不会被创建？**
-
-#### 创建 guard 明确要求 is_cuda()
-
-回到：
-
-[dspark_worker_v2.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
-
-当前逻辑是：
+<a id="guard-is_cuda"></a>
 
 ~~~python
 if (
@@ -423,27 +296,11 @@ if (
     self._verify_epilogue = DsparkVerifyEpilogue(...)
 ~~~
 
-最后一个条件明确是 is_cuda()，不是 is_cuda_alike()，也不是 is_cuda() or is_npu()。
+这里要求真实的 `is_cuda()`，而 NPU 初始化已把 `torch.cuda.is_available` 设回 False。因此固定 Ascend 910C 路径不创建 `DsparkVerifyEpilogue`。`fold_eligible` 又先要求 `verify_epilogue is not None`，所以 `fold_eligible`、`folded_accept`、`folded_commit` 均为 False。
 
-SGLang 的 is_cuda() 要求真实 CUDA availability；Ascend NPU 初始化又重新把 torch.cuda.is_available() 设为 False。
+<a id="folded_accept-folded_commit-npu-false"></a>
 
-因此当前 commit 下：
-
-> **Ascend 910C 不会构造 DsparkVerifyEpilogue。**
-
-#### 于是 folded_accept / folded_commit 在 NPU 上都是 False
-
-Decode 里 fold_eligible 的第一个条件就是：`verify_epilogue is not None`
-
-NPU 上不满足，所以：
-
-~~~text
-fold_eligible = False
-folded_accept = False
-folded_commit = False
-~~~
-
-于是当前 Ascend 路径实际是：
+Target Verify 后仍需执行下面这段 eager tail：
 
 ~~~text
 Target Verify
@@ -461,70 +318,21 @@ BuildOutTokens
 commit_hidden()
 ~~~
 
-这对 Profiling 的影响非常直接：
+Accept、Finalize、SpecTpSync、Commit 因而不在 `target_verify_gpu_ms` 内。可以先用 `step_gpu_ms - draft_gpu_ms - target_verify_gpu_ms` 观察 segment 之外的变化，但差值还可能包含规划和阶段间隙，多流也会影响加法关系。它只能标为未归属时间，不能全部算成 Commit。
 
-> **Accept / Finalize / SpecTpSync / Commit 不属于 target_verify_gpu_ms。**
+继续在 trace 中对齐 Accept kernels、SpecTpSync、Finalize Accept Lens、BuildOutTokens、KV/hidden commit，以及其他 segment 外设备工作，才能把差值归到具体边界。
 
-因此可以构造一个很有用的诊断 proxy：
+<a id="cuda-folded-path"></a>
 
-~~~text
-Unattributed Step Time
-≈
-step_gpu_ms
--
-draft_gpu_ms
--
-target_verify_gpu_ms
-~~~
-
-这个差值包含 Draft、Verify 计时区间之外的工作：可能是前置规划、阶段间空隙，也可能是 Accept / Commit。多流重叠还会影响可加性，所以这个差值用于标记未归属时间，再由时间线确定工作发生在哪个阶段。
-
-差值增大后，应在时间线上核对前置规划、阶段间空隙，以及以下后处理：
-
-~~~text
-Accept kernels
-SpecTpSync
-Finalize Accept Lens
-BuildOutTokens
-KV / hidden commit
-其他 segment 外 device work
-~~~
-
-而不是继续把所有时间归到 Target Verify Forward。
-
-#### CUDA folded path只能作为对照
-
-在 CUDA 支持路径上，folded Accept 还要求 proposal folded、greedy sampling、没有额外 logits adjustments、没有 simulate_acc_len、没有 grammar、Graph 可运行，并且 verify mode 满足 compact / static 条件。
-
-folded Commit 还需要 epilogue.folds_commit 成立。
-
-这些条件对理解共享源码有价值，但在本文中必须明确标为：
-
-> **跨平台对照，不是当前 910C Timeline 事实。**
+CUDA folded path 只能用于代码对照。它还要求 proposal folded、Greedy、无额外 logits adjustment、无模拟接受、无 Grammar、Graph 可运行和合适模式；Commit 还需 `epilogue.folds_commit` 成立。这些条件不描述当前 Ascend 910C 的执行时间线。
 
 ### Replay 前的准备工作
 
-当前：
+NPU Runner 定义了 TARGET_VERIFY 的 `actual_seq_kvlen`，generic backend 也实现了 update，但这些接口存在，并不代表 DSV4 每次 replay 都调用它们。先看 [npu_graph_runner.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py) 的模型分派，再看实际进入的 backend。
 
-[npu_graph_runner.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)
+<a id="generic-npu-graph-update"></a>
 
-确实定义了 TARGET_VERIFY 对应的 Host-side 属性：`actual_seq_kvlen`
-
-而 generic NPU Graph backend 也确实支持 NPUGraph.update。
-
-所以只看局部代码很容易得出：
-
-> 每次 Verify Replay 前都执行 graph.update(actual_seq_kvlen)，可能产生 Host gap。
-
-对 DeepSeek-V4 来说，这个结论是错的。
-
-#### Generic NPU Graph 路径确实会同步等待 update
-
-先看：
-
-[npu_cudagraph_backend.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py)
-
-generic replay_with_input_update() 当前做：
+generic 路径提交 update 到线程后，马上等待 `update_future.result()`，完成后才 replay。对使用该分支的模型，update 仍是 Host 前置依赖，可能形成 pre-replay gap。[npu_cudagraph_backend.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py)
 
 ~~~python
 update_future = self._update_executor.submit(
@@ -535,24 +343,9 @@ update_future.result()
 graph.replay()
 ~~~
 
-虽然 update 放进了专门 worker thread，但紧接着 update_future.result() 会等待它完成。
+<a id="deepseek-v4"></a>
 
-所以对使用这个分支的模型：
-
-~~~text
-Host:
-submit graph.update
-       ↓
-wait update_future.result()
-       ↓
-graph.replay
-~~~
-
-NPUGraph.update 是 Replay 的真实 Host-side prerequisite，理论上可以形成可见的 pre-replay gap。
-
-#### DeepSeek-V4 被明确排除
-
-但 NPUGraphRunner.execute() 最后的实际分支是：
+DSA/V4 被明确排除在这条路径之外：
 
 ~~~python
 if not (
@@ -564,85 +357,37 @@ else:
     output = self.backend.replay(graph_key, forward_batch)
 ~~~
 
-所以 DeepSeek-V4 当前直接走：`backend.replay(...)`
+V4 直接调用 `backend.replay(...)`，不走 `replay_with_input_update(...)`。因此发现 DSV4 Host 间隙时，应追它自己的准备和等待，而不是先归给 generic `graph.update`。
 
-而不是：`replay_with_input_update(...)`
+<a id="dsv4-kv-query-metadata-backend"></a>
 
-因此对本文主角：
+绕过 generic update 仍需刷新实时数据。DSV4 backend 根据模式和 live batch 更新 `actual_seq_lengths_q`、`actual_seq_lengths_q_pa`、`actual_seq_lengths_kv`、block tables 和 kernel metadata；Verify 还结合 `draft_token_num` 形成 Query 几何。[ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)
 
-> **DeepSeek-V4 + DSpark + Ascend 910C**
+这条路径可概括为刷新 graph-bound buffers / DSV4 metadata，再调用 `backend.replay(graph_key, forward_batch)`，与 `NPUGraph.update(actual_seq_kvlen)` 后 replay 的流程不同。
 
-当前路径跳过 `graph.update(actual_seq_kvlen)`；Replay 前的 Host gap 应继续检查下文的 metadata、buffer refresh 与 Scheduler。
+<a id="dsv4-replay-host-gap"></a>
 
-#### DSV4 的动态 KV / Query metadata走自己的 backend
+定位 Replay 前的空隙时，可按实际执行顺序检查：
 
-这并不意味着 DSV4 Graph 使用固定 capture-time 长度。
+1. `ScheduleBatch` / `ForwardBatch` 准备。
+2. Graph bucket / shape key 选择。
+3. `input_ids`、`positions`、`seq_lens`、`out_cache_loc` 的刷新。
+4. DP 与 speculative metadata 准备。
+5. DSV4 Attention metadata。
+6. Replay launch。
+7. allocator、Python 或隐含同步点。
 
-当前：
-
-[ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)
-
-会根据 ForwardMode 和 live batch 构造 / 刷新：
-
-~~~text
-actual_seq_lengths_q
-actual_seq_lengths_q_pa
-actual_seq_lengths_kv
-block tables
-kernel metadata
-~~~
-
-Target Verify 还会结合 draft_token_num 构造 Query geometry。
-
-所以 DeepSeek-V4 的思路更接近：
-
-~~~text
-refresh graph-bound buffers / DSV4 metadata
-        ↓
-backend.replay(graph_key, forward_batch)
-~~~
-
-而不是 generic：
-
-~~~text
-NPUGraph.update(actual_seq_kvlen)
-        ↓
-replay
-~~~
-
-#### 如果 DSV4 Replay 前有 Host gap，应该查什么
-
-建议按顺序看：
-
-~~~text
-1. ScheduleBatch / ForwardBatch preparation
-2. graph bucket / shape key selection
-3. input_ids / positions / seq_lens / out_cache_loc refresh
-4. DP / speculative metadata preparation
-5. DSV4 attention metadata
-6. replay launch
-7. allocator / Python / hidden sync point
-~~~
-
-不要先问：`是不是 graph.update 太慢？`
-
-更准确的文章结论应该是：
-
-> **NPUGraph.update 是 generic NPU Target Verify 的潜在 Host 前置开销，但不是当前 DeepSeek-V4 DSV4 Target Verify 的 Replay 前置开销。**
+找到具体阻塞后，再用时间线判断它是否限制了下一轮提交。
 
 ## 四、在时间线上寻找暴露的通信
 
 ### Launch、独立计算与 Wait
 
-`async_finish=True` 或 `return_recv_hook=True` 允许 Runtime 先发起通信，再到消费结果时等待。能否获得重叠收益，要看发起和等待之间有没有独立工作可以执行；仅凭接口带有 async，还不能判断设备上的耗时是否减少。
+`async_finish`、`recv_hook` 可以推迟等待，但中间还要有独立工作，才能把通信覆盖起来。仅凭接口异步，不能判断设备时间缩短了多少。
 
-#### Ascend + ZBAL 仍复用同一 Dispatcher 状态机
+<a id="ascend-zbal-dispatcher"></a>
 
-当前：
-
-[deepep.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)
-
-在 NPU 且开启 ZBAL local memory 时：
+NPU 配置 ZBAL local memory 时，Dispatcher 按下面的分支选择 Buffer。上层仍使用 `dispatch_a/b`、`combine_a/b` 状态机，替换的是底层通信资源。[deepep.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)
 
 ~~~python
 if _use_zbal:
@@ -652,25 +397,9 @@ else:
     from deep_ep import Buffer, Config
 ~~~
 
-也就是说 SGLang 上层仍然使用 DeepEP Dispatcher 的 dispatch_a / dispatch_b / combine_a / combine_b 状态机，只是底层 Buffer 实现切换成 ZBAL adapter。
+<a id="deepep-mode-auto-decode-target_verify-low_latency"></a>
 
-因此必须分清：
-
-~~~text
-SGLang dispatcher semantics
-        ↓
-DeepEP Buffer or ZBAL Buffer
-        ↓
-Ascend communication implementation
-~~~
-
-#### deepep-mode auto 在 Decode / TARGET_VERIFY 解析成 low_latency
-
-当前：
-
-[DeepEPMode.resolve()](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/layers/moe/utils.py)
-
-非常明确：
+`DeepEPMode.resolve()` 将 `--deepep-mode auto` 在 Decode / TARGET_VERIFY 中解析为 low_latency，在 Prefill / Extend 中解析为 normal。分析 DSpark Verify，应继续追 low-latency 的 recv-hook。[DeepEPMode.resolve()](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/layers/moe/utils.py)
 
 ~~~python
 if is_extend_in_batch:
@@ -679,44 +408,13 @@ else:
     return DeepEPMode.LOW_LATENCY
 ~~~
 
-因此常见配置：`--deepep-mode auto`
+<a id="normal-modeasync_finish-stream-dependency"></a>
 
-在 Decode / Target Verify 中走 low-latency，在 Prefill / Extend 中走 normal。
+Normal 模式的 `dispatch_a` 先捕获 previous_event，`dispatch_b` 再取得布局并 dispatch；`async_finish` 使用 `event.current_stream_wait()` 安排依赖，Combine 类似。通信可以先排进 comm stream，当前流到需要结果的位置再等待，但同批专家计算始终依赖收到的数据。
 
-这意味着分析 DSpark Verify 时，更应该理解 low-latency recv-hook 语义。
+<a id="low-latency-moderecv_hook"></a>
 
-#### Normal Mode：async_finish主要把等待变成 Stream dependency
-
-Normal path 中，dispatch_a 首先捕获 previous_event；dispatch_b 才执行 get_dispatch_layout / buffer.dispatch，并在 async_finish 下调用：`event.current_stream_wait()`
-
-Combine 也类似。
-
-所以 async_finish=True 的真实意义更接近：
-
-~~~text
-communication queued on comm stream
-        ↓
-current stream only waits when result is needed
-~~~
-
-它不是：`Dispatch 与自己的 Expert GEMM 无依赖并发`
-
-同一批 Token 的 Expert GEMM 必须消费 Dispatch 后的 recv data，这个数据依赖无法凭 async flag 消失。
-
-#### Low-Latency Mode：recv_hook创造“发起 → 消费”的窗口
-
-low-latency path 中当前 SGLang 传入 return_recv_hook=True。
-
-于是 low_latency_dispatch 使用：
-
-~~~text
-async_finish = False
-return_recv_hook = True
-~~~
-
-dispatch_a 可以先发起通信并返回 hook；dispatch_b 再调用 hook()，确保数据已经到达并可消费。
-
-概念上：
+Low-latency 设 `async_finish=False`、`return_recv_hook=True`。`dispatch_a` 发起通信并返回 hook，`dispatch_b` 到消费点调用 hook，确认 recv data 可用。Combine 也可将等待推迟到相应消费点：
 
 ~~~text
 dispatch_a
@@ -734,13 +432,11 @@ hook()
 recv data 可消费
 ~~~
 
-Combine 同理。
+发起与消费之间若能安排独立计算，就有重叠机会。改变的是等待位置，不代表传输本身更快。
 
-recv_hook 把同步点推迟到消费数据的位置，为中间安排独立计算留下空间。这里推迟的是等待位置，不能据此推断传输速度提高了。
+<a id="deepseek-v4-decode-target_verify-tbo"></a>
 
-#### 但当前 DeepSeek-V4 Decode / TARGET_VERIFY 没有 TBO
-
-Two-Batch Overlap 最适合利用这种 A/B 分段：
+TBO 可以利用这种 A/B 边界，让一组 batch 在通信时切换到另一组计算。下面只是机制示意：
 
 ~~~text
 Batch A dispatch_a
@@ -752,37 +448,19 @@ Batch B compute
 Batch A dispatch_b
 ~~~
 
-然而：
+固定 V4 策略只支持 EXTEND。源码注明 `DeepseekV4 TBO only supports prefill (EXTEND)`，也记载 Decode TBO 未实现及相关 regression、Graph capture 问题；这些是上游注释，不是本文新执行的实验。[operations_strategy.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/batch_overlap/operations_strategy.py)
 
-[operations_strategy.py](https://github.com/sgl-project/sglang/blob/ab03a8e7eb82d35907bfbeb645bf0af8b4ce290e/python/sglang/srt/batch_overlap/operations_strategy.py)
+<a id="side-stream-work"></a>
+<a id="shared-expert-routed-expert-overlap"></a>
+<a id="low-latency-combine-overlap_args"></a>
 
-对 DeepseekV4DecoderLayer 明确写着：`DeepseekV4 TBO only supports prefill (EXTEND)`
+因此在 Decode / Verify 中，还要寻找其他实际触发的重叠：不依赖当前 recv 的 side-stream 计算、shared expert 与 routed expert 的并行，或已由上层配置的 low-latency Combine `overlap_args`。它们与 TBO、recv_hook 属于不同机制，需分别确认触发条件和汇合位置。
 
-注释还指出 Decode TBO 当前未实现，已有数据表明会 regression，需要进一步解决 graph capture。
-
-当前 DeepSeek-V4 的 TBO 支持 EXTEND。DSpark 的 `DECODE / TARGET_VERIFY` 要从其他独立工作中寻找通信重叠：
-
-##### 独立 Side Stream Work
-
-通信在独立 Stream 飞行期间，如果其他 Stream 已经有与 recv data 无依赖的工作，可以形成真实 overlap。
-
-##### Shared Expert / Routed Expert overlap
-
-DeepSeek MoE 还有 shared expert side-stream 等独立优化。这可能覆盖部分通信，但它和 TBO / recv_hook 不是同一个机制。
-
-##### Low-latency Combine overlap_args
-
-Combine 路径支持额外 overlap stream 协调；只有上层实际配置并触发时才有意义。
-
-因此最终一定要区分：`T_comm_total`
-
-和：`T_comm_exposed`
-
-影响 Step Wall Time 的是 exposed communication，而不是通信 Task 自己的累计 duration。
+最后将 `T_comm_total` 与 `T_comm_exposed` 分开：关键路径受仍然暴露的等待限制，不是通信 duration 的机械总和。
 
 ### 把各阶段放回同一轮
 
-当前更合理的时间线是：
+将一轮工作放回时间线：
 
 ~~~text
 Host / Scheduler
@@ -821,15 +499,15 @@ Host / Scheduler
 └─ publish / next draft metadata
 ~~~
 
-同时要记住：
+其中 DSV4 replay 前的实际关系为 live metadata / bound buffers→replay。
 
-> Target Verify Graph 对 DSV4 不是 graph.update(actual_seq_kvlen) → replay，而是 DSV4 live metadata / bound buffers → replay。
 
-这张图才适合作为后面 msprof / MindStudio 的阶段标注模板。
+
+可据此给 msprof / MindStudio 标阶段。
 
 ## 五、把耗时与有效输出放在一起
 
-结合阶段边界，得到下面的模型：
+整轮成本可写为：
 
 ~~~text
 T_step_wall
@@ -845,7 +523,7 @@ CriticalPath(
 )
 ~~~
 
-最终关注：
+再结合有效产出：
 
 ~~~text
 Effective Progress Rate
@@ -855,7 +533,7 @@ Committed Tokens
 Step Wall Time
 ~~~
 
-单请求近似可以写成：
+单请求近似为：
 
 ~~~text
 Effective TPOT
@@ -865,9 +543,9 @@ Step Wall Time
 Average Commit Length
 ~~~
 
-因此 Acceptance Length 上升并不保证 TPOT 下降。
+AL 增加也可能伴随更多周期成本。
 
-如果更大的 Draft Block 同时带来：
+若扩大 Block 导致：
 
 ~~~text
 Draft Cost ↑
@@ -877,7 +555,7 @@ DeepEP Exposed Comm ↑
 Commit Cost ↑
 ~~~
 
-增长超过有效 Commit Token 的收益，系统仍然会变慢。
+超过有效提交增加，最终仍更慢。
 
 ## 六、设计对照实验并核对结果
 
@@ -891,7 +569,7 @@ Commit Cost ↑
 | DeepEP low_latency 对照 | 通信配置 | Total Comm、Exposed Comm、hook / wait 位置 |
 | Low vs High Concurrency | 模型参数不变 | 瓶颈是否从 Host/Graph 转向 MoE/Communication |
 
-每组实验至少保留：
+各组保留：
 
 ~~~text
 SGLang commit
@@ -906,7 +584,7 @@ DeepEP mode
 Profiler config
 ~~~
 
-保持这些条件一致后，再比较 Trace 中的阶段差异。
+对齐运行条件后，再比阶段与依赖变化。
 
 ### 按现象选择检查点
 
@@ -920,7 +598,7 @@ Profiler config
 | 多流出现重叠 | 汇合点在等待谁 | 关键路径与整轮耗时 |
 | Kernel 累计时长增加 | 并发工作是否增加 | 累计工作量与墙钟时间 |
 
-最后把整套方法收束成：
+可以按下面路径推进归因：
 
 ~~~mermaid
 flowchart TD
@@ -946,7 +624,7 @@ flowchart TD
     N --> O[Effective TPOT]
 ~~~
 
-归因完成后，用同一轮记录检查结论：哪段工作延迟了下一次有效输出，调整后关键路径缩短多少，有效提交长度是否变化。Draft / Verify 以外的 Eager 尾部、通信等待和 Replay 前 Host 准备，都应落实到这组时间与产出上。
+最后回到同轮记录：哪段阻塞下一次输出、调整后关键路径缩短多少、提交长度是否改变。阶段外 Eager、通信和 Host 准备都需落实到耗时与产出。
 
 ### 固定源码入口
 
@@ -969,11 +647,10 @@ flowchart TD
 
 ### 延伸阅读
 
-建议按下面顺序阅读：
+相关篇目可按以下顺序连接：
 
 1. [DeepSeek-V4 Speculative Decoding 源码解析：Draft → Verify → Accept/Reject](../speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md)
 2. [DeepSeek-V4 Speculative Decoding 性能解析：为什么 Speculative Decoding 不一定更快？](deepseek-v4-speculative-performance-analysis.md)
 3. [Ascend 910C 投机解码：Graph、多流与通信的执行依赖](deepseek-v4-speculative-ascend-performance-critical-path-analysis.md)
-4. **本文：把源码机制映射到真实 Profiling 时间线。**
 
-采集稳定窗口后，把 `forward_ct`、Draft / Verify 时间、阶段外时间、暴露的通信等待、Replay 前间隙、Commit Length 与 TPOT 放在同一张表中，即可比较改动前后每轮的成本与产出。
+稳定窗口内，将 forward_ct、阶段时间、未归属差值、暴露通信、Replay 间隙、Commit Length、TPOT 并列，才能比较每轮实际成本。
