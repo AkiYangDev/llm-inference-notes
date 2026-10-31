@@ -1,25 +1,25 @@
 # SGLang 请求生命周期：从 Chat Completion 到 Ascend NPU
 
-客户端发送一句“中国的首都是哪里？”，随后看到回答逐渐出现。服务端并没有在一次模型调用里把整段回答算完：它先处理输入，产生首枚 Token，再反复把新 Token 送回模型，直到满足结束条件。
+客户端问“中国的首都是哪里？”，回答随后逐渐返回。服务端先处理输入并采样首枚 Token，再把新 Token 逐轮送入模型，直到请求结束。要看清这段过程，需要同时跟踪生成进度和各层之间交接的数据。
 
-这篇先沿一条普通生成请求走通全程：聊天消息怎样变成 Token ID，什么时候进入一轮计算，结果又怎样变回客户端收到的文本。涉及 DeepSeek-V4 的缓存和算子细节放在可展开部分；第一次读时，先跟住同一条请求的输入、输出和进度即可。
+下面沿一条普通生成请求走完全程：消息转成 Token ID，等待调度，进入模型，再将输出 ID 解码为文本。DeepSeek-V4 的缓存、算子细节放在可展开部分，第一次阅读可以先跟住请求的输入和输出。
 
-阅读前只需知道 Token 是模型处理文本的单位，以及生成通常分为 Prefill 和 Decode 两段；不熟悉时，可以先看[两个阶段的性能差别](../fundamentals/prefill-vs-decode-performance.md)。正文先解释进程之间的交接，再追踪一轮模型执行。查某个对象时，用本页目录直接定位；想继续深入调度和执行，则沿文末的系列文章阅读。
+生成通常分为 Prefill、Decode 两阶段，不熟悉时可先看 [两个阶段的性能差别](../fundamentals/prefill-vs-decode-performance.md)。这里从进程之间的交接讲起。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
 
-> **源码与适用范围**：基于 `sgl-project/sglang @ dd83b54611897a5f80f4df59e69756bd2fb4b8ab`，核对日期为 2026-09-20。模型案例采用公开源码中的 DeepSeek-V4 文本模型与 NPU `dsv4` 后端，以合设服务、普通自回归和直接执行为主线，展开非 A5 的 BF16 缓存路径，最后说明 DSPARK 如何改变生成循环。Tensor 示例观察一个参与计算的 Rank；多机通信、量化与图回放不逐项展开。本文分析到源码中的算子入口，具体 Flash/Pro 权重尺寸与部署镜像行为需对应配置和源码确认。
+> 源码固定到 `sgl-project/sglang @ dd83b54611897a5f80f4df59e69756bd2fb4b8ab`，核对日期为 2026-09-20。模型使用公开 DeepSeek-V4 文本实现和 NPU `dsv4` 后端，主线为合设服务、普通自回归、直接执行，并展开非 A5 的 BF16 缓存路径，最后说明 DSPARK 的变化。Tensor 例子只观察一个参与 Rank，不逐项展开多机、量化和图回放。分析止于源码算子入口，Flash/Pro 的具体尺寸和部署镜像行为仍需对应配置与源码。
 
 </details>
 
 ## 一、请求经过哪些进程
 
-先分清两个对象：请求是一项持续中的生成任务，batch 是同一轮送去计算的一组工作。一条请求可能跨越很多个 batch；与它一起计算的其他请求，也会随着新任务加入、旧任务结束而变化。HTTP 连接在等待返回，调度器则按轮次推进生成。
+先区分请求和 batch：请求持续到生成结束，batch 只描述某一轮的工作。一条请求可以跨越很多 batch，其他请求随时加入或完成，HTTP 连接等待返回期间，调度器仍按轮次推进。
 
-接入、模型执行和文本解码的工作节奏不同。SGLang 将这些职责分开，让接收新请求、推进现有生成和返回文本能够各自向前走。
+请求接入、模型生成、文本解码的工作节奏不同，SGLang 将它们拆开，以便接收新请求、推进生成和返回文本各自向前。
 
-在一个服务实例中，HTTP 与请求管理侧负责接入和返回，Scheduler 侧组织并推进模型执行，Detokenizer 负责将输出 token ID 解码成文本。它们通过以下消息路径连接：
+在一个服务实例中，HTTP 与请求管理侧接入、返回，Scheduler 组织模型执行，Detokenizer 将输出 Token ID 解码为文本，消息路径如下：
 
 ```mermaid
 flowchart TD
@@ -44,15 +44,15 @@ flowchart TD
     D -->|解码后的文本与状态| T
 ```
 
-图里先看两次交接：TokenizerManager 把准备好的请求送给 Scheduler，Scheduler 再把生成结果送往 Detokenizer。Serving 衔接 HTTP 协议与请求管理；模型 Worker 和 ModelRunner 属于调度侧的执行职责。进程之间传递消息，模型计算则由执行侧发起。
+图里主要有两次消息交接：TokenizerManager 将请求送给 Scheduler，Scheduler 将结果送给 Detokenizer。Serving 衔接 HTTP 协议，Worker 和 ModelRunner 承担调度侧的执行工作。
 
-多卡部署时，执行侧包含多个协作的 Rank，图中将它们合并为调度与执行职责；它不表示整个 DeepSeek 模型只占一个进程或一张卡。Scheduler 所在进程通过 Worker 发起设备计算。CPU 组织请求并提交工作，NPU 执行相应算子；在允许重叠执行的路径中，主机侧处理与设备计算可以交错推进。
+多卡时执行侧有多个协作 Rank，图中只合并展示它们的职责，并不表示模型只占一个进程或一张卡。Scheduler 通过 Worker 提交设备工作，CPU 组织请求、NPU 执行算子；允许重叠的路径还会交错安排主机处理和设备计算。
 
-输入与输出形成两条相连的路径：输入侧把聊天消息变成可调度请求；输出侧把生成结果送回仍在等待的 HTTP 请求。这些职责分别落在 [HTTP 路由](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/http_server.py)、[TokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py) 和 [DetokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py) 等实现中。
+输入链把消息变为可调度任务，输出链则把结果送回等待中的 HTTP 请求。可分别从这些实现查起：[HTTP 路由](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/http_server.py) [TokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py) [DetokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py)
 
 ## 二、聊天消息怎样变成可调度请求
 
-假设客户端发送下面这段请求体。其中 `model` 应填写服务实际暴露的模型名称，这里只展示协议结构。
+例如客户端提交下面的请求体，`model` 应填写服务实际暴露的名称，此处只示意协议结构。
 
 ```json
 {
@@ -66,15 +66,15 @@ flowchart TD
 }
 ```
 
-客户端给出的是带角色的消息，模型最终消费的是 Token 序列。角色边界、轮次分隔和提示 assistant 继续生成的标记，需要由对应模型的 Chat Template 等逻辑组织起来。因此，实际模型输入不只是用户可见的那一句话。
+客户端消息带有角色和轮次，模型接收的则是 Token 序列。Chat Template 等逻辑需要加入角色边界、分隔和 assistant 续写标记，因此真正送入模型的输入还包括用户不可见的模板内容。
 
-在这一版本中，`OpenAIServingChat._convert_to_internal_request()` 接收 `ChatCompletionRequest`，处理消息，构建采样参数，随后创建 `GenerateReqInput`。后者承载 Runtime 所需的生成输入和控制信息，例如 prompt、采样参数、流式开关以及部分路由或会话信息。对话中的生成要求由此转化为内部接口可以消费的字段。[源码：请求转换](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py#L1143-L1268)
+固定实现中，`OpenAIServingChat._convert_to_internal_request()` 读取 `ChatCompletionRequest`，处理消息、构造采样参数，再生成 `GenerateReqInput`。prompt、流式开关、采样要求及部分路由或会话信息由此进入 Runtime 接口。[源码：请求转换](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py#L1143-L1268)
 
-内部请求可以携带文本，也可以携带上游模板处理已经生成的 token ID。TokenizerManager 根据输入形式完成必要的分词与请求准备，构造送往调度侧的 `TokenizedGenerateReqInput`。已有 ID 的输入可以直接进入相应处理路径。[源码：TokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py)
+内部输入可以是文本，也可以是模板等上游步骤已生成的 Token ID。TokenizerManager 按形式完成必要准备，再构造 `TokenizedGenerateReqInput` 送给调度侧；已有 ID 时走相应路径。[源码：TokenizerManager](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tokenizer_manager.py)
 
-为了把后面的变化看清，下面把模型输入简化为六个 Token：`[A, B, C, D, E, F]`。字母只是 ID 的代号，不代表这句中文恰好会被切成六块，也不代表一个字一定对应一个 Token。
+后文将输入简化为 `[A, B, C, D, E, F]` 六个 Token。字母只是整数 ID 的代号，不表示这句中文恰好切成六块，也不表示一个字总对应一个 Token。
 
-同一请求在不同边界使用的对象，可以放在一张表里理解：
+同一请求在各边界使用的对象如下：
 
 | 对象 | 主要由谁使用 | 此时关心的问题 |
 |---|---|---|
@@ -85,12 +85,12 @@ flowchart TD
 | `ScheduleBatch` | 调度与批处理逻辑 | 这一轮把哪些请求、哪些 token 放在一起计算？ |
 | `ForwardBatch` | 模型执行层 | 本轮计算所需的输入 Tensor、位置和执行信息是什么？ |
 
-读这张表时，不必一次记下所有类名。先记住 `Req` 跟随一条请求持续存在，`ScheduleBatch` 和 `ForwardBatch` 服务于本轮执行。后续每次看到 batch，都要再问一句：这轮处理哪些位置，结果写回哪条请求？
+先记住 `Req` 保存持续进度，`ScheduleBatch`、`ForwardBatch` 则服务当前一轮。后续看到 batch 时，再核对它处理哪些位置、结果应写回哪条请求。
 
 <details markdown="1">
 <summary>沿固定版本源码继续追踪</summary>
 
-如果要自己沿源码复现这条主线，不必从仓库目录逐层翻找。可以从请求入口开始，每次只追一个问题，并把上一层产出的对象带到下一层：
+读源码可以从入口逐站向下，带着当前产出的对象寻找下一步，不必先遍历仓库目录：
 
 | 阅读顺序 | 固定版本中的入口 | 这一站只确认什么 | 接下来带着什么继续追 |
 |---:|---|---|---|
@@ -102,19 +102,19 @@ flowchart TD
 | 6 | [`DeepseekV4ForCausalLM.forward()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155) | token 表示怎样进入 V4 模型层 | hidden states 与 Attention 输入 |
 | 7 | [`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189) | 窗口和压缩历史怎样进入 Ascend 算子 | Q、页表、缓存与算子参数 |
 
-这张表是阅读路线，不表示七个函数彼此直接调用。进程间消息、batch 转换和模型内部调用仍然存在；后文会在它们影响请求状态的地方展开。
+这是一张阅读路线表，七个入口之间仍有进程消息、batch 转换和模型调用，不能理解为七个函数直接依次调用。
 
 </details>
 
-到调度侧时，协议转换已经完成，请求带着 Token ID、采样要求和停止条件等待资源。后面会持续变化的是处理进度和输出；原始 Prompt 不会因为生成了一枚 Token 就变成另一条请求。
+到达调度器时，请求已带有 Token ID、采样要求与停止条件，等待资源。之后改变的是输出和执行进度，原始 Prompt 仍属于同一条请求。
 
 ## 三、本轮处理哪些请求与 Token
 
-Scheduler 收到请求，不等于 NPU 已经开始处理它。新请求需要与现有生成共享计算和缓存空间，只有被选入某轮 batch 后，才会形成这一次设备执行的输入。
+Scheduler 收到任务后，还需与已有生成协调计算预算和缓存空间。进入某轮 batch 后，才能准备这一次实际执行的输入。
 
-第一次处理 Prompt 的阶段叫 Prefill，它为后续生成建立所需状态，并能产生首枚输出。后面的普通 Decode 每轮消费上一轮生成的 Token，读取已有历史，再预测下一枚。缓存保留的是后续 Attention 需要的历史表示；DeepSeek-V4 还涉及滑窗和压缩状态，后面的展开部分再说明。
+Prefill 处理 Prompt、建立历史状态，并可产生首枚输出。后续普通 Decode 消费上一轮输出、读取历史、预测下一枚。DeepSeek-V4 的历史包含滑窗和压缩表示，后面的展开部分再具体说明。
 
-普通调度循环的核心职责如下。这里是省略空闲与暂停检查后的伪代码，不是源文件逐字摘录：
+省略空闲、暂停检查后，普通调度循环可写为下面的伪代码：
 
 ```python
 while service_running:
@@ -126,7 +126,7 @@ while service_running:
         process_batch_result(batch, result)
 ```
 
-`event_loop_normal()` 持续接收请求、选择 batch、执行并处理结果；重叠调度则允许本轮提交与先前 batch 的结果处理交错进行。调度器按 Token 预算、缓存容量与请求状态选择本轮执行集合。[源码：调度循环](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/scheduler.py#L1932-L2020)
+`event_loop_normal()` 重复接收、选批、执行与结果处理；重叠调度允许先前结果处理和当前提交交错。每轮执行哪些请求，仍由 Token 预算、缓存和请求状态决定。[源码：调度循环](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/scheduler.py#L1932-L2020)
 
 ```mermaid
 flowchart TD
@@ -143,9 +143,9 @@ flowchart TD
     W --> I
 ```
 
-回到六个 Token 的例子，先假设没有可复用前缀。第一次执行要处理 A 到 F，序列位置为 `[0, 1, 2, 3, 4, 5]`；采样得到的首枚输出记为 y1。接下来观察同一条请求如何跨过两轮计算。
+先假设六 Token 输入没有命中前缀。Prefill 计算 A 到 F，位置为 `[0, 1, 2, 3, 4, 5]`，采样结果记为 y1，再看下一轮如何继续。
 
-把同一个 `Req` 连续观察三次，可以看出“请求状态”和“本轮 batch”为什么是两回事：
+把同一个 `Req` 放在三个时刻观察：
 
 | 观察时点 | `Req` 持有的输入与已生成结果 | 本轮 batch 的任务 | 本轮结束后的变化 |
 |---|---|---|---|
@@ -153,11 +153,11 @@ flowchart TD
 | 被选入 Prefill | prompt 不变，输出仍为空 | 计算 A 到 F 六个位置 | 采样得到 y1，记录首个生成结果；请求若未结束则继续保留 |
 | 再次被选入普通 Decode | prompt 不变，已生成结果为 `[y1]` | 只把 y1 作为本轮新增模型输入 | 采样得到 y2，已生成结果推进为 `[y1, y2]` |
 
-表中 Prompt 始终不变，变化的是已生成输出和本轮输入。Prefill 算完 A 到 F 后得到 y1，下一轮才把 y1 送入模型。因此，已经拿到 y1，并不意味着已经计算过 y1 对应的缓存；请求进度与缓存进度需要按这个先后关系理解。
+Prompt 始终保留，增加的是输出。y1 来自 A 到 F 的计算，下一轮才将 y1 作为输入，因此采样到它时还未形成它自己的缓存状态。读长度与进度时，要保留这个先后关系。
 
-前缀缓存可以改变待算数量。若另一条请求已经留下相同前缀，并且缓存实现能够恢复该模型需要的完整状态，命中的部分就不必重新做全部模型计算。例如逻辑上复用了前四个位置，待处理后缀就只剩 E、F。这个例子说明输入如何切分，不表示 DeepSeek-V4 的实际缓存匹配一定允许四 token 粒度。
+如果已有相同前缀，且缓存能够恢复该模型所需的完整状态，命中部分便可复用。例如逻辑上复用前四个位置后，只需继续 E、F。这个例子说明输入区间，不保证 DeepSeek-V4 专用缓存允许四 Token 粒度匹配。
 
-Radix 索引负责查找可复用前缀，实际 Tensor 保存在设备缓存池。请求准备逻辑通过 `tree_cache.match_prefix()` 获得索引等结果，再确定后缀。对于包含压缩状态的模型，只看到文本前缀一致还不够；缓存粒度、相关状态和实现条件也必须成立。[源码：请求前缀准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L1585-L1668)
+Radix 索引查找前缀，实际 Tensor 留在设备池。请求通过 `tree_cache.match_prefix()` 获取索引等结果后确定后缀。含压缩状态的模型还要满足粒度、状态和实现条件，文本相同本身并不足以证明可以复用。[源码：请求前缀准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L1585-L1668)
 
 ```mermaid
 flowchart TD
@@ -171,15 +171,15 @@ flowchart TD
     B --> F[模型读取历史并计算新增位置]
 ```
 
-首 token 还需要模型提供下一位置的 logits。通用请求逻辑中的 `_compute_max_prefix_len()` 将匹配上限限制在 `input_len - 1`，请求 logprob 时还有额外约束；具体缓存实现也可能进一步缩短可复用长度。因此，这条生成路径保留必要的模型计算来取得下一位置 Logits。[源码：前缀长度上限](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L1677-L1682)
+首 Token 需要下一位置的 Logits。通用 `_compute_max_prefix_len()` 将匹配上限限制为 `input_len - 1`，输入 logprob 还有额外条件，具体缓存也可能缩短匹配范围。这条生成路径仍需保留必要的模型计算。[源码：前缀长度上限](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L1677-L1682)
 
-这一轮选中的请求及其输入安排进入 `ScheduleBatch`。一轮结束后，完成的请求退出，新请求可以加入，仍需生成的请求继续运行。这就是 Continuous Batching 在请求生命周期中的作用。
+选中的请求和输入安排进入 `ScheduleBatch`。每轮后，完成的退出，新请求可加入，未完成的继续推进，构成 Continuous Batching。
 
 ## 四、输入与缓存怎样准备给 NPU
 
-选好本轮工作后，还需要把输入送到设备。六个 Token ID 是整数索引，Embedding 之后才成为模型向量；同时准备的长度、位置和缓存映射，负责让模型知道这些行分别属于谁。
+选批之后开始准备设备输入。Token ID 是整数索引，经 Embedding 才成为向量；长度、位置与缓存映射则携带这些输入行的请求关系。
 
-在 `prepare_for_extend()` 中，输入 ID 先进入 CPU 暂存区；序列长度保留设备 Tensor 和 CPU 版本。执行前，`resolve_forward_inputs()` 将暂存 ID 传到设备。Worker 随后构造 `ForwardBatch`，把模型执行所需的输入、位置和模式集中起来。[源码：Extend 输入准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L2685-L2728)、[设备输入解析](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/overlap_utils.py#L87-L114)、[Worker 构造 ForwardBatch](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tp_worker.py#L631-L685)
+`prepare_for_extend()` 先将 ID 放进 CPU staging，并保存序列长度的设备及 CPU 版本。执行前，`resolve_forward_inputs()` 上传暂存 ID，Worker 再构造 `ForwardBatch`，组织本轮输入、位置和模式。[源码：Extend 输入准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/schedule_batch.py#L2685-L2728) [设备输入解析](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/overlap_utils.py#L87-L114) [Worker 构造 ForwardBatch](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tp_worker.py#L631-L685)
 
 | 信息 | 六 token 主例 | 用途 |
 |---|---|---|
@@ -190,7 +190,7 @@ flowchart TD
 | `out_cache_loc` | 为六个新位置分配的槽位索引 | 关联本轮输入与缓存写入位置 |
 | `out_cache_loc_dsv4` | DeepSeek-V4 专用位置集合 | 关联压缩缓存等独立分配结果 |
 
-同一轮还可以打包其他请求。假设另一条请求本轮新增三个 Token，合起来就是 `[9]` 的 ID Tensor，Embedding 后得到 `[9, H]`。这九行连续存储，但各请求的边界和历史仍由元数据分别记录。
+若同时加入另一条新增三个 Token 的请求，打包 ID 就是 `[9]`，Embedding 得到 `[9, H]`。九行连续存放，各请求的边界与历史仍由元数据区分。
 
 ```mermaid
 flowchart TD
@@ -205,14 +205,14 @@ flowchart TD
     E --> A
 ```
 
-`positions` 回答“这个 Token 在自己的序列里排第几”，`out_cache_loc` 回答“新状态写进设备缓存的哪个槽位”。两套坐标不能互相替代。DeepSeek-V4 的 NPU 路径还会把完整槽位转换为滑窗槽位：`store_cache()` 通过 `get_swa_out_cache_loc()` 取得落点，已有元数据可直接提供位置，否则由缓存池完成映射。 [源码：滑窗位置转换与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2192-L2224)
+`positions` 描述序列内逻辑位置，`out_cache_loc` 描述设备写入槽位，二者不能互换。DSV4 NPU 的 `store_cache()` 还用 `get_swa_out_cache_loc()` 转为滑窗位置：已有 metadata 可直接提供，否则由缓存池映射。[源码：滑窗位置转换与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2192-L2224)
 
-理解到这里，先抓住长度、逻辑位置和存储位置的区别，就能继续跟随请求。DeepSeek-V4 怎样将历史分成滑窗与压缩形式，可以在下面展开；这些模型细节不会改变“一轮输入由 ID 和执行元数据共同描述”的关系。
+继续跟请求时，先分清长度、逻辑位置和物理存储即可。下方展开 DeepSeek-V4 缓存，但输入始终需要 ID 与执行元数据共同描述。
 
 <details markdown="1">
 <summary>深入：V4 的 SWA、C4/C128 与 NPU 缓存布局</summary>
 
-这里的 SWA 是 Sliding Window Attention，即滑窗 Attention。它保留近期内容的细粒度表示，而压缩缓存以另一种形式保留更长历史。该版本的 V4 后端支持按层配置三种压缩比例：
+SWA 即 Sliding Window Attention，用较细表示保存近期内容；更长历史另有压缩表示。固定 V4 后端按层使用以下压缩比例：
 
 | 当前层的 `compress_ratio` | Attention 使用的历史来源 |
 |---|---|
@@ -220,7 +220,7 @@ flowchart TD
 | `4` | 滑窗缓存，加上索引器选出的 C4 压缩条目 |
 | `128` | 滑窗缓存，加上 C128 压缩历史 |
 
-C4、C128 表示压缩比例。压缩器根据模型参数处理输入和中间状态，形成压缩表示；它不是简单地每四个或一百二十八个 token 取平均，也不是把普通 K/V Tensor 改一个 shape。C4 的索引器还要计算候选历史的索引，后续 Attention 根据这些索引读取压缩条目。[源码：压缩器与索引器构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1115-L1150)、[压缩历史分发](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189)
+C4、C128 表示压缩比例。压缩器结合模型参数、输入和中间状态生成表示，不能把它理解为每四个或一百二十八个 Token 简单求平均，或者仅修改普通 K/V shape。C4 还由索引器选择候选位置供后续读取。[源码：压缩器与索引器构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1115-L1150) [压缩历史分发](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189)
 
 ```mermaid
 flowchart TD
@@ -237,21 +237,21 @@ flowchart TD
     H --> A
 ```
 
-这张图表示数据之间的依赖。滑窗写入、压缩和索引在具体实现中有自己的调度顺序，开启多流后也可能重叠。它们共同回答一个问题：本轮查询能够访问哪部分历史、以什么表示访问。
+图展示数据依赖，实际写入、压缩和索引各有顺序，多流时还可能重叠。它们共同决定当前 Query 能读哪些历史表示。
 
-缓存本身也与普通多头 Attention 不同。非 A5 的 BF16 路径采用 PA_ND 布局，单个池的 Tensor 可写成 `[页数, 每页槽位数, 1, D]`；其中 `1` 是共享 KV head 维，D 包含非旋转与旋转位置分量。这个实现的 `get_value_buffer()` 返回同一个 key buffer，K、V 访问因而共享这份缓存表示。[源码：NPU 缓存布局](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py#L40-L95)、[共享缓存访问与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py#L481-L569)
+非 A5 的 BF16 路径采用 PA_ND：单池可表示为 `[页数, 每页槽位数, 1, D]`，其中 `1` 是共享 KV head，D 包含非旋转和旋转分量。这里 `get_value_buffer()` 返回同一 key buffer，因此 K、V 访问共享这份缓存表示。[源码：NPU 缓存布局](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py#L40-L95) [共享缓存访问与写入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py#L481-L569)
 
-几类缓存使用各自的映射：滑窗位置有自己的转换，C4 页表由完整 token 映射派生，C128 使用独立的请求页表。专用位置集合 `DSV4OutCacheLoc` 把分配结果传到后续步骤。[源码：C4 与 C128 页表](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L316-L391)、[专用分配结果接入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_common_hooks.py#L1-L65)
+各池也有各自的映射。SWA 转换滑窗位置，C4 从完整 Token 映射派生页表，C128 使用独立请求页表；`DSV4OutCacheLoc` 负责携带专用分配结果。[源码：C4 与 C128 页表](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L316-L391) [专用分配结果接入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/dsv4/dsv4_common_hooks.py#L1-L65)
 
-回到六 token 主例，新增输入始终是 A 到 F，逻辑位置始终是 0 到 5；不同层根据自己的压缩比例更新相应缓存。序列长度 6 表示请求处理进度，不表示每一层都存着六份完整、多头、彼此独立的 K 和 V。
+六 Token 主例仍处理 A 到 F、逻辑位置 0 到 5，不同层按自身比例维护状态。长度 6 只说明处理进度，不能推出各层均保存六份完整且互相独立的多头 K、V。
 
 </details>
 
 ## 五、DeepSeek-V4 一层怎样进入 Ascend 算子
 
-直接执行路径经 ModelRunner、`EagerRunner` 进入模型。`DeepseekV4ForCausalLM.forward()` 调用模型主体，依次完成 Embedding、各 Decoder Layer 和末端处理，再由 logits processor 与 LM Head 产生词表分数。此时仍需采样，才能选出具体的下一枚 Token。 [源码：EagerRunner](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L378) [DeepSeek-V4 生成入口](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155)
+直接执行经 ModelRunner、`EagerRunner` 进入 `DeepseekV4ForCausalLM.forward()`，依次完成 Embedding、Decoder Layers 及末端处理，再经 logits processor、LM Head 形成词表分数，采样后才得到输出 ID。[源码：EagerRunner](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L378) [DeepSeek-V4 生成入口](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L5081-L5155)
 
-DeepSeek-V4 在 Embedding 后把 `[T, H]` 扩展为 `[T, hc_mult, H]`，保留多路表示；层内的 mHC 处理负责在子层前后混合这些表示。层内的数据流是：Attention 和专家网络消费整理后的输入，结果再合入持续向下传递的多路状态。这里的 `hc_mult` 是状态流数量，不是 Attention head 数。[源码：Embedding 与多路状态](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L4679-L4701)
+Embedding 后，DeepSeek-V4 将 `[T, H]` 扩展到 `[T, hc_mult, H]` 保存多路状态，mHC 在子层前后混合这些表示。Attention 和专家网络使用整理后的输入，结果再合回多路状态。`hc_mult` 表示状态流数，与 Attention head 数不同。[源码：Embedding 与多路状态](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L4679-L4701)
 
 ```mermaid
 flowchart TD
@@ -267,14 +267,14 @@ flowchart TD
     O --> Y[传给下一层]
 ```
 
-图表示一层中的计算关系，融合实现可能把相邻步骤合在一起。`DeepseekV4DecoderLayer` 使用 `MQALayer` 和带有 `is_deepseek_v4=True` 的 `DeepseekV2MoE`；后者的名字来自代码复用。MoE 把 Token 交给选中的专家计算，再合并结果，是否跨设备通信取决于并行配置和后端。 [源码：Decoder Layer 构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2603-L2705) [子层执行](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L3006-L3250)
+图表示层内关系，融合实现可以合并相邻步骤。`DeepseekV4DecoderLayer` 使用 `MQALayer` 与设置 `is_deepseek_v4=True` 的 `DeepseekV2MoE`，后者名称来自复用。MoE 选择专家计算并合回贡献，是否跨设备仍取决于布局和 backend。[源码：Decoder Layer 构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2603-L2705) [子层执行](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L3006-L3250)
 
 <details markdown="1">
 <summary>深入：从 Query、缓存写入到 Ascend Attention 算子</summary>
 
-先沿 Attention 看六个输入怎样变化。以 NPU、未启用多流的准备路径为例：查询侧经过 `wq_a`、归一化和 `wq_b`，形成各个本地 head 的 Q；共享 KV 侧经过 `wkv` 和归一化。RoPE 将逻辑位置信息作用到相关分量。代码也允许融合前段投影，但不会改变这些数据各自承担的职责。[源码：查询前段投影](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1750-L1774)、[NPU Q 与共享 KV 准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1955-L1998)
+在 NPU 普通单流准备中，查询经 `wq_a`、归一化、`wq_b` 形成本地 Q，KV 经 `wkv`、归一化形成共享表示，RoPE 再作用到相关位置分量。前段投影可被融合，但数据职责不变。[源码：查询前段投影](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1750-L1774) [NPU Q 与共享 KV 准备](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1955-L1998)
 
-设当前 Rank 的 Attention head 数为 `n_local_heads`，每个 head 的维度为 D，查询中间投影维度为 R。六 token 主例的形状关系是：
+设当前 Rank 有 `n_local_heads` 个 Attention heads，head 维度为 D，查询中间维度为 R，六 Token 的形状关系如下：
 
 | 位置 | Tensor shape | 含义 |
 |---|---|---|
@@ -286,13 +286,13 @@ flowchart TD
 | 送入 Attention 后端的 Q | `[6, n_kernel_heads, D]` | 可能按内核要求补齐 head 维 |
 | 共享 KV 的写入数据 | `[6, D]` | 写入池时补成 `[6, 1, D]` |
 
-这些是从代码操作推得的符号维度，没有把 Flash 或 Pro 的具体配置硬填成同一组数字。启用 Attention TP 时，`n_local_heads` 对应当前组内分片，而非全模型 head 数。当前实现还通过 `_kernel_num_heads()` 决定算子使用的 head 维。Attention TP 下，两者可能不同：入口前将 Q 的 head 维补齐，输出再切回本地有效 head。因此，表中同时列出了本地逻辑 shape 与后端实参 shape。[源码：head 维选择](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L960-L980)、[补齐与切片](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2219-L2255)
+表中用符号维度描述代码，不给 Flash、Pro 强填同样的数值。Attention TP 下 `n_local_heads` 只表示本 Rank 分片；`_kernel_num_heads()` 还会决定实际算子宽度，可能先补齐 Q 的 head 维，再切回有效输出。因此逻辑形状和后端实参需要分别看。[源码：head 维选择](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L960-L980) [补齐与切片](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2219-L2255)
 
-**新增缓存先在准备阶段写入。** NPU 的 `_forward_prepare()` 调用后端 `store_cache()` 写入滑窗表示，随后按层运行索引器和压缩器。返回后，`MQALayer.forward()` 直接调用 `attn_backend.forward(...)`，并在这条路径上传入 `save_kv_cache=False`，避免重复写入。
+新增缓存先由 NPU `_forward_prepare()` 调 `store_cache()` 写入 SWA，再按层准备索引和压缩。返回后，`MQALayer.forward()` 直接调用 `attn_backend.forward(...)`，传 `save_kv_cache=False` 避免重复写。
 
-在这条调用路径中，`attn_mqa` 虽然是 `RadixAttention` 对象，但本例把它作为描述 head 数、缩放、layer ID 等信息的参数传给后端，主调用边是 **`MQALayer → attn_backend.forward`**。本例由 `MQALayer` 直接调用后端，`RadixAttention` 对象提供计算参数。[源码：准备、压缩与索引](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1955-L2095)、[直接调用后端](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2260-L2380)
+此处 `attn_mqa` 虽是 `RadixAttention` 对象，但用来提供 head 数、缩放、layer ID 等参数。主调用边仍是 `MQALayer → attn_backend.forward`。[源码：准备、压缩与索引](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L1955-L2095) [直接调用后端](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2260-L2380)
 
-配置名 `dsv4` 在 NPU 上注册为 `DeepseekV4AscendAttnBackend`。这个后端重写了 `forward()`：比例为 0 时走 `_forward_swa()`，其余受支持的 V4 压缩层走 `_forward_compressed()`。Prefill 与 Decode 的差异则体现在查询数量、长度、页表和压缩状态等元数据中，而非照搬通用 `ascend` 后端的 FIA 分支。[源码：dsv4 后端注册](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/layers/attention/attention_registry.py#L166-L174)、[V4 后端分发](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2077)
+NPU 将 `dsv4` 注册为 `DeepseekV4AscendAttnBackend`，其 `forward()` 在 ratio 0 时走 `_forward_swa()`，其他受支持 V4 压缩层走 `_forward_compressed()`。Prefill、Decode 通过查询数、长度、页表和状态区别执行，不能套用通用 `ascend` 后端 FIA 分支。[源码：dsv4 后端注册](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/layers/attention/attention_registry.py#L166-L174) [V4 后端分发](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2077)
 
 ```mermaid
 flowchart TD
@@ -307,9 +307,9 @@ flowchart TD
     O --> V[输出位置变换与投影]
 ```
 
-对非 A5 的目标模型路径，`_sparse_attn_ops()` 选择 `torch.ops.custom.npu_sparse_attn_sharedkv` 及配套 metadata 算子。查询使用 TND 布局，即 token、head、head_dim；缓存使用前文的 PA_ND 分页布局。滑窗路径传入原始窗口缓存，压缩路径还传入压缩缓存与对应页表；C4 额外传入索引器计算的 `cmp_sparse_indices`。[源码：设备算子选择](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L41-L55)、[窗口及压缩 Attention 参数](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2078-L2189)
+非 A5 目标路径由 `_sparse_attn_ops()` 选择 `torch.ops.custom.npu_sparse_attn_sharedkv` 及 metadata 算子。Q 为 TND，即 Token、head、head_dim；缓存是 PA_ND。压缩路径比 SWA 路径额外提供压缩缓存及页表，C4 还提供 `cmp_sparse_indices`。[源码：设备算子选择](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L41-L55) [窗口及压缩 Attention 参数](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2078-L2189)
 
-六 token 的 Prefill 中，后端为单请求建立查询边界 `[0, 6]`，当前序列长度为 6。如果还打包了另一条三个 token 的请求，查询边界就是 `[0, 6, 9]`。这些边界标明各段 Q 属于谁，滑窗和压缩页表则标明各段查询的历史在哪里。[源码：查询边界构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L1837-L1925)
+本例单请求 Prefill 的 Query 边界为 `[0, 6]`，序列长为 6；若加上另一条三个 Token 请求，边界成为 `[0, 6, 9]`。边界划分 Q 属于谁，SWA、压缩页表进一步确定历史位置。[源码：查询边界构造](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L1837-L1925)
 
 | 算子参数 | 回答的问题 |
 |---|---|
@@ -321,21 +321,21 @@ flowchart TD
 | `cmp_sparse_indices` | C4 查询选择哪些压缩条目？ |
 | `sinks`、`softmax_scale`、`metadata` | 这层 Attention 需要的其他计算参数 |
 
-有效序列长度为 6 时，每个 Query 的访问范围仍由窗口、因果约束、压缩比例和索引共同确定。查询边界标明 Token 属于哪条请求，有效长度描述进度，缓存池容量描述可分配空间。
+即便有效长度为 6，各 Query 的可读范围仍需结合窗口、因果约束、压缩比例和索引。Query 边界、有效长度、池容量分别描述请求划分、推进进度和可分配空间。
 
-Attention 输出随后经过相应位置变换及输出投影，回到层内 mHC 与 MoE 流程。全部层执行完成后，最后一个 prompt 位置提供预测下一 token 所需的表示；LM Head 与 logits processor 产生词表分数，运行时再采样出首枚 token `y1`。[源码：Attention 输出处理](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2380-L2600)、[模型结果与采样](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tp_worker.py#L631-L725)
+Attention 结果经过位置变换和输出投影，返回 mHC、MoE。所有层完成后，Prompt 末端表示提供下一位置预测，LM Head、logits processor 产生分数，再采样出 `y1`。[源码：Attention 输出处理](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/models/deepseek_v4.py#L2380-L2600) [模型结果与采样](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/tp_worker.py#L631-L725)
 
-**下一轮普通 Decode 输入 y1，逻辑位置为 6。** 此时本轮只有一个查询，本地有效 Q 为 `[1, n_local_heads, D]`，实际后端输入仍按上述规则组织为 `[1, n_kernel_heads, D]`，查询边界为 `[0, 1]`，序列长度增至 7。后端继续写入新增窗口表示、更新相关压缩状态，并沿相应层的同一 Attention 分支执行。
+下一轮普通 Decode 输入 y1，位置为 6。本地有效 Q 变为 `[1, n_local_heads, D]`，后端按规则组织成 `[1, n_kernel_heads, D]`，Query 边界 `[0, 1]`、序列长 7。继续写入新增 SWA、维护压缩状态，再走当前层相同的 Attention 分支。
 
-压缩状态并不意味着每个 Decode 都生成一个新压缩条目。该实现会检查长度是否跨过压缩比例对应的边界；例如在普通 C4 Decode 路径中，长度到 8 才满足新的四 token 边界，到 7 时不会仅因执行了 Decode 就多写一个有效 C4 条目。压缩器仍需维护进行中的状态。[源码：Decode 压缩边界](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L393-L408)
+压缩器还需看是否跨过比例边界。普通 C4 Decode 在长度 8 时跨入新四 Token 边界，长度 7 则不会仅因执行了一轮就多出有效 C4 条目，不过进行中的状态仍要维护。[源码：Decode 压缩边界](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L393-L408)
 
-至此，“再生成一步”已经落实为确定的设备工作：构造当前查询，更新该层所需状态，按窗口及压缩映射读取历史，计算输出。Python 负责组织调用，`torch_npu` 与 Ascend 执行栈承接设备算子。采用图回放时可以复用已捕获的执行安排，数据依赖仍然存在，但每轮不必重走相同的 Python 调用序列。
+一次生成到这里对应具体设备工作：准备 Q、更新状态、根据映射读历史、计算输出。Python 组织调用，`torch_npu` 与 Ascend 执行栈承接算子。Graph Replay 可复用捕获安排而不逐轮重走相同 Python 序列，数据依赖仍需满足。
 
 </details>
 
 ## 六、结果返回与持续生成
 
-模型采样出 y1 后，请求若未结束，就继续执行：下一轮输入 y1、预测 y2，再下一轮输入 y2、预测 y3。下面将已算过的位置与刚生成的输出放在一起，避免把这两个进度混为一谈。
+若 y1 未使请求结束，就输入 y1 预测 y2，再输入 y2 预测 y3。将执行过的位置与刚采样的结果并排看：
 
 | 轮次 | 执行前已经形成缓存的位置 | 本轮新增模型输入 | 本轮结束后的缓存进度 | C4 状态变化 | 采样输出 |
 |---|---|---|---|---|---|
@@ -343,11 +343,11 @@ Attention 输出随后经过相应位置变换及输出投影，回到层内 mHC
 | 第一次普通 Decode | 位置 0～5 | y1，位置 6 | 位置 0～6 已处理，总长度 7 | 没有跨过新的四 token 边界 | y2 |
 | 第二次普通 Decode | 位置 0～6 | y2，位置 7 | 位置 0～7 已处理，总长度 8 | 到达新的四 token 边界，可形成本边界对应的有效更新 | y3 |
 
-表中的“缓存进度”表示哪些逻辑位置已经作为模型输入处理，不表示它们占用连续显存，也不表示每层保存相同形式的 K/V。C4 一列只描述普通路径是否跨过比例边界；实际压缩内容仍由压缩器和索引器产生。刚采样出的 token 要到下一轮作为输入时，才形成它对应的缓存状态。若 y3 已触发停止条件，请求可以直接结束，不必为了它再执行一轮。采用 chunked prefill 时，prompt 可能分多轮处理，中间 chunk 不一定向用户产出 token。
+“缓存进度”只表示哪些位置已作为输入执行，不代表连续显存或各层相同 K/V。C4 一列只标记是否跨比例边界，具体内容仍由压缩器、索引器形成。新输出要等下轮执行才有自身缓存；若 y3 触发停止，可直接结束。Chunked Prefill 还可能分多轮处理中间 Prompt，未必逐 chunk 返回输出。
 
-设备上的结果有两个去向：后续计算需要继续消费 token，主机侧则需要更新请求并输出文本。普通生成路径可以从设备结果缓冲区取得下一轮输入，避免每轮先把 token 传回 CPU 再重新上传；客户端返回链仍需取得可处理的输出数据。[源码：普通生成的后续设备输入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/overlap_utils.py#L87-L114)
+设备结果同时服务两端：后续计算继续消费 Token，CPU 更新请求并准备返回。普通生成可从设备结果缓冲取下轮输入，省去逐轮先回 CPU 再上传的往返；输出链仍需取得主机可处理的数据。[源码：普通生成的后续设备输入](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/overlap_utils.py#L87-L114)
 
-主机提交、设备完成、CPU 消费结果是三个时间点。普通结果处理中的 Tensor 转列表要取得实际值；重叠路径可以先安排异步复制，再用 `copy_done` 事件等待数据可用。非阻塞提交只表示允许工作继续排队，并不表示 CPU 已经能读取结果。[源码：结果复制](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/utils.py#L150-L217)、[结果处理](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/scheduler_components/batch_result_processor.py)
+提交、设备完成、CPU 读取是不同时间。普通结果转列表需要实际值，overlap 可先安排异步复制，再等待 `copy_done`。非阻塞提交允许后续工作继续排队，不表示 CPU 已可立即读取结果。[源码：结果复制](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/utils.py#L150-L217) [结果处理](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/scheduler_components/batch_result_processor.py)
 
 ```mermaid
 sequenceDiagram
@@ -376,12 +376,12 @@ sequenceDiagram
     H-->>C: 结束事件
 ```
 
-图中的服务侧合并了 HTTP、Serving 和 TokenizerManager，执行侧合并了 Worker、ModelRunner 与设备工作。Scheduler 更新请求后，常规文本路径通过 Detokenizer 把 ID 解码为文本，再沿请求管理链路返回。计算轮次与 SSE 消息并不一一对应：一个 Token 未必是一个汉字，文本增量还受到解码缓冲、输出间隔和停止字符串的影响。 [源码：Detokenizer](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py#L443-L490) [Chat 流式返回](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py)
+图中合并显示服务侧的 HTTP、Serving、TokenizerManager，以及执行侧的 Worker、ModelRunner、设备工作。Scheduler 更新状态后，文本路径经 Detokenizer 返回。计算轮次和 SSE 消息并非一一对应，Token 与汉字也不一一对应；解码缓冲、输出间隔、停止字符串都会影响文本增量。[源码：Detokenizer](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/managers/detokenizer_manager.py#L443-L490) [Chat 流式返回](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/entrypoints/openai/serving_chat.py)
 
 <details markdown="1">
 <summary>启用 DSPARK 后，生成循环怎样变化</summary>
 
-启用 DSPARK 后，上图的外部请求生命周期仍然成立，但“下一轮生成工作”需要展开为草稿和验证。公开实现的 worker 在 Prefill 路径调用目标模型，并取得供后续草稿使用的 hidden states；后续生成路径由 proposer 提出候选块，再交给目标模型验证，按验证结果确定本轮接受的输出和新的状态。[源码：DSPARK Prefill](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L528-L640)、[候选、验证与提交](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L689-L939)
+启用 DSPARK 后，外部请求仍沿同一生命周期流转，后续生成内部则加入候选与验证。公开 Worker 的 Prefill 调用目标模型，并取得草稿所需 hidden states；后面由 proposer 生成候选块，目标模型验证，结果决定接受输出及新状态。[源码：DSPARK Prefill](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L528-L640) [候选、验证与提交](https://github.com/sgl-project/sglang/blob/dd83b54611897a5f80f4df59e69756bd2fb4b8ab/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L689-L939)
 
 ```mermaid
 flowchart TD
@@ -395,12 +395,12 @@ flowchart TD
     E -->|是| F[结束请求]
 ```
 
-候选 token 并不在提出时就成为用户输出。源码中的 `accept_lens`、`new_seq_lens` 等结果决定这一轮推进多少；验证阶段可能为每条请求输入多个位置，后端也为 `TARGET_VERIFY` 构造对应的查询边界。DSPARK 因此按每请求的验证窗口组织查询，普通 Decode 的 `[0, 1]` 只对应单 Token 输入。
+候选提出时尚未提交给用户。`accept_lens`、`new_seq_lens` 等决定本轮推进多少，`TARGET_VERIFY` 也需按每请求验证窗口组织多个 Query。普通 Decode 的 `[0, 1]` 只适用于这里的单 Token 输入。
 
-这也解释了为何投机推理适配会牵涉 Scheduler、batch、模型与缓存：需要协同的不只是草稿模型的 forward，还包括候选输入的组织、目标验证、接受数量以及后续可见状态。本文的普通生成例子提供基础时间线，DSPARK 在这条时间线上增加了候选与提交边界；具体草稿块长度和并行协作由相应配置与实现决定。
+这项适配需要 Scheduler、batch、模型、缓存共同处理候选组织、验证、接受数量和状态可见性。普通生成提供了基础时间线，DSPARK 在其中加入候选与提交边界；具体长度、并行方式仍需看配置和实现。
 
 </details>
 
-EOS、长度上限或其他停止条件触发后，请求退出持续运行集合，独占资源进入回收流程。可复用前缀是否留下，由缓存策略决定；请求已经结束，并不能直接推出设备分配器已收回它使用过的全部内存。
+EOS、长度上限或其他停止条件满足后，请求退出运行集合，独占资源进入回收。可复用前缀是否保留由缓存策略决定，因此请求结束并不等于分配器立刻收回所有相关内存。
 
-接着读 [Scheduler](sglang-scheduler-source-analysis.md) 时，可以把问题收窄到这条请求：它怎样从等待变成可执行工作，一次 Prefill 之后怎样继续 Decode，又在哪一轮退出运行集合。请求接入和文本返回先放在两端，集中观察中间的状态变化。
+下一篇可继续跟踪请求从等待到接纳、从 Prefill 到 Decode、最后退出的调度状态，见 [Scheduler](sglang-scheduler-source-analysis.md)。
