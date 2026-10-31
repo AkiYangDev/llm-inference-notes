@@ -1,89 +1,52 @@
 # 多卡投机解码：Draft、Verify 与 Accept 怎样保持一致
 
-多张卡共同执行投机解码时，权重和 hidden states 可以各自分片，但参与同一请求的 Rank 必须对下一轮输入达成一致。例如，一边认为接受了两个 Draft，另一边认为接受了三个，下一轮的序列长度、缓存位置和通信形状就可能分叉。
+多卡投机中，模型权重和 hidden 可以分片，同请求的协作 Rank 却需对后续输入作一致决定。一边接受两枚、另一边接受三枚，下一轮长度、缓存位置和通信形状就可能分叉。
 
-这类问题往往最后才表现为 KV 错位或通信等待，真正的分歧却可能出现在更早的候选选择或接受决策中。下面先用两个 Rank 的例子说明哪些数据可以不同、哪些决定必须对应，再沿 DSpark 与 EAGLE 的具体分支，看同步发生在哪个组内。文中讨论的是源码中的约束与排查方法，没有据此认定某次现场故障的根因。
+最终的 KV 错位或等待，可能源于更早的候选、接受分歧。下面先区分允许不同的计算数据与必须对齐的执行状态，再沿 DSpark、EAGLE 看同步组及分支。这里给出源码约束和排查方式，没有认定某次现场故障。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
 
-> **源码与适用范围**：本文基于 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线讨论 PP1 下 DeepSeek-V4 + SGLang speculative decoding，重点覆盖 DSpark V2、EAGLE/NextN、DP Attention 与 Ascend NPU。PP speculative relay 有额外跨 stage 状态传递，不在本文展开。文中的 TP16/DP8 用于演示 Group 划分；实际部署配置见对应模型的支持条件。
+> 源码固定到 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线为 PP1 的 V4、DSpark V2、EAGLE/NextN、DPA、Ascend NPU。PP relay 另有跨 stage 状态，不在此展开。TP16/DP8 仅示范组划分，模型可运行条件仍需分别核对。
 
 </details>
 
 ## 一、先区分计算分片与执行决策
 
-普通 Tensor Parallel 中，不同 Rank 的 Tensor 本来就可以不同。
+TP 各 Rank 的本地 Tensor 可以不同。例如列并行由 Rank0 计算 `X @ W0`、Rank1 计算 `X @ W1`，权重分片不同，本地输出自然不同。MoE 也可让 EP0–EP3 分别持有 Expert0–Expert3，对应 activation 出现在不同专家持有者上，符合分工。
 
-例如一个 Column Parallel Linear：
-
-~~~text
-Rank 0:
-X @ W0
-
-Rank 1:
-X @ W1
-~~~
-
-两个 Rank 持有不同的权重分片，算出的局部输出自然可以不同。MoE 中也是如此：Router 决定 Token 交给哪些 Expert，专家可能分别存放在不同 Rank。用一个简化分布表示：
-
-~~~text
-EP0 → Expert 0
-EP1 → Expert 1
-EP2 → Expert 2
-EP3 → Expert 3
-~~~
-
-某一阶段的 expert-local activation 只存在于拥有对应 Expert 的 Rank，也没有任何问题。
-
-因此判断多卡投机解码是否一致时，要先区分模型数据与执行决策。下面的 Data Plane 指实际参与计算的数据，Control Plane 指决定后续执行的状态：
+因此要分别检查计算数据与决定后续执行的状态，表中称为 Data Plane、Control Plane：
 
 | 层次 | 可以不同吗 | 例子 |
 | --- | --- | --- |
 | Model Data Plane | 可以，甚至设计上就应该分片 | Q/K/V shard、expert activation、A2A buffer、TP partial output |
 | Speculative Control Plane | 同一逻辑请求的协作 Rank 必须达成一致 | Draft token、verify length、accept path、bonus、new seq_len |
 
-假设同一个请求在两个 Attention-TP Rank 上做 Verify，`correct_len` 表示接受的 Draft 数。本例未触及长度上限，接受候选后还会额外提交目标模型补出的一枚 bonus Token：
+假设同请求在两个 Attention-TP Rank 验证，未触长度上限，接受 Draft 后还需加一枚 Target bonus。Rank0 的 correct_len=3，Rank1 却为 2，就会产生以下分歧：
 
-~~~text
-Rank 0:
-correct_len = 3
+| 状态 | Rank0 | Rank1 |
+| --- | --- | --- |
+| 已接受 Draft 数 | 3 | 2 |
+| `commit_lens` | 4 | 3 |
+| 新 `seq_len` | P+4 | P+3 |
 
-Rank 1:
-correct_len = 2
-~~~
+P 为本轮之前的确认长度。差一枚将继续影响位置、缓存映射和 Draft 起点，即使局部 GEMM 仍能执行，两边也已不在处理同一历史。
 
-Rank 0 会认为：`commit_lens = 4`
+固定 ROCm Greedy 注释正说明此风险：Accept 后广播 predict、accept_index、num_correct_drafts，避免接受数不同使 committed seq_lens 分叉，破坏下轮 collective。[`eagle_sample()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L800-L1029)
 
-Rank 1 却认为：`commit_lens = 3`
 
-下一轮：
 
-~~~text
-Rank 0:
-seq_len = P + 4
 
-Rank 1:
-seq_len = P + 3
-~~~
 
-这里 P 是本轮之前的已确认长度。接受结果相差一枚，提交后长度就相差一；接下来分配的 KV 逻辑位置、下一轮 position 和 Draft 起点都可能跟着错开。即使两边仍能完成某次局部 GEMM，也不再是在推进同一条逻辑序列。
-
-EAGLE 源码里有一段非常直接的注释说明这种风险。ROCm Greedy 路径会在 Accept 后 broadcast `predict / accept_index / num_correct_drafts`，因为不同 Rank 如果接受不同数量的 Draft，就会让 committed `seq_lens` 不同，并可能使下一轮 TP collective 失去一致调用契约。
-
-固定源码：
-
-[`eagle_sample()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L800-L1029)
-
-共同执行同一逻辑请求的 Rank，需要对改变后续执行的离散决定达成一致：接受多少候选、序列前进多少、下一轮使用哪枚 bonus。Tensor 则可以继续按 TP 或 EP 分片存放。
+所以协作 Rank 需对接受数、推进长度、新 bonus 保持一致，Tensor 则继续按模型分片。
 
 ## 二、哪些 Rank 共同处理同一条请求
 
-接受决定要在哪些 Rank 之间一致，取决于谁在共同处理这条请求。开启 DP Attention 后，不同 DP 副本可以服务不同请求，不能把整个全局 TP World 都当成同一个请求的协作组。
+同步范围先由谁共同服务请求决定。DPA 的不同副本可处理不同请求，不应将整个 TP world 无条件当作一组控制状态。
 
-开启 DP Attention 后，SGLang 会把原始 TP block 重新解释成 Attention-DP × Attention-CP × Attention-TP。
+Attention 将 TP block 展开为 DP × CP × TP。
 
-固定源码：
+对应派生为：[`derive_attention_widths()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/runtime_context.py#L249-L281)
 
 ~~~python
 attn_dp_size = (
@@ -99,33 +62,13 @@ attn_tp_size = (
 )
 ~~~
 
-固定入口：
 
-[`derive_attention_widths()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/runtime_context.py#L249-L281)
 
-假设一个纯教学拓扑：
 
-~~~text
-TP = 16
-DP = 8
-CP = 1
-DP Attention = ON
-PP = 1
-~~~
 
-那么：
+取一个教学拓扑：TP=16、DP=8、CP=1、DP Attention 开启、PP=1。于是 attn_dp_size=8，`attn_tp_size=16/8/1=2`。
 
-~~~text
-attn_dp_size = 8
-
-attn_tp_size
-=
-16 / 8 / 1
-=
-2
-~~~
-
-Rank layout 又是：
+坐标展开为：
 
 ~~~text
 tp_rank
@@ -136,37 +79,22 @@ tp_rank
 attn_tp_rank
 ~~~
 
-其中 `attn_tp_rank` 是最快变化维。
+Attention TP 变化最快。
 
-所以在一个从 rank 0 开始的 16-rank TP block 内，源码实际构造的 Attention-TP groups 是：
+从 0 开始的 16-rank TP block 因此分成八个 Attention-DP 副本：
 
-~~~text
-attn-DP replica 0:
-[0, 1]
+| 副本 | Attention-TP Rank 组 |
+| ---: | --- |
+| 0 | [0, 1] |
+| 1 | [2, 3] |
+| 2 | [4, 5] |
+| 3 | [6, 7] |
+| 4 | [8, 9] |
+| 5 | [10, 11] |
+| 6 | [12, 13] |
+| 7 | [14, 15] |
 
-attn-DP replica 1:
-[2, 3]
-
-attn-DP replica 2:
-[4, 5]
-
-attn-DP replica 3:
-[6, 7]
-
-attn-DP replica 4:
-[8, 9]
-
-attn-DP replica 5:
-[10, 11]
-
-attn-DP replica 6:
-[12, 13]
-
-attn-DP replica 7:
-[14, 15]
-~~~
-
-这个连续分组方式对应固定源码中的构造逻辑：`initialize_model_parallel()` 在 `attn_tp_size < tp_size` 时，按以下区间创建组：
+`initialize_model_parallel()` 按以下连续区间建组：
 
 ~~~python
 st = (
@@ -179,21 +107,15 @@ en = st + attn_tp_size
 ranks = list(range(st, en))
 ~~~
 
-固定源码：
 
-[Attention-TP group construction](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/distributed/parallel_state.py#L2742-L2774)
 
-因此 Rank0、Rank1 属于同一个 Attention-DP 副本内由两个 Rank 组成的 TP 组；共同执行同一条请求时，它们必须对该请求的候选与接受结果一致。Rank2、Rank3 属于另一个副本，可能正在服务另一批请求，无需满足：
+构造入口见 [Attention-TP group construction](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/distributed/parallel_state.py#L2742-L2774)。
 
-~~~text
-Rank0 bonus token
-==
-Rank2 bonus token
-~~~
+Rank0/1 共同服务本组请求，要对齐候选与接受；Rank2/3 属于另一组，可能服务不同请求，因此 Rank0 与 Rank2 的 bonus Token 不必相同。
 
 ### 为什么 DSpark / EAGLE 都会选择 `attn_tp_group`
 
-DSpark 初始化：
+DSpark 选择同步组的代码为：[`DSparkWorkerV2.__init__()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L120-L230)
 
 ~~~python
 self._tp_sync = SpecTpSync(
@@ -203,11 +125,11 @@ self._tp_sync = SpecTpSync(
 )
 ~~~
 
-固定源码：
 
-[`DSparkWorkerV2.__init__()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L120-L230)
 
-EAGLE Sampling Accept 也使用：
+
+
+EAGLE Sampling 同样选择：
 
 ~~~python
 tp_group = (
@@ -217,20 +139,20 @@ tp_group = (
 )
 ~~~
 
-这两处选择都在缩小同步范围：同步组覆盖共同执行同一份投机请求状态的 Rank，DP Attention 下使用相应的 `attn_tp_group`。上面的 TP16/DP8 只是组划分示例，不表示它已经满足 DeepSeek-V4 MoE Draft 的启动条件；固定版本的 DSpark Worker 仍要求该场景 `attn_tp_size=1`。
+DPA 下使用 Attention TP 覆盖相同请求的协作者。TP16/DP8 只是拓扑示意，固定 V4 MoE Draft 的 Worker 仍要求 attn_tp_size=1，不能将示意当作启动验证。
 
 ## 三、DSpark 怎样同步决策和布局参数
 
-DSpark 把候选选择、Verify 计划和接受结果等同步位置列成明确的 Site。Site 是一处同步调用的标识，环境变量可以按标识决定是否启用。这里的 convergence 就是让同组 Rank 在这些位置采用同一个决定。
+DSpark 用 Site 标识同步调用，环境配置可按 Site 开关，目的是让组内在相应边界采用同一决定。
 
-固定源码定义：
+类定义为：
 
 ~~~python
 class SpecTpSync:
     """Broadcasts a speculative decision from rank 0 to its TP group."""
 ~~~
 
-`sync()` 只有一件事：
+sync 执行：
 
 ~~~python
 def sync(self, site, values):
@@ -242,21 +164,21 @@ def sync(self, site, values):
     return values
 ~~~
 
-固定源码：
 
-[`SpecTpSync`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_tp_sync.py)
 
-默认：`SGLANG_SPEC_TP_SYNC=all`
+实现见 [`SpecTpSync`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/spec_tp_sync.py)。
 
-`src=0` 是组内编号。比如组为 `[2, 3]` 时，广播来源是全局 Rank2，不是全局 Rank0。同步实现只在 Site 开启且组内不止一个 Rank 时广播，单 Rank 组直接沿用本地值。
+默认 `SGLANG_SPEC_TP_SYNC=all`。
 
-固定入口：
+src=0 是组内编号，例如 `[2,3]` 从全局 Rank2 广播。只有 Site 开启且组宽大于一才实际广播，单 Rank 沿用本地结果。
 
-[`SGLANG_SPEC_TP_SYNC`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/environ.py#L1362-L1375)
+
+
+配置入口见 [`SGLANG_SPEC_TP_SYNC`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/environ.py#L1362-L1375)。
 
 ### Draft Token 是显式同步点
 
-Greedy：
+Greedy 候选经过：
 
 ~~~python
 tp_sync.sync(
@@ -265,7 +187,7 @@ tp_sync.sync(
 )
 ~~~
 
-Sampling：
+Sampling 候选经过：
 
 ~~~python
 tp_sync.sync(
@@ -274,24 +196,17 @@ tp_sync.sync(
 )
 ~~~
 
-Multinomial 也有：`DSPARK_DRAFT_MULTINOMIAL`
+Multinomial 还有 `DSPARK_DRAFT_MULTINOMIAL`。
 
-固定源码：
 
-[`sample_draft_block()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L130-L200)
 
-如果第一枚 candidate 就不同：
+提议实现见 [`sample_draft_block()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L130-L200)。
 
-~~~text
-Rank0 → A
-Rank1 → B
-~~~
-
-这时后续 Draft 链已经从不同 Token 出发，Verify 看到的候选也不同。仅在最后统一接受长度，无法把前面的候选恢复成同一批；候选选择本身就需要一个明确的同步边界。
+若同请求的首候选在 Rank0 为 A、Rank1 为 B，后续链便已从不同输入起步。最终只统一接受长度，无法修正前面的 Verify，候选选择本身就需对齐。
 
 ### `verify_lens` 也是 control decision，但它直接决定后续 Layout
 
-Planner 会计算每个请求本轮要验证多少 Token：
+Planner 同样同步逐请求验证长度：
 
 ~~~python
 verify_lens = ScheduleVerifyLensTopk.execute(...)
@@ -302,37 +217,17 @@ self._tp_sync.sync(
 )
 ~~~
 
-固定源码：
 
-[`DSparkVerifyPlanner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_planner.py#L575-L603)
 
-`verify_lens` 是每条请求本轮要验证的长度，它直接影响后续分配多少行、使用哪些位置。`SpecTpSync.sync()` 只广播显式传入的这个 Tensor，随后仍由各 Rank 根据本地输入构造 positions、缓存位置和模型缓冲区。同步了决定布局的参数，并不等于把所有布局数据也复制了一遍。
+入口见 [`DSparkVerifyPlanner`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_planner.py#L575-L603)。
 
-例如：
+这里只广播显式传入的 verify_lens，位置、缓存目标和 buffer 仍由各 Rank 本地构造。对齐布局参数并非复制整份布局。
 
-~~~text
-verify_lens
-      ↓
-deterministic local planning
-      ↓
-verify row layout
-positions
-KV allocation
-~~~
-
-要得到对应的逻辑布局，各 Rank 不仅要拿到相同 `verify_lens`，还要对请求顺序、前缀长度等相关输入有一致理解，并执行对应的确定性规划。广播长度只能对齐其中一个输入，不能修复已经错位的请求行。
+各 Rank 根据 `verify_lens` 确定性地规划 Verify 行、positions 和本地 KV 分配。请求顺序、Prefix 长度等输入也要对应，才能生成一致的逻辑布局；广播一个长度 Tensor 无法补救已错位的请求。
 
 ### Accept 同步的是最小决定量
 
-Target Verify 后：
-
-~~~text
-correct_len
-bonus
-cap_trim_lens
-~~~
-
-会被同步：
+Target 之后分别同步 `correct_len`、`bonus`、`cap_trim_lens`：
 
 ~~~python
 self._tp_sync.sync(site, correct_len)
@@ -340,46 +235,21 @@ self._tp_sync.sync(site, bonus)
 self._tp_sync.sync(site, cap_trim_lens)
 ~~~
 
-然后每张卡本地运行：
+各 Rank 再本地运行 `FinalizeAcceptLens` 和 `BuildOutTokens`，得到 `commit_lens`、`new_seq_lens` 与 `out_tokens`。
 
-~~~text
-FinalizeAcceptLens
-BuildOutTokens
-~~~
 
-派生：
 
-~~~text
-commit_lens
-new_seq_lens
-out_tokens
-~~~
+实现见 [`TargetVerifyExecutor.accept_and_finalize()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L138-L206)。
 
-固定源码：
-
-[`TargetVerifyExecutor.accept_and_finalize()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L138-L206)
-
-在这些决定与其余输入都对应的前提下，DSpark 可以让各 Rank 在本地派生后续状态：
-
-~~~text
-同步最小 canonical decision
-        ↓
-各 Rank 本地确定性派生
-        ↓
-得到相同逻辑 sequence state
-~~~
+同步的是最小决定量。只要请求与其他输入对应，各 Rank 就能按本地规则派生相同的逻辑序列状态，无需广播所有中间 buffer。
 
 ### `SpecTpSync` 也不是“纯 decision broadcast 类”
 
-初始化时，它还负责协调：
+初始化还通过 `available_memory_gb(...)` 协调资源。
 
-~~~python
-available_memory_gb(...)
-~~~
+DSPARK_MEM 开启时，通过指定 group 取得最小可用显存，协调 Draft Graph、folded sampling 等初始化选择。
 
-当 `DSPARK_MEM` site 开启时，它会通过传入 group 获取 group-wide 最小可用显存，用来决定 Draft CUDA Graph / folded sampling 等初始化策略。
-
-DSpark 初始化 CUDA Graph 时：
+例如：
 
 ~~~python
 available_mem = self._tp_sync.available_memory_gb(
@@ -389,37 +259,21 @@ available_mem = self._tp_sync.available_memory_gb(
 )
 ~~~
 
-固定源码：
 
-[`DSparkWorkerV2.init_cuda_graphs()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-这里的目的，是避免同组 Rank 根据各自剩余显存选择不兼容的初始化容量。`SpecTpSync` 除了同步投机决定，还承担 `DSPARK_MEM / DFLASH_MEM` 这类资源协调；它并不负责统一模型 Tensor 的内容或物理布局。
+对应入口见 [`DSparkWorkerV2.init_cuda_graphs()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)。
 
-它不会自动同步：
+这避免各 Rank 按本地余量选出不兼容容量。DSPARK_MEM / DFLASH_MEM 属于资源协调，也不等于统一模型 Tensor、物理布局。
 
-~~~text
-hidden_states
-Q/K/V shard
-MoE router activations
-EP dispatch buffers
-KV page contents
-positions
-out_cache_loc
-~~~
-
-这些属于其他 subsystem。
+它不会自动复制 hidden states、Q/K/V shard、MoE router activation、EP dispatch buffer、KV page 内容、positions 或 `out_cache_loc`。这些对象由各自子系统管理，逻辑对应与物理分片也各有要求。
 
 ## 四、EAGLE NPU Greedy 的调用与一致性条件
 
-EAGLE / NextN 没有统一使用 DSpark 的 `SpecTpSyncSite` 体系，要沿具体分支检查。Target Verify 结束后，先进入下面的接受函数：
-
-~~~python
-eagle_sample(...)
-~~~
+EAGLE/NextN 没有统一沿用 DSpark Site，需逐分支查看 `eagle_sample()`。
 
 ### Greedy 分支如何进入
 
-判断函数：
+Greedy 分流判断为：
 
 ~~~python
 return (
@@ -430,11 +284,11 @@ return (
 )
 ~~~
 
-固定源码：
 
-[`_verify_uses_greedy()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L695-L710)
 
-对 NPU，请求满足 `is_all_greedy=True` 时会进入 Greedy 分支，先在本地计算：
+实现见 [`_verify_uses_greedy()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L695-L710)。
+
+NPU 满足 is_all_greedy 时，本地执行：
 
 ~~~python
 target_predict = argmax(target_logits)
@@ -444,31 +298,22 @@ predict, accept_index, num_correct_drafts = (
 )
 ~~~
 
-随后源码只有：
+之后仅在下列平台条件广播：
 
 ~~~python
 if _is_hip:
     broadcast(...)
 ~~~
 
-固定源码：
 
-[`eagle_sample()` Greedy branch](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L810-L844)
 
-把这个条件放回本文固定 commit，可以确认：
+对应代码见 [`eagle_sample()` Greedy branch](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L810-L844)。
 
-~~~text
-CUDA Greedy
-NPU Greedy
-~~~
-
-在 `eagle_sample()` 这一层没有额外的 rank0 Accept broadcast。
-
-这里确认的范围只到 `eagle_sample()` 这一层；不能从“没有这次广播”继续推出整条 NPU 路径没有其他一致性约束。
+因此 CUDA/NPU Greedy 在此函数层没有额外的 rank0 Accept broadcast。这个观察仅限 `eagle_sample()`，不能据此推断整个 NPU 路径都无一致性保障。
 
 ### 但源码没有解释“NPU 为什么不需要”
 
-ROCm 分支有明确注释：
+ROCm 则有明确风险注释：
 
 ~~~text
 per-rank draft tokens can differ
@@ -477,13 +322,13 @@ per-rank draft tokens can differ
 → next TP collective can deadlock
 ~~~
 
-因此 HIP 要显式 broadcast。
+因此 HIP 显式广播。
 
-当前 NPU Greedy 路径在 `eagle_sample()` 内没有额外的 accept-level rank0 override。进入该路径的 Rank 因而要在候选、Target argmax 与树遍历结果上保持一致，由上游输入和执行约束共同保障。这一检查应落在实际配置的逐 Rank 结果上。
+固定 NPU Greedy 在该函数没有额外覆盖，仍需由上游候选、Target argmax 和遍历约束保证一致。是否成立应查看实际配置的逐 Rank 结果。
 
 ### Sampling path 则明确同步
 
-非 Greedy Sampling 路径在 kernel 完成后：
+非 Greedy 完成 Kernel 后广播：
 
 ~~~python
 tp_group.broadcast(predict, src=0)
@@ -491,51 +336,27 @@ tp_group.broadcast(accept_index, src=0)
 tp_group.broadcast(num_correct_drafts, src=0)
 ~~~
 
-源码注释直接解释：
-
-~~~text
-different GPUs may produce slightly
-different target_probs due to
-floating-point non-determinism
-
-→ causing different sampled tokens
-→ broadcast rank0 result
-~~~
-
-固定源码：
-
-[`eagle_sample()` Sampling branch](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L881-L1007)
-
-这里三项分别决定：
-
-~~~text
-predict
-→ 本轮真正输出的 token
+注释说明，不同设备可能因浮点非确定性得到略有差异的 target_probs，进而采到不同 Token，所以统一广播 rank0 的结果。
 
 
-accept_index
-→ Tree 中接受哪条物理 node path
 
+该分支见 [`eagle_sample()` Sampling branch](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/eagle_utils.py#L881-L1007)。
 
-num_correct_drafts
-→ sequence length 前进多少
-~~~
+三个结果分别控制不同状态：
 
-例如一棵树有两条长度同为三的分支，分别是 A→B→C 和 A→D→E。两边的 `accept_len` 即使都是三，保留的节点也不同，KV compact 时要搬的状态随之不同。因此树形候选除了长度，还要对齐接受的节点路径和实际输出 Token。这是解释语义的假设例子，不是本文观测到的故障。
+| 广播结果 | 决定什么 |
+| --- | --- |
+| `predict` | 本轮真正输出的 Token |
+| `accept_index` | 树中接受哪条节点路径 |
+| `num_correct_drafts` | 序列推进长度 |
+
+例如两条同长路径 A→B→C、A→D→E，即使 accept_len 相同，待提交节点和 KV 仍不同，所以要同步路径、ID，不能只对齐数量。这是假设例子，不是现场故障记录。
 
 ## 五、决策同步与模型通信怎样配合
 
-前面讨论的投机决策同步，要与模型自身的数据通信配合。DeepSeek-V4 在 DP Attention + MoE 场景中需要转换 Tensor 布局；即使候选和接受长度已经同步，这些数据转换仍要完成。
+决策一致后，模型通信仍要正确分配数据。DPA+MoE 的布局转换不会由接受长度广播替代。
 
-固定源码 `_run_moe_ffn_dp_sync()` 中，当：
-
-~~~text
-attn_tp_size > 1
-+
-MoE A2A backend enabled
-~~~
-
-Attention 后的 hidden rows 会：
+当 `attn_tp_size > 1` 且启用 MoE A2A backend 时，模型拆分 post-attention 行：
 
 ~~~python
 hidden_states.tensor_split(
@@ -543,172 +364,52 @@ hidden_states.tensor_split(
 )[attn_tp_rank]
 ~~~
 
-每个 Attention-TP Rank 只把自己的 token-row slice 送进 MoE。
+各 Attention-TP Rank 只提交自己的 Token slice。
 
-MoE 结束后再：`attn_tp_all_gather`
-
-恢复下一层需要的 row layout。
-
-固定源码：
-
-[`_run_moe_ffn_dp_sync()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3748-L3915)
-
-这套通信解决：
-
-~~~text
-Token row ownership
-Tensor shard ownership
-Expert dispatch
-Partial-output combine
-Attention ↔ MoE layout conversion
-~~~
-
-而 `SpecTpSync` 解决：
-
-~~~text
-下一枚 Draft Token 是谁
-这一轮 Verify 多长
-接受多少 Token
-新的 Bonus 是什么
-~~~
-
-~~~text
-SpecTpSync 正确
-≠
-MoE layout 一定正确
+MoE 后通过 `attn_tp_all_gather` 恢复下一层行布局。
 
 
-MoE A2A 正确
-≠
-Accept state 一定一致
-~~~
 
-也就是说，要同时检查两个边界：模型通信是否把正确 Token 行交给正确计算，接受逻辑是否让协作 Rank 对后续序列作出对应决定。一边正确，不能代替另一边的检查。
+
+
+实现见 [`_run_moe_ffn_dp_sync()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L3748-L3915)。
+
+这些通信处理 Token 行归属、Tensor 分片、专家分发、部分输出合并，以及 Attention 与 MoE 的布局转换。SpecTpSync 则对齐下一枚 Draft、验证长度、接受结果和新 bonus。两边均需成立：行分配正确不保证接受一致，接受一致也不能证明专家布局正确。
 
 ### `verify_lens` 怎样影响实际布局
 
-`SpecTpSync` 可以让两个 Rank 都得到：`verify_lens = 4`
+例如两个协作 Rank 都拿到 `verify_lens=4`。这只能说明窗口长度对齐，还需核同一请求、同一轮次、同一 Prefix 边界，才能确认四行分别对应相同的逻辑位置。
 
-但它不会自动确保：
+对应逻辑位置的本地物理地址可以不同。Rank0 用 slot120、Rank1 用 slot500，都可能正确；反过来，两边同为 slot120，也不能证明属于同请求。positions 的逻辑含义应对应，`out_cache_loc` 的本地地址不要求相等。
 
-~~~text
-Rank0 position[4]
-Rank1 position[4]
-
-Rank0 cache_loc[4]
-Rank1 cache_loc[4]
-~~~
-
-物理上相同。
-
-不同分片与分配器可以使用各自的物理槽位。需要核对的是：这些槽位是否分别保存同一逻辑请求、同一轮次、同一序列位置所需的局部状态。比如 Rank0 的槽位 120 与 Rank1 的槽位 500 可以是各自正确的位置；反过来，两个 Rank 都使用编号 120，也不能证明它们对应同一请求。这是逻辑布局一致性（Logical Layout Consistency）与物理地址相等（Physical Address Equality）的区别。
-
-所以排查多卡 speculative bug 时，应该同时记录：
-
-~~~text
-control state
-+
-logical ownership
-+
-physical shard/layout
-~~~
-
-而不是只比较 Tensor value。
+日志因而需要同时记录控制状态、逻辑归属和物理分片/布局。只比较 Tensor 数值或物理地址，都不足以定位问题。
 
 ## 六、一次分歧怎样影响后续执行
 
-假设两个 Attention-TP Rank 在 Accept 时出现第一次 divergence：
+假设首处分歧发生在 Accept：Rank0 得到 correct_len=3、bonus=X，Rank1 得到 correct_len=2、bonus=Y。沿后续执行，可看到分歧怎样逐步扩大：
 
-~~~text
-Rank0:
-correct_len = 3
-bonus = X
+<a id="commit-length"></a>
+<a id="sequence-length"></a>
+<a id="position"></a>
+<a id="kv-ownership"></a>
+<a id="draft"></a>
+<a id="collective"></a>
 
+| 后续状态 | Rank0 | Rank1 | 影响 |
+| --- | --- | --- | --- |
+| Commit Length | 4 | 3 | 接受结果先产生长度差 |
+| Sequence Length | P+4 | P+3 | 正式历史边界不同 |
+| 下轮 Position | 从 P+4 开始 | 从 P+3 开始 | 位置与历史访问分叉 |
+| KV ownership | 按自身边界分配或复用 | 按另一边界分配或复用 | 本地地址可合法，逻辑历史却不同 |
+| Draft 输入 | X | Y | 后续候选从不同 bonus 起步 |
 
-Rank1:
-correct_len = 2
-bonus = Y
-~~~
+再次进入 Attention TP、MoE EP、DeepEP dispatch/combine 或 AllGather/ReduceScatter 时，各 Rank 对 Token 数、行身份、collective 顺序的理解可能已不同，最终表现为 shape mismatch、错误结果、超时或 collective hang。
 
-### Commit Length 不同
+超时 collective 可能只是先等不到对端的位置，应沿请求、轮次往前找首个分歧。但超时本身不能证明 Accept 出错，还需排除其他原因。
 
-~~~text
-Rank0 commit_lens = 4
-Rank1 commit_lens = 3
-~~~
+Verify 前也可能先分歧：若 Rank0 的 verify_len=4、Rank1 为 5，本轮执行形状便可能不同。等接受后再统一已太迟，DSPARK_PLAN 因此需要同步。
 
-### Sequence Length 不同
-
-~~~text
-Rank0 new_seq_len = P + 4
-Rank1 new_seq_len = P + 3
-~~~
-
-### Position 不同
-
-下一轮：
-
-~~~text
-Rank0 starts at position P+4
-
-Rank1 starts at position P+3
-~~~
-
-### KV ownership 不同
-
-由于前面的已确认长度不同，ReqToToken 与页映射接下来可能针对不同逻辑位置分配或复用槽位。各自本地地址仍可能有效，但它们保存的已经不是同一段逻辑历史。
-
-### Draft 输入不同
-
-~~~text
-Rank0 bonus = X
-Rank1 bonus = Y
-~~~
-
-下一轮 candidate 自然继续分叉。
-
-### 最后才表现为 Collective 问题
-
-当模型再次进入：
-
-~~~text
-Attention TP
-MoE EP
-DeepEP dispatch/combine
-AllGather / ReduceScatter
-~~~
-
-两个 Rank 可能已经对：
-
-~~~text
-token count
-row identity
-collective order
-~~~
-
-产生不同理解。
-
-于是最终表现才可能是：
-
-~~~text
-shape mismatch
-wrong result
-timeout
-collective hang
-~~~
-
-这条链说明，最后超时的 Collective 可能只是最先等待不到对端的地方。排查这种假设时，应按请求与轮次往前找第一处决策或逻辑布局分歧；超时本身仍不足以证明是 Accept 出错。
-
-同样的风险也会出现在 Verify 之前，这就是 `DSPARK_PLAN` 要同步计划的原因。例如：
-
-~~~text
-Rank0 verify_len = 4
-Rank1 verify_len = 5
-~~~
-
-本轮 Target Verify 的执行几何形状已经不同，再等 Accept 时修已经太晚。
-
-正确模式是：
+边界顺序应为：
 
 ~~~text
 Decision
@@ -728,11 +429,11 @@ Commit
 
 ## 七、HCCL、ZBAL 与 DeepEP 的职责
 
-来到 Ascend 910C，还要把上层调用与底层通信后端分开。相同的 Group 广播接口，可能由 HCCL 或启用后的 ZBAL 承载；MoE 的 Dispatch / Combine 又属于另一层语义。先确认当前配置选中了哪条路径，才能把同步调用对应到正确的后端。
+Ascend 上还需区分上层广播、通用 backend、MoE 分发。当前 Group 调用可能由 HCCL 或 ZBAL 承接，DeepEP 负责另一层的数据交换。
 
 ### HCCL：默认 NPU distributed backend
 
-平台默认映射：
+平台映射为：
 
 ~~~python
 "npu":
@@ -741,56 +442,28 @@ Commit
     else "zbal"
 ~~~
 
-固定源码：
 
-[`_DEVICE_TO_DISTRIBUTED_BACKEND`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/platforms/device_mixin.py#L86-L93)
 
-所以在未启用 ZBAL 的普通 Ascend 配置里：
+实现见 [`_DEVICE_TO_DISTRIBUTED_BACKEND`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/platforms/device_mixin.py#L86-L93)。
 
-~~~text
-tp_group
-attn_tp_group
-pp_group
-moe_* process groups
-~~~
-
-这类 PyTorch/SGLang device process groups 默认使用 HCCL backend。
-
-因此此时：
-
-~~~python
-attn_tp_group.broadcast(...)
-~~~
-
-可以理解为一个标准 NPU distributed group broadcast，由 HCCL backend 承载。
-
-但这只适用于：`当前 group backend = HCCL`
-
-下面按启用条件分别说明。
+普通未启用 ZBAL 的配置中，tp_group、attn_tp_group、pp_group 和 moe_* device process groups 默认使用 HCCL，`attn_tp_group.broadcast(...)` 也由这个 backend 承载。判断调用的实际承载时，仍应核当前 group backend。
 
 ### ZBAL：可以替换 NPU distributed backend，并同时参与内存 / DeepEP adaptor
 
-固定平台映射中，`SGLANG_ZBAL_LOCAL_MEM_SIZE > 0` 时，NPU distributed backend 选择 `zbal`。相应 NPU 初始化代码还会调用 `zbal_init`，建立其内存与通信环境。这里的判断依据是源码中的配置分支，不能把默认 HCCL 路径当成所有 Ascend 部署的实际路径。
+`SGLANG_ZBAL_LOCAL_MEM_SIZE > 0` 时选择 zbal，NPU 初始化还调用 zbal_init。必须看实际配置，不能将 HCCL 默认值外推到所有 Ascend 部署。
 
-固定源码：
+
 
 - [`device_mixin.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/platforms/device_mixin.py#L86-L93)
 - [`init_zbal()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/utils.py#L328-L415)
 
-启用 ZBAL 后，下面这句话就不再适用：
-
-~~~text
-SpecTpSync
-→ 一定是 HCCL broadcast
-~~~
-
-`SpecTpSync` / EAGLE 调用的是 `GroupCoordinator.broadcast()`，底层由当前 NPU distributed backend 承载。默认配置下是 HCCL，启用对应 ZBAL 配置后则走 ZBAL backend path。读调用点时要同时核对 Group 与 backend。
+启用后，上层仍调用 `GroupCoordinator.broadcast()`，实际承载取决于当前 backend。查 SpecTpSync 调用点时应同时记录 Group 和后端，不能固定写成 HCCL broadcast。
 
 ### DeepEP：不是 HCCL/ZBAL 的同层替代品
 
-DeepEP 负责 MoE Token 的 Dispatch / Combine：把 Router 选中的 Token 行送到专家所在 Rank，再收回并合并计算贡献。
+DeepEP 则将 Token activation 送到 Router 选中的专家，再 Combine 返回贡献。
 
-`DeepEPDispatcher` 的接口就是：
+接口为：
 
 ~~~text
 dispatch(hidden_states, topk_output)
@@ -798,25 +471,17 @@ dispatch(hidden_states, topk_output)
 combine(expert_outputs)
 ~~~
 
-固定源码：
 
-[`DeepEPDispatcher`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L972-L1127)
 
-它解决的是：
+实现见 [`DeepEPDispatcher`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L972-L1126)。
 
-~~~text
-Router 已经决定 Expert
-        ↓
-Token activation 怎样送到对应 EP Rank
-        ↓
-Expert 输出怎样 combine 回来
-~~~
+Router 选定专家后，由它将 Token activation 送到对应 EP Rank，再将专家贡献 Combine 回来。
 
-而接受长度广播，是让同一请求的协作 Rank 采用同一个后续决定。两者发送的数据、参与组与调用时机都可能不同，不能用 DeepEP 的数据交换来替代 Accept 同步。
+接受广播对齐的是后续决定，与专家交换的内容、组、时机都可不同，不能相互替代。
 
 ### ZBAL 与 DeepEP 的组合路径
 
-固定 `deepep.py` 顶部：
+ZBAL 还能为 DeepEP 提供适配器：
 
 ~~~python
 _use_zbal = (
@@ -831,19 +496,13 @@ else:
     from deep_ep import Buffer, Config
 ~~~
 
-固定源码：
 
-[`deepep.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L1-L60)
 
-~~~text
-ZBAL
-和
-DeepEP
-~~~
+对应入口见 [`deepep.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L1-L60)。
 
-这两个名称可以出现在同一条执行路径中：启用 ZBAL 的 NPU 环境里，DeepEP dispatcher 继续提供 Dispatch / Combine 语义，底下使用的 Buffer / Config 则由 ZBAL adaptor 提供。
+二者可在同一执行路径共存：Dispatcher 保留 Dispatch/Combine 接口，底层 Buffer、Config 由 ZBAL adaptor 提供。
 
-所以更准确的分层是：
+可按职责分为：
 
 | 层 | 角色 | 典型对象 |
 | --- | --- | --- |
@@ -852,7 +511,7 @@ DeepEP
 | MoE A2A Semantics | Router 后的 expert dispatch / combine | DeepEP |
 | Model Layout Logic | 决定 Tensor 在哪些 group 间 split/gather | TP / DP Attention / EP runtime |
 
-对应到调用关系，这几层可以这样衔接：
+调用关系如下：
 
 ~~~mermaid
 flowchart TD
@@ -867,11 +526,11 @@ flowchart TD
     Z -. can provide adaptor / Buffer .-> D
 ~~~
 
-图中虚线表示 ZBAL 可以向 DeepEP dispatcher 提供适配器与 Buffer，并不表示每次投机决策广播都要经过 DeepEP。
+虚线只表示 Buffer/adaptor 来源，不表示决策广播要经过 DeepEP。
 
 ## 八、按执行边界检查一致性
 
-多卡投机解码需要同时检查三类状态。共同处理同一请求的 Rank 要对决策达成一致，但它们持有的 Tensor 分片和物理 KV 地址可以不同。
+最终需同时核投机决定、逻辑状态、通信调用。分片与地址可以各自不同，同请求的后续决定必须对应。
 
 | 检查层 | 需要对应的内容 | 典型观察字段 |
 | --- | --- | --- |
@@ -879,9 +538,9 @@ flowchart TD
 | 逻辑状态 | 请求身份、投机轮次、位置与序列进度 | `req_pool_idx`、round、positions、前后 `seq_len` |
 | 通信调用 | 参与者、Group、调用顺序与张量形状 | global/TP/Attention/EP rank、group、shape |
 
-DSpark 在显式 `SpecTpSync` site 上同步相关决定；EAGLE 则要沿实际分支检查：Sampling/UNO 和 HIP Greedy 有显式广播，本文固定版本的 CUDA/NPU Greedy 在 `eagle_sample` 内没有额外的 accept-level broadcast。后者仍需上游输入、算子和分片约束共同保证一致性。
+DSpark 按显式 Site 同步，EAGLE 按具体分支处理。Sampling/UNO、HIP Greedy 有广播，固定 CUDA/NPU Greedy 在 eagle_sample 内没有额外 accept-level broadcast，仍需上游和执行约束保证一致。
 
-对齐日志时，使用请求与轮次作为共同索引，沿 Draft、Verify、Accept、Commit 比较各 Rank 的逻辑序列。第一次分歧比后续报错更接近问题源头。KV 错位或 collective timeout 可能是状态分叉的后果，也可能来自其他资源或通信故障，需要由这条对照链判断。
+以请求、轮次对齐 Draft→Verify→Accept→Commit，寻找第一处分歧。KV 错位或等待可能是状态分叉，也可能来自资源、通信问题，需要由逐边界对照判断。
 
 ### 源码阅读入口
 
@@ -905,4 +564,4 @@ DSpark 在显式 `SpecTpSync` site 上同步相关决定；EAGLE 则要沿实际
 | Ascend backend selection | [`device_mixin.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/platforms/device_mixin.py#L86-L93) |
 | ZBAL initialization | [`init_zbal()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/utils.py#L328-L415) |
 | DeepEP / ZBAL adaptor | [`deepep.py`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L1-L60) |
-| DeepEP dispatch/combine | [`DeepEPDispatcher`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L972-L1127) |
+| DeepEP dispatch/combine | [`DeepEPDispatcher`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L972-L1126) |
