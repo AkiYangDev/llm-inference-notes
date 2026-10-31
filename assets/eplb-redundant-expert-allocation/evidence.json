@@ -1,0 +1,54 @@
+{
+  "source_commit": "bf8fa56315f86388f1941ff2358ea0fccec65741",
+  "source_path": "python/sglang/srt/eplb/eplb_algorithms/deepseek.py",
+  "normalized_source_sha256": "7c42cd0cb0f03da5dc68d13d38833f2986625ac96813dae4853521341cc5219c",
+  "CPU_torch": "2.5.1+cpu",
+  "toy_counts": [
+    [
+      3,
+      1,
+      1,
+      1
+    ]
+  ],
+  "toy_map": [
+    [
+      1,
+      0,
+      3,
+      0,
+      0,
+      2
+    ]
+  ],
+  "toy_rank_loads": [
+    [
+      100.0,
+      100.0
+    ]
+  ],
+  "real_replica_histograms_matched": 14,
+  "layers_per_histogram": 43,
+  "layers_changed_per_round": [
+    18,
+    43,
+    34,
+    42,
+    43,
+    22,
+    43
+  ],
+  "source_archive_sha256": "afe0ca3f476a92f62fae3cbf2ca26225686e9ae8361172c367aa65993d24a111",
+  "window_comparison_sha256": "e3c5d3007bd7b83f3fbfc8eac9f17524263cef450721037617bd13250d9410a3",
+  "real_input": {
+    "date": "2026-10-30",
+    "model": "DeepSeek-V4-Flash W8A8",
+    "hardware": "Ascend 910C",
+    "logical_experts_per_layer": 256,
+    "redundant_slots_per_layer": 16,
+    "physical_slots_per_layer": 272,
+    "EP_ranks": 16,
+    "routed_layers": 43,
+    "scope": "Same-run actual500 and target-only1000 route histories; reference layout recomputed offline, not applied online."
+  }
+}

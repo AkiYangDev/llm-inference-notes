@@ -24,6 +24,7 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 - [AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？](docs/performance/aisbench-whole-native-tpot-itl.md)：从单请求时间线、事件间隔到原生稳定段选择，讲清延迟、并发和吞吐的样本与分母。
 
+- [16 个冗余专家怎么分：从专家热度到副本，再到物理布局](docs/distributed/eplb-redundant-expert-allocation.md)：沿真实分配算法，把逻辑负载、副本数和物理槽位连起来。
 - [动态 EPLB 的 decode 收益怎么测：从一次 forward 到稳态吞吐](docs/performance/dynamic-eplb-decode-benefit-measurement.md)：把布局收益、迁移成本和整服务吞吐串成可核对的实验链路。
 - [给统计窗口加一个零，为什么会改变负载均衡？](docs/performance/eplb-zero-record-rolling-window.md)：从真实 200 条记录追到七轮副本分配，解释 draft 空记录与 target 窗口的关系。
 - [DeepEP 收到了多少路由，不等于模型真正执行了多少有效路由](docs/performance/deepep-received-vs-valid-routes.md)：结合两卡实测，解释 graph padding 如何混入接收计数，以及有效 TopK 统计怎样还原专家需求。

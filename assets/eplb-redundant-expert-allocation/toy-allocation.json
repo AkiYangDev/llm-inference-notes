@@ -1,0 +1,130 @@
+{
+  "scope": "Teaching inputs executed through the unmodified pinned DeepSeek algorithm on CPU.",
+  "weights": [
+    [
+      120.0,
+      50.0,
+      20.0,
+      10.0
+    ]
+  ],
+  "extra_slots": 2,
+  "ranks": 2,
+  "slots_per_rank": 3,
+  "replication_steps": [
+    {
+      "step": 1,
+      "logical_expert": 0,
+      "load_before": 120.0,
+      "replicas_before": 1,
+      "replicas_after": 2,
+      "load_after": 60.0
+    },
+    {
+      "step": 2,
+      "logical_expert": 0,
+      "load_before": 60.0,
+      "replicas_before": 2,
+      "replicas_after": 3,
+      "load_after": 40.0
+    }
+  ],
+  "intermediate_logical_ids": [
+    [
+      0,
+      1,
+      2,
+      3,
+      0,
+      0
+    ]
+  ],
+  "intermediate_replica_ordinals": [
+    [
+      0,
+      0,
+      0,
+      0,
+      1,
+      2
+    ]
+  ],
+  "counts": [
+    [
+      3,
+      1,
+      1,
+      1
+    ]
+  ],
+  "intermediate_slot_loads": [
+    [
+      40.0,
+      50.0,
+      20.0,
+      10.0,
+      40.0,
+      40.0
+    ]
+  ],
+  "pack_index": [
+    [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+    ]
+  ],
+  "local_index": [
+    [
+      0,
+      0,
+      2,
+      2,
+      1,
+      1
+    ]
+  ],
+  "physical_to_logical": [
+    [
+      1,
+      0,
+      3,
+      0,
+      0,
+      2
+    ]
+  ],
+  "logical_to_physical": [
+    [
+      [
+        3,
+        4,
+        1
+      ],
+      [
+        0,
+        -1,
+        -1
+      ],
+      [
+        5,
+        -1,
+        -1
+      ],
+      [
+        2,
+        -1,
+        -1
+      ]
+    ]
+  ],
+  "estimated_rank_loads": [
+    [
+      100.0,
+      100.0
+    ]
+  ]
+}

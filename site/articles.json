@@ -751,5 +751,17 @@
     ],
     "topic": "performance",
     "role": "deep"
+  },
+  "docs/distributed/eplb-redundant-expert-allocation.md": {
+    "summary": "从每层 16 个额外位置出发，用 4 个专家的完整算例解释负载、副本数量、固定槽位 packing 与逻辑/物理映射，再核对真实专家分配。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "MoE",
+      "专家副本",
+      "Ascend 910C"
+    ],
+    "topic": "distributed",
+    "role": "deep"
   }
 }

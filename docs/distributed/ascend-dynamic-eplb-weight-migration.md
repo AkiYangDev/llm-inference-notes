@@ -37,6 +37,8 @@ Router 仍然根据模型计算选择 B 或 C。变化发生在后面的分发�
 
 统计本身也可能很贵。适配中的 `BatchedTopKStatisticsMixin` 先把各层 route 写进预分配 buffer，再集中统计；容量不足或同层重复调用超过边界时，回到原始精确计数，不能为了减少算子而丢掉超出的 route。Graph warmup/capture 还会绕过普通运行时 reset，因此每次完整捕获 forward 开始，都要重新设置 Python 写入偏移，同时保持设备 buffer 的地址稳定。[实现](https://github.com/AkiYangDev/sglang/blob/70d8a7a43b52826377618efa618730d4634fb9ac/python/sglang/srt/eplb/npu_statistics.py#L24-L78)展示了这种区分。
 
+副本数量与物理放置的完整算法，可结合[16 个冗余专家分配实例](eplb-redundant-expert-allocation.md)逐步核对。
+
 这些工作不直接搬运权重，却决定“该不该搬”和“搬成什么样”。日志里的 balancedness 也来自分发计数的估计，不能把它当作实测 NPU 计算利用率，更不能仅凭分布更均匀就宣称吞吐提高。
 
 ## 三、先搬完整的专家数据，再覆盖模型槽位
