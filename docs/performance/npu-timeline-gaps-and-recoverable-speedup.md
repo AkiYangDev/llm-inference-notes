@@ -1,16 +1,16 @@
 # NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？
 
-一次 DeepSeek-V4-Flash、Ascend 910C Decode trace 的 rank0 窗口约为 2.085 秒。其中有 391.37ms 没有被已记录的 device 任务区间覆盖，占 18.77%；rank1 的未覆盖比例为 20.68%。这看起来是值得调查的空隙，但还需要查明其中实际发生了什么。
+rank0 约 2.085 秒的 Decode trace，有 391.37ms 未被记录的 device 任务覆盖，占 18.77%；rank1 为 20.68%。这给了一个可查的方向，还没给出可删时间。
 
-继续追踪后，部分空隙与 host collective 重叠，部分靠近动态元数据准备。其中两次小张量拷贝的相关 host 时间，全窗口累计只有约 3ms。它们提供了具体线索，却无法解释或回收全部 19%。
+继续关联 Host、源码后，一些空隙重叠 collective，另一些靠近 metadata 准备。能具体追到的两次小 Tensor 拷贝，相关 Host 成本全窗口仅约 3ms，已经远小于最初的 19%。
 
-下面复用 2026 年 10 月 20 日冻结环境中的 rank0/1 分析与源码，分别说明区间计算、等待归属和收益判断，没有新采 trace 或运行模型。全部数字及证据范围见[摘录](../../assets/npu-timeline-gaps-and-recoverable-speedup/evidence.json)。
+这里复用2026年10月20日DeepSeek-V4-Flash、Ascend 910C冻结材料，只分析rank0/1，没有新采trace、运行模型。数值、范围见[摘录](../../assets/npu-timeline-gaps-and-recoverable-speedup/evidence.json)。
 
 ## 1. 先把“19%”的分母和覆盖范围写出来
 
-输入是两个 rank 的 `kernel_details.csv` 和对应 host trace。将每个 device 任务的开始时间与 Duration 转成区间，再合并同 rank 所有已记录 stream。窗口减去这个并集，才得到本文所说的空隙。
+输入为两个 Rank 的`kernel_details.csv`和 Host trace。把 device 开始、Duration 转成区间，同 Rank 全部已记录 stream 取并集，再从窗口扣除。
 
-记观察窗口为 W、记录任务区间为 I：
+观察窗口 W、任务区间 I，定义为：
 
 ```text
 recorded_busy = union(I_1, I_2, ...)
@@ -18,7 +18,7 @@ recorded_gap  = W - recorded_busy
 gap_ratio     = length(recorded_gap) / length(W)
 ```
 
-按毫秒计算，结果如下：
+毫秒口径结果：
 
 | 统计量 | rank0 | rank1 |
 | --- | ---: | ---: |
@@ -30,50 +30,50 @@ gap_ratio     = length(recorded_gap) / length(W)
 | kernel Duration 算术和 | 2319.7540 | 2286.0664 |
 | Duration + Wait 算术和 | 2734.9002 | 2738.0109 |
 
-这个数描述该 rank 所有已记录任务未覆盖的时间。记录不仅有 AI Core，也有 Vector、AI CPU 和通信路径任务；只取 AI Core 会漏掉活动。记录覆盖的区间也未必都在高效计算，轮询和等待任务同样可能占据资源。
+记录除 AI Core，还含 Vector、AI CPU、通信任务。只筛 AI Core 会漏掉活动；已覆盖也可能在轮询、等待，不表示一直高效计算。
 
-因此 18.77% 无法直接作为硬件利用率或全机空闲率。若导出遗漏 Event/Notify 等任务，空白中仍可能有未表达的活动，需要在已知采集范围内解释。
+18.77% 因此只描述本 Rank 的记录覆盖。Event/Notify 等若没导出，白区还可能有没被表达的活动。
 
 ## 2. 同一段时间，为什么会有四种“耗时”
 
-rank0 的 Duration 算术和约 2319.75ms，大于窗口 2085.29ms，是因为 stream 重叠时，同一毫秒会重复计入。区间并集只计算一次，得到约 1693.92ms。
+rank0 Duration 相加 2319.75ms，大于 2085.29ms 墙时，重叠 stream 重复计算同一毫秒；并集 1693.92ms 只数一次。
 
-下图是教学示意，时间和形状均为构造值，并非实测 trace 截图：
+用构造的教学图说明，非实测截图：
 
 ![跨 stream 并集与跨 rank 空隙交集的教学示意](../../assets/npu-timeline-gaps-and-recoverable-speedup/interval-scope-example.svg)
 
-上半图中，stream A 任务共 7ms、B 共 4ms，算术和为 11ms；区间合并后覆盖 9ms，整个窗口长 10ms。累加任务时间、记录覆盖时间与墙时分别使用不同口径。
+图上 A 共 7ms、B 共 4ms，加和 11ms，合并只覆盖 9ms，窗口 10ms。任务和、覆盖、墙时各有分母。
 
-`Duration + Wait` 还包含每任务等待。Wait 不能直接接成 Duration 后的一段独占执行：任务等待时其他 stream 可以运行，多个任务也可能等待同一依赖。把等待都相加，会再次计算已经经过的时间。
+Wait 也不能简单接在 Duration 后当独占执行。任务等依赖时，别流可能在跑，多任务也可能等同一件事，累加会重复计时。
 
-所以分析同时保存 wall、busy union、Duration sum 和 Duration+Wait sum。最后一项适合定位记录了大量等待的任务，无法给出整机空闲时长。若只有 `op_summary` 累计数，没有逐次时间戳，也无法重建区间并集。
+因此保留 wall、busy union、Duration sum、Duration+Wait sum。最后一项帮助找等待任务，单有 op_summary 累计值则连区间并集也重建不了。
 
-计算时先用 Decimal 从大绝对微秒时间戳减去共同原点，再处理局部区间，避免低精度相减。原分析因此纠正了早期约 0.42ms 累计差别。这只是解析精度修正，没有产生新的性能收益。
+解析先用 Decimal 减共同原点，再算局部区间，避免大绝对微秒时间戳低精度相减。早期约 0.42ms 差异由此修正，属于解析修复。
 
 ## 3. 空隙后面的算子，未必制造了这段空隙
 
-rank0 最大空隙约 9.405ms，相邻任务为：
+rank0 最大 gap 约 9.405ms，相邻任务为：
 
 | 位置 | 原始任务名 | stream | Task ID | 执行时长（μs） | 记录 Wait（μs） |
 | --- | --- | ---: | ---: | ---: | ---: |
 | 空隙前 | `assign_req_to_token_pool` | 27 | 3426 | 2.72 | 230.15 |
 | 空隙后 | `aclnnIndex_IndexCheck_IndexCheck` | 30 | 12336 | 2.96 | 9404.53 |
 
-IndexCheck 实际只执行 2.96μs，约 9.4ms 在 Wait 字段中。若按 Duration+Wait 排序后直接重写 IndexCheck，就会将等待的承接位置误作等待来源。
+IndexCheck 自身仅 2.96μs，约 9.4ms 在 Wait 字段里。它承接了等待，不足以说明它制造了等待。
 
-对应 host 区间内，`gloo:all_gather` 与该空隙重叠约 85.4%。Task ID、stream、时间和 `connection_id` 还能关联到前后 `Node@launch`，比按名称猜测更有依据。它支持优先检查跨 rank host collective，却未确定哪个 peer 迟到，也未测得网络带宽。
+Host 的`gloo:all_gather`与该段重叠 85.4%。Task ID、stream、时间、`connection_id`还能关联前后`Node@launch`，因此优先追跨 Rank Host collective。哪个 peer 晚到、网络带宽多少，尚未测出。
 
-Fill→Clamp 是另一类较短例子：rank0 Fill 执行 1.44μs、Clamp 执行 3.00μs，两者间约 540.86μs，位于 stream43，Task ID 为 21924、21925。host 有 `aten::to`、`_to_copy`、`copy_`，值得追查输入准备，但这半毫秒并非 Clamp 执行时间。
+另一类 Fill→Clamp，Fill 1.44μs、Clamp 3.00μs，中间 540.86μs，stream43、Task ID 21924/21925。Host 出现`aten::to`、`_to_copy`、`copy_`，指向输入准备，半毫秒并非 Clamp 执行。
 
-前后任务区间是直接记录，提交事件关联提供更明确锚点，真正归因还需执行依赖。宽 Scheduler 标记覆盖空隙时，也可能只是外层包装；本次计算排除了这种宽标记，避免仅凭同时出现认定根因。
+任务区间是直接记录，提交关联提供锚点，因果还要靠依赖。宽 Scheduler 标记仅包住某段，本次已排除它，避免把外层范围误当来源。
 
 ## 4. 从动态端点追到两次拷贝，收益预算反而缩小了
 
-按空隙前后任务的 Model ID 分类，dynamic→dynamic 占未覆盖时间的 88.28%、89.41%，因此动态输入准备值得优先检查。但 dynamic 标签并不等于所有任务都在 Graph 外，无具体 Model ID 的导出任务也可能穿插于 replay。
+dynamic→dynamic 端点占未覆盖时间 88.28%、89.41%，因此先查动态准备。dynamic 标签却未必等于 Graph 外，缺 Model ID 的任务也可能穿插 replay。
 
-两端均为 Model47 的空隙，最大仅 4.22μs、5.34μs，未出现 100μs 以上实例。这仅描述该端点类别，不能排除整个 Graph47 replay 内的更大空隙；后者需要实际 replay 起止及完整嵌套记录。
+两端同为 Model47 的 gap 最大 4.22μs、5.34μs，没见 100μs 以上。这只限定端点类别，整个 Graph47 内部是否有大 gap，还需 replay 起止、嵌套记录。
 
-两个 rank 各有 28 次 Fill→Clamp 结构：Clamp 处理 FLOAT `[bs]`，之后比较同一 bs，之前有两次 int64 `[16]` 传输准备。它与保存的 DSpark 路径对应：
+两 Rank 各 28 组 Fill→Clamp：Clamp 为 FLOAT `[bs]`，之后比较相同 bs，之前有两次 int64 `[16]`准备，与保存 DSpark 路径对应：
 
 ```text
 DraftBlockProposer._run_forward
@@ -82,9 +82,9 @@ DraftBlockProposer._run_forward
   → draft model forward / graph
 ```
 
-`_fill_dp_moe_sync_metadata` 分别构造全局 token 数、logprob token 数的 host 向量并复制到设备，随后 sampling 参数准备对温度 clamp 并生成 greedy mask。只读复核时，两个 helper 与安装源 SHA 匹配。形状、顺序和源码支持这项关联，但采集没开 Python stack，不能写成已获取完整调用栈。
+`_fill_dp_moe_sync_metadata`创建全局 Token、logprob Token 两份 Host 向量并复制，随后采样准备 clamp 温度、建 greedy mask。两个 helper 与安装源 SHA 一致，形状、顺序支持关联；未开 Python stack，尚无完整调用栈。
 
-具体到这类重复结构，相关成本为：
+这类结构的相关时间为：
 
 | 指标 | rank0 | rank1 |
 | --- | ---: | ---: |
@@ -93,49 +93,49 @@ DraftBlockProposer._run_forward
 | 两向量对应 host `_to_copy` 时长累计（ms） | 3.3663 | 3.1080 |
 | 占各自整个采样窗口 | 0.1614% | 0.1490% |
 
-391ms 总空隙、11ms Fill→Clamp 空隙和 3ms host 拷贝相关时间覆盖不同对象。合包两次传输只能减少其中部分准备与提交，不能将整个空隙计作潜在收益。host `_to_copy` 自身也可能包含等待，未必全是 DMA。
+391ms 总 gap、11ms Fill→Clamp gap、3ms Host copy 相关时间，各统计不同对象。合包最多减少其中部分准备、提交，`_to_copy`还可能含等待，并非全是 DMA。
 
-两个计数向量也不能任意删除或跨批缓存：全局与 logprob 列表未必相同，序列、接受结果和 token 数持续变化，异步使用还要求正确存活及覆盖顺序。考虑到已识别的成本很小，本次将合包降为低优先级，没有为它重启服务或报告 NPU 加速。
+全局、logprob 向量未必相等，batch、接受、Token 数也在变化，不能随意删、跨批缓存；异步还要保护引用、覆盖顺序。考虑到成本小，本轮降低合包优先级，没有为它重启或报告加速。
 
 ## 5. 一个 rank 的空白，为什么不是整机可消除的时间
 
-若每 rank 的记录空隙为 G，全组同时未覆盖的时间是各 G 交集。相加或求平均都得不到它。下半图的反例中，两个 rank 各有 20% 空白，但位置错开，全组共同空白为零。
+各 Rank gap 为 G，全组同时未覆盖取各 G 交集。下半图两个 Rank 各 20% 空白，位置错开，交集仍为 0。
 
-求交集前还需证明时钟对齐、rank 属于同一范围、窗口覆盖同一阶段。仅凭时间戳接近就拼接设备 CSV 并不充分。本次只完成相邻 rank0/1 的完整材料分析，未取得所有参与 rank 的公共时钟与覆盖证明，所以未给出全组空闲率。
+求交还需时钟对齐、同一 Rank 范围、同一阶段窗口。本次只有 rank0/1 完整材料，没有所有参与者的共同时间、覆盖证明，所以没报全组空闲率。
 
-全组共同空白仍可能来自必要 host 决策或同步，消除它要修改真实依赖。共同空白为零，也不排除关键路径有等待：其他 rank 可能只在执行不影响完成时间的旁路工作。因此区间交集只判断同时覆盖，关键路径才解释完成时间由谁决定。
+即使共同空白存在，也可能是必要 Host 决策、同步；没有共同空白，别的 Rank 也可能只跑不影响完成的旁路。交集判断同时覆盖，关键路径才回答谁拖慢完成。
 
-服务吞吐还受 PD 流水线影响。若 P 供给不足，缩短 D 的局部等待不一定增加完成请求。P 交付、D 组批和客户端在途共同决定产出，[尾块合批实验](decode-fast-throughput-limited-by-prefill.md)就曾得到 TPOT 略升而系统吞吐增加的结果。
+PD还取决于P交付、D组批、客户端供给。[尾块合批实验](decode-fast-throughput-limited-by-prefill.md)就曾在TPOT略升时提高系统输出，D局部等待少了未必有更多工作。
 
-即使理想情况下能删除固定工作 T 中的 `0.19T`，保持工作量和输出不变，吞吐倍率也应算 `1/0.81≈1.2346`，约提高 23.46%，并非直接提高 19%。这个算式只是教学假设；本次没有测定可删关键路径时间，不能用作收益预测或上界。
+假设固定工作真的删掉`0.19T`，吞吐倍率是`1/0.81≈1.2346`，约+23.46%。这只演示算术，本次没测可删关键路径时间，不作为预测、上界。
 
 ## 6. 旧 trace 与采集扰动，还会再改变一次判断
 
-trace 对应 P/D 软件为 `0.0.0.dev18433+gce0a8fea5.d20261013`，并含当时适配。IndexCache 关闭，D 使用草稿 3/验证宽度 4、Graph `[1,2,4,8,12,16]`，未包括后来档位 6、G5/Compact 等变化。因此 18.77% 不能直接标到后续最优配置上。
+trace 对应`0.0.0.dev18433+gce0a8fea5.d20261013`及当时适配，IndexCache 关，D 草稿 3/Verify 4、Graph`[1,2,4,8,12,16]`，尚无档位 6、G5/Compact。后续配置不能继承 18.77% 这个值。
 
-采集为 CPU+NPU、Level1、PipeUtilization，`record_shapes=True`、`with_stack=False`，有形状但无完整 Python 栈。[PyTorch Profiler 文档](https://docs.pytorch.org/docs/2.14/profiler.html)说明形状和栈记录有额外开销，[Ascend 服务采集说明](https://github.com/Ascend/msserviceprofiler/blob/60b77faa071b16e54b76dc27d470206d63820980/docs/en/msserviceprofiler_serving_tuning_instruct.md#L81-L90)也区分层级成本。这能说明存在扰动可能，不能量化本次扰动。
+采集CPU+NPU、Level1、PipeUtilization，`record_shapes=True`、`with_stack=False`。[PyTorch Profiler 文档](https://docs.pytorch.org/docs/2.14/profiler.html)、[Ascend 服务采集说明](https://github.com/Ascend/msserviceprofiler/blob/60b77faa071b16e54b76dc27d470206d63820980/docs/en/msserviceprofiler_serving_tuning_instruct.md#L81-L90)说明记录有开销，只能据此保留扰动可能，未量本次大小。
 
-本次未做同条件的采集开关配对，无法认定 19% 全由 profiler 造成，也无法保证它等同未采集服务。约 2.085 秒窗口与 28 次相关标记，更不能代表完整 AISBench native 的吞吐、AL 和逐轮 Draft/Verify 成本。
+本轮没有采集开关配对，不能认定 19% 由 profiler 造成，也不能当作未采集服务。2.085 秒、28 标记更没有覆盖完整 AISBench native 与 AL、Draft/Verify 周期。
 
-原计划曾写 160 请求，实际独立核对为成功 640。文章以实际产物身份为准，并未将 profiling 运行当作正式性能得分。确认 trace 属于哪轮、何种负载，应早于进一步解释百分比。
+原计划 160 请求，实际产物核为 640 成功，采用实际身份；profiling 轮未记成正式性能分。
 
 ## 7. 怎样把空隙变成一个值得做的实验
 
-下一步可以先查具体问题：重复空隙是否由两次向量准备引起，哪些输入确实不变，以及究竟是 host 晚提交还是设备等待 peer。不同答案对应不同改动，无须先给整套服务贴 host-bound 标签。
+下一候选先问具体来源：两向量准备是否真造成重复 gap，哪些输入不变，是 Host 晚提交、还是设备等 peer。不同来源才对应不同改动。
 
-这次已有形状、执行顺序、提交锚点和 helper 源码，尚缺部分动态路径的唯一来源、跨 rank 对应以及未采集时的阶段成本。局部空隙已确认，但这些缺口仍会影响改动位置与优先级。
+现有形状、顺序、提交锚点、源码支持部分关联，仍缺动态路径唯一来源、跨 Rank 对应、未采集成本，它们影响改哪里、值不值得。
 
-验证合包候选时，先看相关 host 调用数和准备时间是否按预期减少，再用相同数据、缓存、采样、并发测未采集的 TTFT、TPOT、ITL、E2E 与 whole/native 吞吐。同步、元数据和输出语义必须保持，不能用省略必要工作获得更好看的时间线。
+若验证合包，先核 Host 调用和准备时间是否减少，再同数据、缓存、采样、并发测未采集的 TTFT、TPOT、ITL、E2E、whole/native。同步、metadata、输出语义继续保持。
 
-附带[纯 CPU 区间脚本](../../examples/npu-gap-accounting/gap_accounting.py)和[教学 CSV](../../examples/npu-gap-accounting/example.csv)，可从仓库根目录复算口径：
+[纯 CPU 区间脚本](../../examples/npu-gap-accounting/gap_accounting.py)、[教学 CSV](../../examples/npu-gap-accounting/example.csv)可从仓库根复算：
 
 ```bash
 python examples/npu-gap-accounting/gap_accounting.py examples/npu-gap-accounting/example.csv
 ```
 
-示例输出 wall10ms、Duration sum11ms、busy union9ms、gap1ms。脚本包含所有记录，支持显式窗口与边界裁剪，不只筛某 stream。但它只处理单 CSV 区间，没有解决跨 rank 时钟、漏采、关键路径或因果，因此 `gap_ratio` 仍不能表示可回收容量。
+示例 wall 10ms、Duration sum 11ms、union 9ms、gap 1ms。脚本处理所有记录、显式窗口、边界裁剪，只解决单 CSV 区间，未解决跨 Rank 时钟、漏采、关键路径、因果。
 
-这次分析最终缩小了候选范围。两次拷贝有较具体的解释，却因相关成本很小而降级。保留这些记录，下次便能从已确认的局部关系继续，而无须为一个未经测定的 19% 收益先投入重启和压测。
+最终留下的是两次拷贝的较具体关联，以及因成本很小而降低的优先级。下次可从这份局部证据继续，无需先为未测定的 19% 收益冷启动。
 
 ## 配套数据与延伸阅读
 

@@ -1,22 +1,22 @@
 # 专家计数都采到了，为什么导出还会失败？
 
-160 条模型请求已完成，AISBench 退出码为 0。采集还剩停止计数、导出文件和静态布局拟合，故障却发生在导出阶段。
+160 条生成已结束，AISBench 退出 0，故障却发生在导出专家计数。D 的 scheduler 随后退出，health 返回 503，新`.pt`只有 1949 字节。
 
-dump 超时后，D 端 scheduler 崩溃，health 返回 503。新出现的 `.pt` 只有 1949 字节。栈顶位于 `torch.save()` 的 `storage.cpu()`，日志同时报 `HcclAllreduce` 申请 2,517,630,976 字节 NPU 内存失败。
+Python 栈停在`torch.save()`的`storage.cpu()`，同段日志报 HcclAllreduce 申请 2,517,630,976 字节 NPU 内存失败。文件写入只是错误浮现的位置，还得向前查 dump 中的设备通信。
 
-修复保留了物理专家到逻辑专家的转换，将转换结果复制到 CPU，再用已有、同成员的 Gloo 组执行整数 SUM，最后由 rank0 保存 CPU 张量。模型前向没有改动。
+修复保留物理→逻辑专家转换，转换后复制 CPU，用已有同成员 Gloo 做整数 SUM，再由 rank0 保存。没有改模型前向。
 
-新窗口导出的张量可完整加载，形状为 `[512, 43, 256]`，总计 45,597,888。要解释修复为何有效，需要先看 dump 中隐藏的设备通信，再核对换后端后是否保留原计数含义。
+新窗口文件完整加载为`[512, 43, 256]`、总计 45,597,888。下面先追原导出怎样调用 HCCL，再核 CPU 归约是否保住了统计含义。
 
-实验为 2026 年 10 月 21 日的 DeepSeek-V4-Flash、Ascend 910C 真实 PD，P8+D8 共 16 张物理卡。负载采用有利复制任务，16K 正文、Chat 输入 16388、输出 1024，N160/C128、6 req/s、零前缀缓存，D 使用 G5/verify6。采集为手动 `stat`，关闭在线 EPLB 与 balancedness 报告。记录见[数值证据](../../assets/expert-count-export-hccl-gloo/evidence.json)和[前后源码片段](../../assets/expert-count-export-hccl-gloo/export-fragments.py.txt)，实现按当时冻结文件 SHA256 绑定。
+数据为2026年10月21日Flash/Ascend 910C真实PD，P8+D8物理16卡，复制集16K正文、Chat16388、输出1024、N160/C128/r6、cache0，D G5/Verify6。手动stat、在线EPLB与balancedness关，冻结SHA绑定实现，见[数值证据](../../assets/expert-count-export-hccl-gloo/evidence.json)、[前后源码片段](../../assets/expert-count-export-hccl-gloo/export-fragments.py.txt)。
 
 ## 一、生成完成时，统计工作还没有结束
 
-采集用于按实际负载拟合 D 端静态布局。逻辑专家可能分布为多个物理副本，token 分配到各副本的数量不同，会改变 EP rank 间负载。
+计数用于拟合 D 静态布局。一个逻辑专家可有多个物理副本，实际分配在副本之间如何分布，会影响 EP Rank 负担。
 
-recorder 先按 append 保存物理专家计数，dump 再用当前 `physical_to_logical_map` 合并同一逻辑专家的副本。例如两个副本记录 2、3 次分配，逻辑专家应得到 5。这个教学例子对应 `scatter_add_`，累加的是专家分配次数。
+recorder append 保存物理数，dump 按当前`physical_to_logical_map`合逻辑数。例如副本 2、3 次，逻辑总 5，对应`scatter_add_`的专家分配加和。
 
-转换后仍只有各进程本地统计。原 `_StatAccumulator.dump()` 接着通过默认组 `all_reduce(SUM)` 全局归约，再让 rank0 保存。路径如下：
+转换后仍为本进程统计。原`_StatAccumulator.dump()`用默认组`all_reduce(SUM)`取全局，再 rank0 保存：
 
 ```mermaid
 flowchart TD
@@ -29,23 +29,23 @@ flowchart TD
     G --> H[本次异步 HCCL 错误在这里浮现]
 ```
 
-原 AISBench 的 160 成功、0 失败与独立退出记录，能够证明生成结束。要得到可用统计文件，还需完成全局归约、设备转移及序列化，后面这些步骤尚有失败可能。
+原 AISBench 的 160 成功、0 失败、独立退出，确认生成完成。计数还要经过归约、设备转移、序列化。
 
-原生命周期中，`start_record()` 先 reset 再开启记录，`stop_record()` 只关闭开关，`dump_record()` 等 accumulator dump 返回后才 reset。此次 start、stop 均返回 200，未覆盖随后导出的完成状态。
+`start_record()`先 reset 再开，stop 只关开关，dump 返回后才 reset。start、stop 各 200，并没确认后续 dump 完成。
 
 ## 二、二十多 MB 的计数，为什么报了约 2.52 GB 的申请
 
-成功计数具有 512 个槽位、43 层、每层 256 个逻辑专家，int32 纯张量大小为：
+成功张量 512 槽、43 层、256 专家，int32 大小为：
 
 ```text
 512 × 43 × 256 × 4 = 22,544,384 bytes = 21.5 MiB
 ```
 
-成功 `.pt` 共 22,546,433 字节，除张量外还含序列化信息。失败的 2,517,630,976 字节申请明确来自 HCCL 模块，规模与统计文件不同，不能解释成文件本身需要同样大的存储。
+完整`.pt`22,546,433 字节，另含序列化信息。2,517,630,976 申请来自 HCCL，与计数文件规模不同。
 
-原实现转成逻辑计数后，张量仍驻留设备，再通过未指定 `group` 的 `all_reduce` 归约，报错算子为 `HcclAllreduce`。rank0 随后将设备张量字典交给 `torch.save`，torch_npu 序列化需要把 storage 搬到 CPU，异步错误在这次访问时浮现。
+逻辑转换后仍为设备 Tensor，`all_reduce`未设 group，报 HcclAllreduce。rank0 再把设备字典交给`torch.save`，torch_npu 序列化搬 storage 到 CPU 时，先前异步错误才暴露。
 
-日志保留了以下信息：
+原日志为：
 
 ```text
 torch.save
@@ -57,21 +57,21 @@ Failed to allocate memory requested by HCCL module.
 Failed to allocate 2517630976 bytes of NPU memory.
 ```
 
-同段日志提示异步调用可能使 Python 栈定位不准。因此看到 `storage.cpu()`，还应检查它之前依赖的设备工作，仅按栈顶归因会误判为文件或主机内存错误。
+日志也提示异步 Python 栈可能偏移。看到`storage.cpu()`，应继续核此前依赖的设备操作。
 
-现有记录把失败定位到 dump 的 HCCL 路径，还没有说明这块申请在内部用于什么、何时分配。因此修复先将这段离线归约移到 CPU，没有猜定它属于某一种 HCCL buffer，再据此调整容量。
+记录定位到 dump 的 HCCL 路径，还没解释内部大申请的用途、分配时机。因此先移开离线归约，没有猜某类 buffer 再调容量。
 
-候选还移除了首次 dump 前的 `empty_cache()`，首次标记仍会被消耗。因此这是组合导出调整，没有逐项消融，不能把成功全部归给删除这一行。
+候选同时去掉首次 dump 的`empty_cache()`，首次标记仍消耗。它是组合导出调整，没有独立消融。
 
 ## 三、把 SUM 搬到 CPU，先保持参加计算的人不变
 
-受控采集窗口结束后的整数统计适合使用 CPU 通信，但组成员、映射和归约操作必须保持原意。
+受控窗口结束后的整数计数可以走 CPU，前提是映射、组成员、SUM 语义不变。
 
-原本需要 16 个 rank 求和，若换成只覆盖部分成员的 TP 子组，即使 API 成功，统计也已不完整。归约后的各 rank 又都持有全组结果，若再将 16 份相加，会重复计算同一组负载。
+原需 16 Rank 求和，若只换成一部分 TP 成员，API 成功也会漏数；归约后每人都有全局结果，再把 16 份相加又会重复。
 
-候选复用 `get_world_group().cpu_group`。冻结的 `parallel_state.py` 已在初始化时按相同 rank 列表创建 Gloo CPU 组，源码 SHA 与现场一致；dump 中没有另行 `new_group()`。
+`get_world_group().cpu_group`已在初始化按相同 Rank 列表创建，冻结`parallel_state.py`与现场 SHA 一致，dump 没有新建 group。
 
-辅助函数按以下顺序执行，完整代码保存在随文片段：
+辅助函数顺序为：
 
 ```python
 # 说明性节选：省略异常信息与完整成员检查。
@@ -85,23 +85,23 @@ torch.distributed.all_reduce(
 return cpu_count
 ```
 
-复制前检查 CPU 组存在、后端为 Gloo，且 `world_group.ranks` 与 CPU 成员顺序均匹配默认 WORLD；计数仅接受 int32、int64。[PyTorch all_reduce](https://docs.pytorch.org/docs/2.14/distributed.html#torch.distributed.all_reduce) 在指定组中原地归约，并让所有成员获得结果；省略 `group` 才选默认组。这里引用接口语义，现场行为仍按冻结实现与记录判断。
+先检查CPU组存在、backend Gloo、成员及顺序等于默认WORLD，只收int32/int64。[PyTorch all_reduce](https://docs.pytorch.org/docs/2.14/distributed.html#torch.distributed.all_reduce)给出指定组原地SUM、各成员得结果的语义；现场仍以冻结实现为准。
 
-物理到逻辑转换保留原位置和映射。将结果复制到 CPU 后再做整数 SUM，rank0 待保存字典就已包含 CPU 张量，无须在序列化时隐式转移这份 NPU storage。collective 仍由全部成员参与，只有文件写入限定 rank0。
+原映射转换保留，之后 D2H、CPU 整数 SUM。rank0 字典已是 CPU Tensor，保存时无需隐式搬这份 NPU storage。全部成员参加归约，只有 rank0 写盘。
 
-代价是每 rank 都需设备到主机复制，并为 CPU 张量、Gloo 通信占用主机资源。该路径只在采集结束后执行，未加入逐步 Decode。我们未分别测量复制、归约和写盘时间，扩大规模或跨节点时，仍需重新评估主机内存与网络成本。
+每 Rank 都付 D2H、CPU 内存、Gloo 成本，仅在采集结束后执行，没有加入逐步 Decode。复制、归约、写盘未分别计时，更大规模仍需估主机与网络代价。
 
-修改限于手动 stat，条件为 `enable_eplb=false`、balancedness 报告关闭。utilization 的设备 reduce、broadcast 没有一起替换，模型前向、权重、量化及推理通信也保持原样。因此该候选不能直接用作在线动态 EPLB 的通用替代。
+范围只限手动 stat，`enable_eplb=false`、balancedness 关。utilization 设备 reduce/broadcast、模型、量化、推理通信都未替换，不能直接当在线 EPLB 通用替代。
 
 ## 四、两 rank 算对了，还要走完真实 16 worker 的导出
 
-实机接入前，先用真实两进程 CPU/Gloo 检查提取出的 dump、映射转换和 SUM 方法，以非恒等映射构造计数，逐元素核对整数结果。
+接实机前，先提取真实 dump、转换、SUM 方法，用两进程 CPU/Gloo 和非恒等映射逐元素核整数结果。
 
-int32 覆盖 object 返回分支，int64 覆盖 file 分支，每次均从 `_first_dump=True` 开始。检查了仅 rank0 保存、结果在 CPU，以及拒绝浮点计数和错误成员。两进程均通过，未初始化 NPU。
+int32 走 object、int64 走 file，均从`_first_dump=True`开始，核仅 rank0 保存、CPU 结果、浮点与错成员拒绝。两进程通过，未初始化 NPU。
 
-这组检查覆盖逻辑转换、归约与输出分支。NPU→CPU 复制、已有组及多 worker 控制协议，还需放进实际服务确认。
+CPU 覆盖转换、归约、输出分支，NPU 复制、已有组、多 worker 协议继续在服务验证。
 
-取得有效计数的一轮使用已加载候选的热服务：执行一次 start/reset，发同场景 N160，原负载独立退出后再 stop、dump。这个采集窗口没有新增模型启动、MF 或路由预热，结果如下：
+有效新窗口复用已加载热服务，start/reset 一次、同场景 N160、原负载独立退出后 stop/dump。新增启动、MF、路由预热均 0：
 
 | 项目 | 真实运行结果 |
 | --- | --- |
@@ -114,34 +114,34 @@ int32 覆盖 object 返回分支，int64 覆盖 file 分支，每次均从 `_fir
 | 计数总和 | 45,597,888 |
 | 文件验证 | 22,546,433 字节，CPU 完整加载与 SHA256 留存 |
 
-HTTP 完成依赖当时绑定的 FanOut 协议等待 DP16 回复，并核对前后 worker 身份。这是协议级结束证据，没有逐 rank 独立时间 trace。
+当时 FanOut 等 DP16 回复，前后 worker 身份一致，提供协议级结束证据，缺逐 Rank 时间 trace。
 
-0.0715 秒只表示这一次 dump API 墙时，不能据此比较 Gloo 与 HCCL 性能。该轮开启专家采集，未采 native，报告将其标为布局诊断；普通性能需在后续另测。
+0.0715 秒仅是单次 dump API 墙时，未比较两 backend 性能。该轮开着采集、没有 native，归布局诊断。
 
-1949 字节坏文件保留为失败产物。成功文件来自新采集窗口，并未恢复原先失败的那份计数。
+1949 字节坏文件继续保留。成功来自新窗口，原失败计数没有恢复。
 
 ## 五、文件能加载之后，还要弄清 512 代表什么
 
-文件可加载后，还需解释各维度。第一维 512 是 recorder 环形槽位数，与请求量和输出 token 数都不同。
+第一维 512 是环形槽，未对应请求数、输出数。
 
-当时 `_CircularBuffer.append()` 写入当前槽位并取模推进，写满会覆盖旧值；`get_all()` 直接返回底层 buffer，不重排时间顺序。因此 `[512, 43, 256]` 说明槽位成功保存，不能直接还原采集时间线。
+`_CircularBuffer.append()`写当前槽、取模前进，满后覆盖；`get_all()`原样返回 buffer，不按时间重排。
 
-160 条长输出经历多次 forward 和调度，文件形状无法对应每条请求的完整轨迹，也不能确认首槽就是首步。45,597,888 是专家分配计数，不是输出 token 总量。
+160 请求经过多次 Forward、调度，形状无法还原各请求完整轨迹，也不说明首槽就是首步。45,597,888 数专家分配。
 
-后续 CPU 工具将槽位分成 256/256 做拟合与检查，可观察候选对另一部分计数的适应情况。但环形槽未保留时序，不能将这个划分称作早期训练、晚期验证；研究负载随时间变化时，还需时间索引或原始 append 顺序。
+后续槽位分 256/256 拟合、检查，可看另一部分计数上的表现；未存时序，不能叫早期训练、晚期验证。研究时间变化还需时间索引、append 顺序。
 
-文件同时记录归约状态。rank0 逻辑计数已 all-reduced，拟合读取一份即可，不乘 DP16，也不再 SUM 各 rank 的相同全局结果，避免改变负载权重。
+rank0 数已全局归约，拟合只读一份，不乘 DP16、不再汇总其他 Rank 的同份结果。
 
-可用计数让静态拟合继续，但布局是否提高吞吐，仍需放到同负载服务比较。放置背景见[P 端场景静态 EPLB](ascend-910c-prefill-scenario-static-eplb.md)。
+文件让拟合继续，性能再由匹配服务比较，放置背景见[P 端场景静态 EPLB](ascend-910c-prefill-scenario-static-eplb.md)。
 
 ## 六、下次怎样少花一轮昂贵采集
 
-下次应将首次 dump 放进提前检查，而不只检查 forward、start 和 stop。否则首次分支仍要等长负载结束才执行。CPU 两 rank 与真实服务首次导出各覆盖不同路径，短检查应针对实际可能失败的位置。
+下次首次 dump 也放入提前检查。仅确认 Forward、start、stop，会把首次失败分支留到昂贵负载之后。CPU 与真实服务各验证不同边界。
 
-文件验收也需检查内容：在 CPU 完整加载后，核对形状、dtype、非负性、有效计数及窗口，再保留哈希。新文件名或非零大小都不充分。这次最终依据新文件、成功 API、相同 worker 身份和完整加载，确认导出完成。
+CPU 完整加载，再核 shape、dtype、非负、有效计数、窗口、哈希。本次用成功 API、同 worker、新文件完整内容一起确认。
 
-长期维护时，还可考虑先写临时文件、验证后原子改名，避免下游读到半文件。这是后续建议，本次仍使用原 `torch.save` 文件分支。
+临时文件验证后原子改名，可避免半文件被消费；这是后续方案，本次仍用原`torch.save`分支。
 
-故障恢复要看服务状态。本次 scheduler 已退出、health 为 503，确认原请求结束后需要恢复服务；若只有客户端采集或解析失败，而远端仍健康，应先修复原产物。两种情形采取相同的重跑动作，会浪费已完成的推理与预热。
+本轮 scheduler 已退、health 返回 503，确认原请求结束后需要恢复服务。若只是客户端处理坏了、远端还健康，则先修原数据，恢复位置由实际状态决定。
 
-修复最终保持同一份物理到逻辑映射、同一组成员和整数 SUM，只把归约、输出迁到已有 CPU 通道。专家计数得以进入布局拟合，而这次故障也表明，采集结束仍需经过 collective、数据转移与序列化，不能以模型请求结束替代整次采集完成。
+映射、成员、整数 SUM 保持原意，归约输出移到既有 CPU 通道，计数才进入静态拟合。一次采集是否结束，要一直核到最后的通信、转移、序列化。

@@ -1,8 +1,8 @@
 # SGLang ModelRunner：九个输入 Token 怎样产生两行 Logits
 
-两条请求的输入都是六个 Token，其中一条已命中三个 Token 的前缀。模型这一轮只需计算九个新位置，采样时却只要两行词表分数。跟着这九行输入走完 ModelRunner，可以看清请求长度、缓存位置和模型输出之间的关系。
+一轮 Prefill 送入九个新 Token，模型层算出九行 hidden states，到了 LM Head 却只剩两行。这是两条请求的普通生成，没有请求输入 Logprob，各自只用末端位置预测下一枚 Token。
 
-Scheduler 已经选定本轮要处理的位置，ModelRunner 接下来把这份计划组织成输入，选择执行方式，再运行模型与采样。Prefill 和普通 Decode 都进入同一份模型代码，差别主要由输入形状和执行元数据传递。前面的组批过程见 [上一篇 Scheduler](sglang-scheduler-source-analysis.md)。
+九行怎么打包、历史从哪里读取、末端两行怎样选出来，都要靠 Scheduler 带下来的执行信息。ModelRunner 接过计划，准备输入、选择执行方式，再运行模型与采样。Prefill 和普通 Decode 进入同一份模型代码，形状与执行元数据随阶段改变，组批过程见 [上一篇 Scheduler](sglang-scheduler-source-analysis.md)。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -11,22 +11,22 @@ Scheduler 已经选定本轮要处理的位置，ModelRunner 接下来把这份�
 
 </details>
 
-## 一、ForwardBatch 描述本次执行
+## ForwardBatch 里的两套长度
 
-先用整数 Token 固定两条教学请求，观察新增行和逻辑位置。例中的前缀长度仅用于说明坐标，不代表 DeepSeek-V4 专用缓存必然支持这种匹配粒度。
+沿用两条教学请求，用整数代替 Token ID。前缀长度只演示坐标关系，实际匹配粒度由 DeepSeek-V4 专用缓存实现决定。
 
 | 请求 | 完整输入 | 已有可复用前缀 | 本轮新增输入 | 新增输入的逻辑位置 |
 | --- | --- | --- | --- | --- |
 | R1 | `[11,12,13,14,15,16]` | 无 | `[11,12,13,14,15,16]` | `[0,1,2,3,4,5]` |
 | R2 | `[21,22,23,24,25,26]` | 前三个 Token | `[24,25,26]` | `[3,4,5]` |
 
-两条请求的完整长度相同，新增长度却是六和三。执行侧需要知道当前序列有多长，也需要知道这次送入模型多少行。R2 的前三个位置由缓存提供历史状态，不再出现在本轮新输入中。
+两条请求的完整长度都是六，R1 要新算六行，R2 只算后三行。R2 的前三个位置已经有缓存状态，本轮输入里不用再放一遍。
 
-普通生成中，Worker 把 Scheduler 的计划交给 `ForwardBatch.init_new(batch, model_runner)`，构造执行输入，然后调用 `model_runner.forward(forward_batch)`。[`TpModelWorker.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/tp_worker.py#L631-L749)
+普通生成的 Worker 调用 `ForwardBatch.init_new(batch, model_runner)`，把 Scheduler 计划整理成执行输入，再送给 `model_runner.forward(forward_batch)`。[`TpModelWorker.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/tp_worker.py#L631-L749)
 
-`ForwardBatch` 集中描述这一轮的 Token、模式、长度、位置、缓存映射和采样信息。它会借用 `ScheduleBatch` 的部分 Tensor，再补出执行层需要的派生数据，并非把全部上游状态深拷贝一遍。[源码：ForwardBatch 字段与构造](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L468-L605)
+Token、模式、长度、位置、缓存映射和采样信息集中到 `ForwardBatch`。其中有些 Tensor 借用自 `ScheduleBatch`，有些是执行层补出的派生数据，没有将上游所有状态深拷贝一份。[源码：ForwardBatch 字段与构造](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L468-L605)
 
-将本例的关键字段放在一起看：
+在这两条请求里，各字段取值如下。
 
 ```text
 input_ids = [11,12,13,14,15,16,24,25,26]    # 9 行
@@ -38,17 +38,19 @@ seq_lens           = [6,6]    # 两条请求的当前总长度
 extend_num_tokens  = 9
 ```
 
-positions 按请求自己的位置生成。Torch fallback 为每条请求构造 `arange(prefix_len, prefix_len + extend_len)`，再打包这些区间。因此 R2 从位置三开始，不会接着 R1 的位置五继续递增。[`compute_position_torch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L2032-L2046)
+每条请求有自己的 positions。Torch fallback 分别构造 `arange(prefix_len, prefix_len + extend_len)`，再把区间打包；所以 R2 从位置三开始，不会接在 R1 的位置五后面继续数。[`compute_position_torch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L2032-L2046)
 
-物理缓存另有坐标：`out_cache_loc` 指向新增状态的写入槽位，`req_pool_indices` 指出请求在映射池的位置；DeepSeek-V4 NPU 路径还可用 `out_cache_loc_dsv4` 传递专用池的位置集合。结合 positions，后端才能知道每行属于哪条请求、去哪里找历史，以及当前结果写在哪里。[源码：DSV4 ForwardBatch 字段](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L487-L505)
+物理写入另有映射，`out_cache_loc` 指向新增缓存的槽位，`req_pool_indices` 定位映射池中的请求。DeepSeek-V4 NPU 还可通过 `out_cache_loc_dsv4` 传专用池的位置集合。后端结合这些映射和 positions，确定每行属于谁、读哪段历史、结果往哪里写。[源码：DSV4 ForwardBatch 字段](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L487-L505)
 
-九个 Token 连续存放只改变打包方式。序列边界仍由长度、位置和 Attention 元数据保留，R2 不会因此读到 R1 的历史。接下来，ModelRunner 先判断这份 batch 怎样执行。
+九个 Token 虽连续打包，长度、位置和 Attention 元数据仍保留各自边界，R2 读取的是本请求的历史。
 
-## 二、ModelRunner 选择 Graph 或 Eager 路径
+<a id="modelrunner-graph-eager"></a>
 
-图回放复用已捕获的执行结构，Eager 则沿当前调用运行前向。同样的逻辑 batch 能否回放，需要检查 Runner 是否存在，以及模式、形状等条件；Decode 本身并不能保证命中图。
+## Graph 或 Eager，先走哪条分支
 
-`ModelRunner.forward()` 处理 tracing、专家计数等外围工作后进入 `_forward_raw()`。省略无关分支后，其判断顺序如下，这段仅用于阅读调用关系：[`ModelRunner._forward_raw()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1849-L1947)
+Graph Replay 复用捕获好的执行结构，Eager 沿当前调用运行前向。能否回放，要查 Runner 是否存在、模式与形状是否满足条件，普通 Decode 也可能走不到图。
+
+`ModelRunner.forward()` 处理 tracing、专家计数等外围工作，再进入 `_forward_raw()`。下面省去无关分支，只展示 [`ModelRunner._forward_raw()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1849-L1947) 的分派顺序。
 
 ```text
 检查 Decode Graph 是否可运行
@@ -59,19 +61,19 @@ positions 按请求自己的位置生成。Torch fallback 为每条请求构造 
               └─ 其余：交给 EagerRunner
 ```
 
-注意 `_prepare_eager_forward_batch()` 的位置：它在 Split Prefill、Prefill Graph 和 Eager 分支之前。Decode Graph 若已命中会提前返回，其余 live batch 则先经过这层准备。因此不能因为函数名带 eager，就把它的作用范围只划给最终 Eager 分支。
+Decode Graph 命中会提前返回。没有命中的 live batch 才经过 `_prepare_eager_forward_batch()`，随后还有 Split Prefill、Prefill Graph 和最终 Eager 等分支。这个名字带 eager 的准备函数，实际也在 Prefill Graph 之前。
 
-源码沿用 `cuda_graph` 名称选择图路径，在 Ascend 上也用于 NPU 执行。下面称为 Graph Replay，具体行为仍以对应平台实现为准。
+源码用 `cuda_graph` 命名图接口，Ascend 路径同样沿用它，具体执行仍由 NPU 平台实现承接，下文统一称 Graph Replay。
 
-Eager 也需要装载输入。默认 `EagerRunner.load_batch()` 先将当前 batch 填进固定最大容量的静态缓冲，再取本轮大小的视图；只有设置 `SGLANG_EAGER_INPUT_NO_COPY` 才绕过这类复制。比较执行方式时还要看输入准备成本，这段源码本身并未证明某种方式更快。[`EagerRunner.load_batch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L183-L211)
+Eager 的输入也要装载。默认 `EagerRunner.load_batch()` 先填入固定最大容量的静态缓冲，再取本轮大小的视图；设置 `SGLANG_EAGER_INPUT_NO_COPY` 才绕过这类复制。因此两种方式的比较还包括输入准备，单凭这里的调用关系不能判断快慢。[`EagerRunner.load_batch()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L183-L211)
 
-后文沿普通 Eager 路径进入模型。Graph Replay 不会逐轮重复相同的 Python 调用过程，不能把这条阅读路径直接套到图回放。
+以下沿普通 Eager 进入模型。Graph Replay 复用捕获结构，不会每轮重走相同的 Python 调用序列。
 
-## 三、Prefill 与 Decode 怎样进入同一个模型
+## Prefill 与 Decode 共用模型入口
 
-`EagerRunner.execute()` 根据 `forward_mode` 分流：普通 Decode 进入 `_execute_decode()`，Extend / Prefill 进入 `_execute_extend()`。它们需要不同的 Attention 元数据，Prefill 还可能涉及额外参数和 Context Parallel，因此先分别准备。[`EagerRunner.execute()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L229)
+`EagerRunner.execute()` 根据 `forward_mode`，把普通 Decode 交给 `_execute_decode()`，Extend / Prefill 交给 `_execute_extend()`。Attention 元数据需要分别准备，Prefill 还可能带额外参数、涉及 Context Parallel。[`EagerRunner.execute()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L213-L229)
 
-准备之后，两种普通生成路径调用同一个模型入口：
+准备完成，两个普通生成分支调用同一个入口。
 
 ```python
 # 省略其他 kwargs，只保留两条路径共同传入的参数。
@@ -83,7 +85,7 @@ model_runner.model.forward(
 )
 ```
 
-Prefill 可以一次送入多行新增输入，普通 Decode 通常每请求只送一行；历史状态与位置由 `ForwardBatch` 和后端元数据提供，无需为两个阶段分别实现一套 DeepSeek 模型。对应两条入口：[`EagerRunner._execute_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L244-L271) [`EagerRunner._execute_extend()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L273-L378)
+Prefill 可带多行新增输入，普通 Decode 通常每请求带一行，历史和位置由 `ForwardBatch`、后端元数据传入。同一份 DeepSeek 模型因而能接两种阶段的输入。[`EagerRunner._execute_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L244-L271) [`EagerRunner._execute_extend()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/runner/eager_runner.py#L273-L378)
 
 | 本轮执行信息 | 普通 Prefill / Extend | 普通非投机 Decode |
 | --- | --- | --- |
@@ -93,15 +95,17 @@ Prefill 可以一次送入多行新增输入，普通 Decode 通常每请求只�
 | Attention 元数据 | 按 Prefill 查询组织 | 按 Decode 查询组织 |
 | DeepSeek-V4 模型入口 | 同一个 `forward()` | 同一个 `forward()` |
 
-`MIXED` 的转换还依赖平台。固定版本在非 NPU 且无 CP 时可以按 Extend 执行；NPU 留给专用处理，CP 路径也保留 MIXED。阅读模式转换时要连同外层条件一起看。
+`MIXED` 还有平台条件。在固定版本中，非 NPU 且无 CP 时可转成 Extend；NPU 保留给专用处理，CP 路径也保留 MIXED。
 
-本例的九行随后进入 DeepSeek-V4。`ForwardBatch` 仍需继续向下传递，因为仅凭 hidden states，Attention 无法恢复这些行的请求边界与历史位置。
+九行接着进入 DeepSeek-V4，`ForwardBatch` 继续随调用传下去。hidden states 本身没有记下各行的请求边界和历史位置，Attention 还得读取执行元数据。
 
-## 四、从打包的 Token 进入 DeepSeek-V4
+<a id="token-deepseek-v4"></a>
 
-PP=1 让 Embedding、Decoder Layers 和末端 LogitsProcessor 都处于同一条路径；流水线并行还要考虑 stage 交接。这里 `DeepseekV4ForCausalLM.forward()` 先调用 `DeepseekV4Model.forward()`。[`DeepseekV4ForCausalLM.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L5081-L5147)
+## DeepSeek-V4 的九行隐状态
 
-Embedding 将九个 Token ID 映射为 `[9,H]`。随后 DeepSeek-V4 扩展为 `[9,hc_mult,H]`，保存多路 mHC 状态，`hc_mult` 表示状态流数量，与 Attention head 数不同。经过层栈后，模型组合这些状态，再完成末端归一化。[`DeepseekV4Model.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L4630-L4840)
+本例 PP=1，Embedding、Decoder Layers 和末端 LogitsProcessor 在同一条路径上，流水线并行还会增加 stage 交接。`DeepseekV4ForCausalLM.forward()` 先进入 `DeepseekV4Model.forward()`。[`DeepseekV4ForCausalLM.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L5081-L5147)
+
+九个 ID 经 Embedding 得到 `[9,H]`，再扩为 `[9,hc_mult,H]`，存多路 mHC 状态。`hc_mult` 是状态流数量，和 Attention head 数不同。层栈计算后，模型组合这些状态，完成末端归一化。[`DeepseekV4Model.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4.py#L4630-L4840)
 
 ```text
 input_ids [9]
@@ -114,21 +118,23 @@ input_ids [9]
 末端表示 [9,H]
 ```
 
-这个示意跟踪的是行数，层内还有投影及布局变化。hidden states 在各层改变表示，positions 和 `ForwardBatch` 则持续保留请求、序列位置及缓存的对应关系。
+图跟踪行数，层内投影和布局还会变化。每层改变 hidden states 的表示，positions 与 `ForwardBatch` 继续保留请求、序列位置、缓存的对应关系。
 
-例如 `DeepseekV4AscendAttnBackend.forward()` 收到 Query 后，读取预先准备的长度和页表，并按本层 `compress_ratio` 选择滑窗或压缩历史。新增状态写入时，`store_cache()` 通过当前缓存映射定位 SWA buffer。[`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189) [源码：DSV4 cache write](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2191-L2219)
+例如 Query 进入 `DeepseekV4AscendAttnBackend.forward()` 后，后端读取准备好的长度、页表，按本层 `compress_ratio` 选择滑窗或压缩历史。写新增状态时，`store_cache()` 从当前映射定位 SWA buffer。[`DeepseekV4AscendAttnBackend.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2047-L2189) [源码：DSV4 cache write](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py#L2191-L2219)
 
-R2 虽只带三个新 Token，`seq_lens`、positions、请求索引与缓存位置仍让它们访问本请求已有的前三个位置。历史未放进这轮 `input_ids`，不等于历史不存在。
+R2 送来三行，`seq_lens`、positions、请求索引与缓存位置仍让这三行访问自己已有的前三个位置。那些历史省去了重算，仍留在缓存里。
 
-九行完成模型前向后，先得到九行 hidden states，还未为用户选出新 Token。接下来需要选择用于计算 Logits 的行；内部的历史访问可另见 [DeepSeek-V4 Attention](deepseek-v4-attention-source-analysis.md)。
+模型前向完成，九行输入得到九行 hidden states。用户的新 Token 还没采样，词表计算要先从这九行里选末端。历史读取细节见 [DeepSeek-V4 Attention](deepseek-v4-attention-source-analysis.md)。
 
-## 五、九行 hidden states 怎样得到两行 Logits
+<a id="hidden-states-logits"></a>
 
-普通生成要预测的是每条请求的下一个位置，无需为九个新输入分别采样。按打包 Tensor 的零起始行号，R1 末端在 5，R2 末端在 8。
+## LM Head 为什么只需要两行
 
-普通 Prefill 且未请求输入 Logprob 时，`LogitsProcessor` 先取末端 hidden states，再送入 LM Head。前面的模型层已经算完九行，裁剪发生在准备词表分数之前。[`LogitsProcessor.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L495-L597)
+普通生成给每条请求预测下一个位置。本轮打包 Tensor 从零编号，R1 的末端是行 5，R2 是行 8，采样需要的是这两处。
 
-把本例长度代入末端选择逻辑：[`LogitsProcessor._get_pruned_states()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L599-L665)
+普通 Prefill 没有请求输入 Logprob 时，`LogitsProcessor` 先取末端 hidden states，再交给 LM Head。前面的模型层已经计算了九行，裁剪发生在词表分数计算之前。[`LogitsProcessor.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L495-L597)
+
+把长度代入 [`LogitsProcessor._get_pruned_states()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L599-L665) 的末端选择逻辑。
 
 ```python
 # 普通 Prefill、没有输入 logprob 的对应分支。
@@ -136,7 +142,7 @@ last_index = torch.cumsum(logits_metadata.extend_seq_lens, dim=0) - 1
 pruned_states = hidden_states[last_index]
 ```
 
-`extend_seq_lens=[6,3]` 累计为 `[6,9]`，减一得到 `[5,8]`。这里累计的是打包的新输入行数；R2 总序列长六，本轮却只带三行，不能用总长度去定位打包 Tensor 的末端。
+`extend_seq_lens=[6,3]` 累计得 `[6,9]`，减一得到 `[5,8]`。累计的是打包的新输入行数。R2 虽总长六，本轮只占三行，定位它在打包 Tensor 中的末端，就得用这三行。
 
 ```text
 打包行号：  0  1  2  3  4  5 | 6  7  8
@@ -146,17 +152,19 @@ pruned_states = hidden_states[last_index]
 模型末端 [9,H] → 选择末端行 [2,H] → LM Head → 逻辑 Logits [2,V]
 ```
 
-V 为词表维度。`next_token_logits` 的接口语义是 `[#seq,vocab_size]`，所以两条请求对应两行待采样分数。这个逻辑形状不能证明多卡中的每个 Rank 都持有完整词表。[源码：LogitsProcessorOutput](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L201-L240)
+V 是词表维度，`next_token_logits` 的逻辑接口为 `[#seq,vocab_size]`，两条请求对应两行待采样分数。多卡时各 Rank 是否持有完整词表，还取决于具体分布方式。[源码：LogitsProcessorOutput](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/layers/logits_processor.py#L201-L240)
 
-这种裁剪有适用条件。输入 Logprob 需要对更多输入位置评分，Target Verify 等模式也各有分支。“九行变两行”只对应本例普通生成所需的采样位置。
+请求输入 Logprob 时，需要为更多输入位置评分；Target Verify 等模式另有分支。这里九行裁成两行，对应的是普通生成的采样需求。
 
-词表 Logits 还需经过采样才能得到 Token ID。Worker 取得 `LogitsProcessorOutput` 后进入 `ModelRunner.sample()`，先应用 logits bias、grammar mask 等约束，再结合 `sampling_info` 调用 Sampler。重叠调度还可能延后采样，所以 forward 返回、采样完成和 CPU 拿到结果并非同一时刻。[`ModelRunner.sample()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1977-L2031)
+Worker 得到 `LogitsProcessorOutput`，再进入 `ModelRunner.sample()`。先施加 logits bias、grammar mask 等约束，再结合 `sampling_info` 调 Sampler，词表分数到这时才变成 Token ID。重叠调度还可能延后采样，所以 forward 返回、采样完成、CPU 取得结果会落在不同时刻。[`ModelRunner.sample()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1977-L2031)
 
-R1、R2 至此各获得一枚输出，首 Token 已由 Prefill 末端预测产生，不必先额外跑一次普通 Decode。请求状态和停止条件接着决定是否继续。
+R1、R2 各得到一枚输出，接着检查停止条件。首 Token 已经在 Prefill 末端采样出来，不用额外做一次普通 Decode 才能返回。
 
-## 六、接上下一轮 Decode
+<a id="decode"></a>
 
-假设两条请求都继续，新采样的输出记为 T1、T2。下一轮只把它们作为新增输入，不重算原来的九行 Prompt。两条序列此前都处理到长度六，下一轮计算各自的位置六，设备侧 `seq_lens` 推进为七。
+## T1、T2 接回下一轮 Decode
+
+假设两条请求继续，刚采样的结果记为 T1、T2，下一轮只计算它们，不重算前面的九行 Prompt。两条序列都已处理到长度六，这次各计算位置六，设备侧 `seq_lens` 推进到七。
 
 | 字段或结果 | 本轮 Prefill | 下一轮普通 Decode |
 | --- | --- | --- |
@@ -168,11 +176,13 @@ R1、R2 至此各获得一枚输出，首 Token 已由 Prefill 末端预测产�
 | 用于下一 Token 采样的行 | 每条请求选择最后一行 | 每条请求本来就只有一行 |
 | 逻辑 next-token logits | `[2,V]` | `[2,V]` |
 
-T1、T2 刚被采样时，还未作为输入经过模型。下一轮执行后才形成它们自己的缓存状态，并预测再下一个 Token。读请求长度时要分清这两个时刻，避免把输出进度与缓存进度错开一位。
+刚采样出 T1、T2，它们还没作为输入走过模型。等下一轮执行，才有自己的缓存状态，同时预测再下一枚 Token。因此输出进度比已计算的缓存进度先走一步。
 
-这样，九行 Prefill 输入、两行 Logits 和下一轮两行 Decode 输入就接在同一条请求链上。继续深入源码时，可以逐轮核对新增输入、逻辑位置、缓存写入映射及采样行，再沿请求索引追到 Attention 的历史访问。
+九行 Prefill、两行 Logits、两行 Decode 输入，来自同一组请求在不同阶段的工作。新增行、逻辑位置、缓存槽位和采样行依次对应，请求索引则一直把它们连到各自的历史。
 
-### 源码阅读入口
+<a id="_1"></a>
+
+### ModelRunner 源码入口
 
 | 目标 | 固定版本入口 |
 | --- | --- |

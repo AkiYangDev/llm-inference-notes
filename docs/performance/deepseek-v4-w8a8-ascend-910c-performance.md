@@ -1,13 +1,13 @@
 # DeepSeek-V4 W8A8 性能分析：小 M、NZ 布局与测量方法
 
-W8A8 将部分矩阵乘改为低精度计算，也带来动态激活量化、Scale 和其他算子处理。是否更快，要在同一负载下看节省的 GEMM 时间能否覆盖新增工作。
+`SMALL_TUNING_CONFIG_THRESHOLD = 128` 出现在 GroupedMatmul Tiling 中，固定 SGLang wrapper 却没有传 `tuning_config`，下游得到的 hint 是 0。专家实际收到多少行，不会自动填进这份 hint。只看一个 128 常量，还解释不了实际性能。
 
-Decode 的小 M、专家负载分散、NZ 布局及 Tiling 都会改变结果。下面沿这些执行分支设计测量，不给出目标环境尚未测得的收益。arch35 源码只作实现对照，不能直接当成 Ascend 910C 实际选择的路径。
+W8A8 的耗时还受激活量化、小 M、权重布局和专家分布影响。这里沿源码条件组织测量方案，不填入目标环境尚未测出的收益。arch35 只作实现对照，不代表 Ascend 910C 实际选中了相同路径。
 
 <details markdown="1">
 <summary>版本与源码入口</summary>
 
-分析使用以下固定源码：
+以下分析使用固定源码。
 
 | 组件 | 版本 |
 | --- | --- |
@@ -18,13 +18,13 @@ Decode 的小 M、专家负载分散、NZ 布局及 Tiling 都会改变结果。
 | CANN ops-transformer GitHub mirror | <code>bbb4dafe296119266a0a64133f17bc42b6597ed3</code> |
 | DeepSeek-V4-Flash-0731 config | Hugging Face main，核对日期 2026-09-21 |
 
-CANN GitHub mirror 便于检索，部署行为仍需以目标环境安装的 CANN 版本核对。
+CANN GitHub mirror 便于查代码，部署行为仍由目标环境安装的 CANN 版本决定。
 
 </details>
 
 ## 一、量化收益与额外开销怎样比较
 
-先从普通 Dense Linear 开始：
+从普通 Dense Linear 的成本开始。
 
 ~~~text
 Y = XW
@@ -34,7 +34,7 @@ W: [K, N]
 Y: [M, N]
 ~~~
 
-BF16 路径可粗略表示为：
+BF16 的主要成本近似如下。
 
 ~~~text
 T_BF16_linear
@@ -42,7 +42,7 @@ T_BF16_linear
 T_BF16_GEMM
 ~~~
 
-固定 DeepSeek-V4-Flash ModelSlim 主路径使用 <code>W8A8_DYNAMIC</code>。普通 Tensor 进入 <code>NPUW8A8Int8DynamicLinearMethod.apply()</code> 后，按以下步骤执行：
+固定 DeepSeek-V4-Flash ModelSlim 主线使用 <code>W8A8_DYNAMIC</code>。普通 Tensor 进入 <code>NPUW8A8Int8DynamicLinearMethod.apply()</code>，经历下面这些工作。
 
 ~~~text
 BF16 X
@@ -66,7 +66,7 @@ T_quant_matmul
 T_other_epilogue
 ~~~
 
-这条 Linear 要加速，需要满足：
+这条 Linear 的收益条件可以写成下面的比较。
 
 ~~~text
 T_BF16_GEMM - T_INT8_GEMM
@@ -74,7 +74,7 @@ T_BF16_GEMM - T_INT8_GEMM
 T_dynamic_quant + 新增的其它成本
 ~~~
 
-整个 Decoder Layer 还有更多组成部分：
+放回整个 Decoder Layer，还包括这些部分。
 
 ~~~text
 T_layer
@@ -99,15 +99,13 @@ T_residual
 + ...
 ~~~
 
-这些公式用于分解工作，按串行成本近似。若通信与计算存在重叠，整层 elapsed 仍需沿依赖关系核算，不能把各流 duration 直接相加。
+这些是串行成本近似，多流计算、通信可能重叠，整层 elapsed 仍由依赖决定，各流 duration 不能直接相加。
 
-QuantMatmul 的单项提速，只能节省它在执行中占用的时间。端到端 TPOT 还取决于这些成本在整轮中的位置与占比。
-
-
+QuantMatmul 快了多少，只能省去它原来占用的那段时间。端到端 TPOT 还取决于其他工作与它在整轮里的位置。
 
 ### 复用上游已经量化的激活
 
-若上游已经提供 INT8 激活与 Scale，Linear 可以直接复用：
+上游已有 INT8 激活和 Scale 时，Linear 还能复用这份结果。
 
 ~~~python
 if isinstance(x, tuple):
@@ -117,21 +115,15 @@ else:
     quant_out, dynamic_scale = torch.ops.npu.npu_dynamic_quant(x)
 ~~~
 
-上游 fused/prolog 已输出 `(INT8 payload, scale)` tuple 时，这里不会再单独调用 <code>npu_dynamic_quant</code>。
+fused/prolog 已输出 `(INT8 payload, scale)` tuple，这里就不再单独调用 <code>npu_dynamic_quant</code>。
 
-
-
-对齐 Timeline 前应先查输入：普通 BF16 Tensor 有这次独立量化，已量化 tuple 则没有。
-
-
-
-
+因此同样叫 W8A8，普通 BF16 Tensor 路径有这次独立量化，已量化 tuple 路径则没有，Timeline 中的开销要对应实际输入。
 
 ## 二、DynamicQuant 小 M：arch35 源码对照
 
-先借 CANN arch35 的按行分核规则理解小 M。Ascend 910C 实际分支与 Tiling 仍待目标环境记录，本节公式只描述这个对照实现。
+CANN arch35 的按行分核规则，可以解释一种小 M 行为。下面的公式只属于这份对照实现，Ascend 910C 分支与实际 Tiling 另外记录。
 
-文件位置为：
+对应文件如下。
 
 ~~~text
 quant/dynamic_quant/
@@ -139,14 +131,14 @@ quant/dynamic_quant/
     └── dynamic_quant_tiling_arch35.cpp
 ~~~
 
-普通非 per-channel 路径调用：
+普通非 per-channel 分支进入下面的调用。
 
 ~~~text
 CalculateCoreNum(context)
 CalculateTilingData()
 ~~~
 
-<code>CalculateCoreNum()</code> 把末维作为 row width，其余维度乘积作为 row 数：
+<code>CalculateCoreNum()</code> 用末维作 row width，其余维度乘积作 row 数。
 
 ~~~cpp
 rowLen = x.shape[-1];
@@ -161,16 +153,14 @@ coreNum =
     );
 ~~~
 
-二维 Dense 输入为 `X.shape = [M, K]`，因此：
-
-
+二维 Dense 的 `X.shape = [M, K]`，对应下面的行数与行宽。
 
 ~~~text
 rowNum = M
 rowLen = K
 ~~~
 
-初始分核可写为：
+初始分核关系如下。
 
 ~~~text
 coreNum
@@ -178,7 +168,7 @@ coreNum
 min(Vector Core 数, M)
 ~~~
 
-未触发超长单行沿尾轴拆分时，可用 Vector Core 上限如下：
+如果没有触发超长单行沿尾轴拆分，Vector Core 上限按下面的关系确定。
 
 | M | DynamicQuant 最初可使用的 Vector Core 数上限 |
 | ---: | ---: |
@@ -187,43 +177,35 @@ min(Vector Core 数, M)
 | 4 | 4 |
 | 8 | 8 |
 
-这说明 arch35 对照分支中的 standalone per-token DynamicQuant 按行并行，M 很小时即使有更多 Vector Core，也缺少足够输入行分给它们。
-
-
-
-
+这个 standalone per-token DynamicQuant 分支按行并行。M 很小，即使硬件有更多 Vector Core，输入行也可能不够分。
 
 ### 一个重要例外：超长 row 可以沿尾轴进一步拆
 
-不过，这个规则还有超长 row 的例外。
+单行特别宽时，还有另一条拆分路径。
 
-<code>CalculateTilingData()</code> 会估算单行 UB 占用。单行放不下且满足 `rowNum <= vectorCoreNum / 2`，以及下一条件时：
+<code>CalculateTilingData()</code> 估算单行 UB 占用，单行放不下、`rowNum <= vectorCoreNum / 2` 且满足下面的条件，才可能走这条例外。
 
 `calcSize >= 4 × maxUseUbSize`
 
-可能进入 `CalculateTilingForPertenLargeMulticore`，沿尾轴继续拆给多核。
+这时可能进入 `CalculateTilingForPertenLargeMulticore`，沿尾轴继续分给多核。
 
+所以小 M 不保证最多只能用 M 个核，行宽与模板也参与选择。
 
-
-因此，小 M 不必然等于只能使用 M 个核，还需核对行宽和所选模板。
-
-DeepSeek-V4 主要 W8A8 Dense K 为 4096 或 1024。目标 build 采用 full-load 还是特殊大形状路径，需要从实际 Tiling Log 查明。
+DeepSeek-V4 主要 W8A8 Dense K 为 4096 或 1024，目标 build 是 full-load 还是特殊大形状路径，需要实际 Tiling Log。
 
 ### 从分块规则到实际耗时还缺什么
 
-这条独立算子逐行处理并生成 per-token scale，Host 根据行数安排 Vector Core，最后用 <code>SetBlockDim(coreNum)</code> 发布 block 数。
+独立算子逐行处理、生成 per-token scale，Host 按行数分配 Vector Core，最后通过 <code>SetBlockDim(coreNum)</code> 发布 block 数。
 
-
-
-Tiling 说明工作如何分配，耗时还取决于 CANN build、Stream、启动方式、K、UB template 及前后融合。需要将这些信息和 Profiler 的 Launch、Device Duration 对齐，才能形成性能结论。
+分块解释工作怎样分，耗时还受 CANN build、Stream、启动方式、K、UB template 和前后融合影响。这些信息对应到 Profiler 的 Launch、Device Duration，才是性能证据。
 
 ## 三、QuantMatmul 的小 M 分块与待测问题
 
-接着仍以 arch35 为对照，观察 M 进入 base block、SmallMN 和 StreamK 计算的方式。
+QuantMatmul 仍以 arch35 作对照，看 M 怎样进入 base block、SmallMN、StreamK 计算。
 
 ### M 怎样参与 Tiling 计算
 
-<code>base_block_calculator.cpp</code> 的默认 base block 使用：
+<code>base_block_calculator.cpp</code> 的默认 base block 如下。
 
 ~~~cpp
 baseM =
@@ -233,7 +215,7 @@ baseM =
     );
 ~~~
 
-StreamK 也由真实 <code>inputParams_.mSize</code> 计算：
+StreamK 同样读取真实 <code>inputParams_.mSize</code>。
 
 ~~~text
 baseM
@@ -242,21 +224,15 @@ nCnt
 preSplitKBlockCnt
 ~~~
 
-再判断是否进入 `UpdateSmallMnStreamKBase()`。
+然后再判断 `UpdateSmallMnStreamKBase()`。
 
-因此 M 会参与 baseM、M block 数、MN 并行度、StreamK 以及最终 used cores 的选择。
-
-
-
-
-
-
+baseM、M block 数、MN 并行度、StreamK 和最终 used cores，都受到 M 影响。
 
 ### 但没有找到“1/2/4/8 四档固定分支”
 
-针对固定 arch35 QuantBatchMatmulV3 Tiling 检索，未找到按 `M=1/2/4/8` 逐项硬编码的分支，也未找到相应 A8W8 WeightNz Decode bucket 表。
+在这份 arch35 QuantBatchMatmulV3 Tiling 中，针对性检索没有找到 `M=1/2/4/8` 各自硬编码的分支，也没有找到相应 A8W8 WeightNz Decode bucket 表。
 
-其分块大量依赖：
+分块主要依赖下面这些输入。
 
 ~~~text
 mSize
@@ -269,17 +245,13 @@ coreNumMN
 SmallMn
 ~~~
 
-通过真实形状计算分块结果。
+它们按真实形状导出分块结果。
 
-M=1/2/4/8 当然可以得到不同 Tiling，但现有源码证据支持的是按形状推导，不能将差异解释成一张固定四档查表。
-
-
+M=1/2/4/8 可以导出不同 Tiling，源码支持的是形状推导，尚没有证据将它解释为固定四档查表。
 
 ### 为什么现实中仍然可能看到 latency cliff
 
-形状推导仍会在整数边界发生离散切换：
-
-
+形状推导也可能在整数边界切换。
 
 ~~~text
 CeilAlign(M, alignment)
@@ -291,24 +263,18 @@ L1 / L0 capacity
 Graph bucket / padding
 ~~~
 
-所以实测也可能出现：
+因此实测仍可能呈现下面的变化。
 
 ~~~text
 M=7 → latency A
 M=8 → latency B
 ~~~
 
-发现 latency cliff 后，需要用 Tiling dump 对照执行选择；不能先假定存在 8 的固定 bucket，再推断必然突变。
-
-
-
-
-
-
+出现 latency cliff，要把曲线对应到 Tiling dump 的实际切换。存在阶跃，不等于预先假定的固定 8 bucket 得到了证明。
 
 ### 对齐小 M 耗时与 Tiling 变化
 
-例如先固定一组真实 DeepSeek-V4 Linear：
+例如选一组真正参与量化的 DeepSeek-V4 Linear。
 
 ~~~text
 wq_a:
@@ -316,9 +282,9 @@ K=4096
 N=1024
 ~~~
 
-只改变 `M = 1, 2, 4, 8, 16, 32, 64`。
+其他条件固定，只改变 `M = 1, 2, 4, 8, 16, 32, 64`。
 
-逐点记录：
+每点保留以下记录。
 
 ~~~text
 operator duration
@@ -328,13 +294,11 @@ used cores
 StreamK status
 ~~~
 
-得到这些目标环境证据后，才能画出 Ascend 910C、当前 CANN build 和该 DeepSeek-V4 形状对应的小 M 曲线。
-
-
+这些结果才能构成当前 CANN build、当前 DeepSeek-V4 形状在 Ascend 910C 上的小 M 曲线。
 
 ## 四、FRACTAL_NZ 对齐与实际矩阵形状
 
-固定 SGLang 尝试将 W8A8 Weight 转为：
+SGLang 尝试把 W8A8 Weight 转成下面的格式。
 
 ~~~python
 weight =
@@ -344,20 +308,20 @@ weight =
     )
 ~~~
 
-INT8 预检查要求：
+INT8 的预检查条件如下。
 
 ~~~text
 K % 16 == 0
 N % 32 == 0
 ~~~
 
-不满足则保留 ND，并提示可能影响性能。
+不满足就保留 ND，并提示可能的性能影响。
 
-再把规则代入具体模型维度。
+将这些条件代入模型维度。
 
 ### 官方模型的关键维度
 
-DeepSeek-V4-Flash-0731 的公开配置为：
+DeepSeek-V4-Flash-0731 的公开配置如下。
 
 ~~~text
 hidden_size            = 4096
@@ -369,7 +333,7 @@ o_groups               = 8
 moe_intermediate_size  = 2048
 ~~~
 
-ModelSlim recipe 在 Attention include <code>*attn*</code>，同时排除：
+ModelSlim recipe 的 Attention include 是 <code>*attn*</code>，同时排除下面这些模块。
 
 ~~~text
 *wo_a
@@ -380,7 +344,7 @@ ModelSlim recipe 在 Attention include <code>*attn*</code>，同时排除：
 ...
 ~~~
 
-因此可选实际量化的投影做 NZ 对照：
+实际进入量化的投影，可以选来比较 NZ、ND。
 
 | Layer | 逻辑 K | 逻辑 N |
 | --- | ---: | ---: |
@@ -388,7 +352,7 @@ ModelSlim recipe 在 Attention include <code>*attn*</code>，同时排除：
 | <code>wkv</code> | 4096 | 512 |
 | <code>wq_b</code> | 1024 | 32768 / <code>attn_tp_size</code> |
 
-官方 TP16/DP16 DPA 的 `attn_tp_size = 1`，此时：
+官方 TP16/DP16 DPA 的 `attn_tp_size = 1`，对应下面的形状。
 
 ~~~text
 wq_b:
@@ -396,15 +360,11 @@ K = 1024
 N = 32768
 ~~~
 
-这些主要 W8A8 Attention Dense 形状通过当前 INT8 FRACTAL_NZ alignment 预检查，至少不会在这一步受阻。
-
-
-
-
+这些主要 W8A8 Attention Dense 形状通过了当前 INT8 FRACTAL_NZ alignment 预检查，加载不会在这项条件上被挡回。
 
 ### FRACTAL_NZ 还会改变 op-plugin 的真实入口
 
-op-plugin 还按权重格式选择入口：
+op-plugin 也根据权重格式选择入口。
 
 ~~~text
 Weight = FRACTAL_NZ
@@ -416,11 +376,11 @@ Weight = ND
 aclnnQuantMatmulV5
 ~~~
 
-格式参与下游 QuantMatmul 分发，所以比较 NZ、ND 耗时时，也需记录实际调用的算子。
+NZ、ND 因而不只存储不同，还会影响 QuantMatmul 分发，计时需要连实际算子一起保留。
 
 ### 测量 NZ 与 ND 的耗时差异
 
-对于上面这些 DSV4 形状，选择过程为：
+上述 DSV4 形状的选择过程如下。
 
 ~~~text
 这些 DSV4 shape 能通过 NZ alignment
@@ -430,7 +390,7 @@ SGLang 会尝试 format cast
 成功后进入 WeightNz ACLNN 路径
 ~~~
 
-NZ、ND 的实际耗时还受 M、K/N、Tiling、缓存访问影响。可用同一 checkpoint 分别加载两种格式：
+实际耗时还随 M、K/N、Tiling、缓存访问改变。同一个 Checkpoint 分别加载两种格式，便可形成下面的对照。
 
 ~~~text
 A:
@@ -444,9 +404,9 @@ SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT=1
 → aclnnQuantMatmulV5
 ~~~
 
-对齐模型、M/N/K、Batch、并行配置、CANN 与 Graph。
+对照保持模型、M/N/K、Batch、并行配置、CANN 和 Graph 相同。
 
-同时比较：
+比较项如下。
 
 ~~~text
 QuantMatmul duration
@@ -455,11 +415,11 @@ TTFT / TPOT
 throughput
 ~~~
 
-环境变量在权重加载阶段生效，因此这组 A/B 需要分别启动服务，确认各自加载了目标格式。
+环境变量在权重加载时生效，这份 A/B 要分别启动服务，并确认各自实际加载的格式。
 
 ## 五、Expert Token 数与 Grouped MatMul
 
-Token 路由到专家后，每组 GEMM 具有自己的输入行数：
+Token 路由到不同专家，各组 GEMM 的输入行数分别确定。
 
 ~~~text
 Expert 0: M_0
@@ -468,31 +428,29 @@ Expert 1: M_1
 Expert E: M_e
 ~~~
 
-Ascend Runner 将 `expert_tokens` 作为下列参数：
-
-
+Ascend Runner 将 `expert_tokens` 通过下面的参数传入。
 
 ~~~python
 group_list=expert_tokens
 ~~~
 
-交给 <code>npu_grouped_matmul</code>，实际专家分布直接参与 GMM。
+<code>npu_grouped_matmul</code> 因而直接使用本轮专家分布。
 
 ### CANN 中的 128 阈值及其分支条件
 
-固定 GroupedMatmul Tiling 的注释记载：单专家 Token 数低于 128 时，Cube 算力不能完全发挥，开启两个 Vector 核可能劣化。代码使用 `SMALL_TUNING_CONFIG_THRESHOLD = 128`，并通过 `has_sufficient_tuning = tuningConfig_ >= 128` 参与 AIV:AIC 比例选择。另有 A8W8 Fixed-Axis 优化，要求预期 Token/Expert 在 `128 ~ 512`。
+固定 GroupedMatmul Tiling 注释记载，单专家 Token 数低于 128 时 Cube 不易充分发挥，开启两个 Vector 核可能变差。实现以 `SMALL_TUNING_CONFIG_THRESHOLD = 128`、`has_sufficient_tuning = tuningConfig_ >= 128` 参与 AIV:AIC 比例选择，另有要求预期 Token/Expert 为 `128 ~ 512` 的 A8W8 Fixed-Axis 优化。
 
-这里的 128 有上游实测背景，但它对应预期每专家行数的 tuning hint。能否用来解释 SGLang 的曲线，还需先看调用者传了什么。
+这个 128 带有上游实测背景，读取的却是预期每专家行数的 tuning hint。SGLang 当前传入了什么，决定能否用它解释曲线。
 
 <a id="sglang-tuning_config"></a>
 
-torch-npu 接口提供可选 `tuning_config=None`，固定 SGLang 的 `GroupedMatmul.forward()` 没有显式传入它。op-plugin / CANN 缺少这份 hint 时对应 `tuningConfig_=0`，不会自动替换成实际 group list 中的 128、192 或其他行数。
+torch-npu 提供可选 `tuning_config=None`，固定 SGLang `GroupedMatmul.forward()` 没显式传它，下游 op-plugin / CANN 的 `tuningConfig_=0`。group list 里实际的 128、192 或其他行数，不会自动替代这项 hint。
 
-因此，实际 `group_list` 与预期 Token hint 是两个输入。分析当前 wrapper 是否触发相关优化，需要核对 `tuningConfig_` 及所选分支，仅凭一个 128 常量还不能判断。
+实际 `group_list` 和预期 Token hint 是两个输入。是否触发优化，需要对应 `tuningConfig_` 与所选分支，常量本身没有给出当前 wrapper 的执行结果。
 
 ### Fixed-Axis 分支与 DeepSeek-V4 的矩阵形状
 
-Fixed-Axis A8W8 还要求特定矩阵形状：
+Fixed-Axis A8W8 还受下面的矩阵形状约束。
 
 ~~~text
 (K,N)
@@ -502,7 +460,7 @@ or
 (7168,4096)
 ~~~
 
-本例 DeepSeek-V4-Flash Expert 则为：
+本例 Flash Expert 的形状则如下。
 
 ~~~text
 W13:
@@ -514,15 +472,15 @@ K = 2048
 N = 4096
 ~~~
 
-W13/W2 不匹配该 Fixed-Axis K/N，需按真实形状判断后续分支。
+W13、W2 的 K/N 都不匹配该 Fixed-Axis 条件，后续仍按真实形状选择分支。
 
 ### 用 Expert-local M_e 描述负载
 
-描述专家负载时，同时保留总计算量、各 Expert 的有效 GEMM M、空 Expert 数、AIV/AIC 调度和负载不均。即使总路由行数相同，分布也可能改变单专家形状与执行安排；不能只拿 batch 总 Token 数解释 GMM。
+专家负载既包含总工作量，也包含每个 Expert 的有效 M、空 Expert 数、AIV/AIC 调度和不均衡程度。总路由行数相同，分布仍可能改变单专家矩阵形状，batch 总 Token 数不足以解释 GMM。
 
-但延迟在哪个整数点出现突变，还需实测。
+具体在哪个整数点出现延迟突变，还没有目标环境实测。
 
-可覆盖下面的 M_e：
+M_e 的采样可覆盖下面这些值。
 
 ~~~text
 M_e =
@@ -531,7 +489,7 @@ M_e =
 160, 192, 256
 ~~~
 
-并记录：
+同时保留以下信息。
 
 ~~~text
 GroupedMatmul duration
@@ -541,45 +499,45 @@ workspace
 expert_tokens histogram
 ~~~
 
-128 值得重点采样，因为源码有相应调优条件。当前 SGLang 路径会不会在此出现 latency cliff，仍要结合 Profiler 和实际 Tiling 判断。
+128 两侧值得密集采样，因为源码有相应调优条件。SGLang 这条调用路径是否出现 cliff，仍由实际 Tiling 与 Profiler 决定。
 
 ## 六、用四组实验测量实际成本
 
-将前面的待测问题分成四组，每组先隔离一种成本。这些是测量方案，本篇没有用尚未执行的对照填入收益。
+下面四组实验分别隔离一种成本，是测量方案，本文没有执行它们、填入收益。
 
 ### 实验 A：Standalone DynamicQuant 的小 M 成本
 
-固定 BF16→INT8，分别取 `K=1024/4096`，改变 `M=1,2,4,8,16,32,64`。每点记录 DynamicQuant device duration、Host enqueue gap、blockDim / coreNum 和 tiling key。
+固定 BF16→INT8，取 `K=1024/4096`，改变 `M=1,2,4,8,16,32,64`，记录 DynamicQuant device duration、Host enqueue gap、blockDim / coreNum 与 tiling key。
 
-对照目标分支是否采用普通二维 per-token 路径的 `coreNum ≈ min(vectorCoreNum, M)`，同时检查超长 row 例外。若上游 fused/prolog 已生成 `(quant, scale)` tuple，就没有这里的 standalone DynamicQuant，应单独列出。
+检查目标分支是否采用普通二维 per-token 的 `coreNum ≈ min(vectorCoreNum, M)`，同时看超长 row 例外。上游 fused/prolog 已产出 `(quant, scale)` tuple 时，没有这次 standalone DynamicQuant，另行列出。
 
 ### 实验 B：WeightNz Quantmatmul 的 M sweep
 
-选实际参与量化的 DSV4 投影：`wq_a` 为 `K=4096,N=1024`，`wkv` 为 `K=4096,N=512`，`wq_b` 为 `K=1024,N=32768/attn_tp_size`。改变 `M=1,2,4,8,16,32,64,128`。
+选择实际量化的 DSV4 投影，`wq_a` 为 `K=4096,N=1024`，`wkv` 为 `K=4096,N=512`，`wq_b` 为 `K=1024,N=32768/attn_tp_size`，改变 `M=1,2,4,8,16,32,64,128`。
 
-每点将 kernel duration 与 tiling key、baseM/baseN/baseK、mCnt/nCnt、StreamK、used cores 放在一起，观察哪些 M 真正改变执行结构。
+kernel duration 与 tiling key、baseM/baseN/baseK、mCnt/nCnt、StreamK、used cores 一起保留，观察哪些 M 改变了执行结构。
 
 ### 实验 C：FRACTAL_NZ A/B
 
-A 使用默认 FRACTAL_NZ，B 设置 `SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT=1`。两组需分别启动、加载并确认权重格式；保持相同 M/N/K、checkpoint、并行配置、CANN 与 Graph。
+A 用默认 FRACTAL_NZ，B 设 `SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT=1`，分别启动、加载，确认 Weight 格式，保持相同 M/N/K、Checkpoint、并行配置、CANN 与 Graph。
 
-对照实际进入的是 WeightNz 还是 V5，再比较 operator duration、TTFT、TPOT 和 throughput。只有拿到这些同条件结果，才能报告该形状的 NZ 收益。
+确认实际走 WeightNz 还是 V5，再比较 operator duration、TTFT、TPOT、throughput。同条件的结果，才对应这个形状的 NZ 收益。
 
 ### 实验 D：Expert-local M_e sweep
 
-固定 W13 为 `K=4096,N=4096`，W2 为 `K=2048,N=4096`。控制专家行数，重点采样 128 两侧：
+固定 W13 `K=4096,N=4096`、W2 `K=2048,N=4096`，控制专家行数，密集采 128 两侧。
 
 ~~~text
 M_e = 1,2,4,8,16,32,64,96,127,128,129,192,256
 ~~~
 
-保留 GMM duration、tiling key、AIV:AIC ratio、expert token histogram 和 empty expert ratio。如果附近确有延迟突变，再检查实际参数与 Tiling 的切换位置；常量本身不能证明曲线形状。
+保留 GMM duration、tiling key、AIV:AIC ratio、expert token histogram、empty expert ratio。附近若出现突变，再对应实际参数与 Tiling 切换，不能由常量预定曲线形状。
 
 ### 最后才看端到端
 
-单算子结果说明局部成本，最终仍需区分 Prefill、Decode、Target Verify，比较同条件的 TTFT、TPOT、输出 Token 吞吐和请求吞吐。
+单算子说明局部成本，回到服务还要分 Prefill、Decode、Target Verify，比较同条件 TTFT、TPOT、输出 Token 吞吐和请求吞吐。
 
-固定 SGLang 的 DeepSeek-V4-Flash W8A8 NPU CI 定义了下面这组门槛，并同时启用 ModelSlim W8A8、DPA、DeepEP INT8 和 DSpark：
+固定 W8A8 NPU CI 定义下面的性能门槛，同时开启 ModelSlim W8A8、DPA、DeepEP INT8、DSpark。
 
 ~~~text
 input_len        = 8000
@@ -589,7 +547,7 @@ TPOT gate        = 50 ms
 output throughput gate = 3100 token/s
 ~~~
 
-这是整套配置的绝对性能验收，没有同条件 BF16 对照。要判断量化带来多少相对收益，仍需单独做 BF16 / W8A8 A/B。
+这是一整套配置的绝对性能验收，没有同条件 BF16 基线，相对量化收益仍需要 BF16 / W8A8 A/B。
 
 ## 源码结论与待测问题
 
@@ -605,9 +563,7 @@ output throughput gate = 3100 token/s
 | SGLang 中的 128 阈值 | 当前 wrapper 未显式传 `tuning_config`，实际切换由对应分支决定 |
 | DSV4 是否命中 Fixed-Axis 特殊优化 | 当前 W13/W2 K/N 不匹配该源码分支的特定 shape |
 
-结合这些源码，W8A8 需要沿形状、布局和实际分支逐项分析。下图中的 DynamicQuant 行并行说明仍限于前文 arch35 对照，Ascend 910C 的对应路径需要另核。
-
-
+下面将形状、布局与分支放回同一张图。DynamicQuant 行并行仍指前述 arch35 对照，Ascend 910C 对应路径另外确认。
 
 ~~~text
 Decode 小 M
@@ -635,10 +591,6 @@ CANN Tiling
 才能转化成 TTFT / TPOT / Throughput 收益
 ~~~
 
-dtype 提供了低精度计算的可能，形状、布局、Tiling 和专家负载则影响它能否在当前请求上发挥。可回到四组测量方案，核对局部收益最终是否缩短了整轮耗时。
-
-
-
 ## 源码入口
 
 SGLang：
@@ -659,5 +611,3 @@ CANN：
 - [QuantBatchMatmulV3 base block calculator](https://github.com/hicann/ops-nn/blob/0026707d7ecb24d258e030d831c8121ac2d055bd/matmul/quant_batch_matmul_v3/op_host/op_tiling/arch35/base_block_calculator.cpp)
 - [QuantBatchMatmulV3 StreamK tiling](https://github.com/hicann/ops-nn/blob/0026707d7ecb24d258e030d831c8121ac2d055bd/matmul/quant_batch_matmul_v3/op_host/op_tiling/arch35/qbmm_streamk_tiling.cpp)
 - [GroupedMatmul tiling](https://github.com/hicann/ops-transformer/blob/bbb4dafe296119266a0a64133f17bc42b6597ed3/gmm/grouped_matmul/op_host/op_tiling/grouped_matmul_tiling.cpp)
-
-形成 Ascend 910C 的实测结论时，需将 DynamicQuant M sweep、WeightNz M sweep、NZ/ND A/B、Expert <code>M_e</code> sweep 的结果，与对应 Tiling dump、Profiler 时间线一起留存。

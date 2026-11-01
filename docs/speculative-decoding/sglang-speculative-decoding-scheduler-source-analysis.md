@@ -1,23 +1,25 @@
 # SGLang 投机解码调度：请求进度、设备状态与跨轮交接
 
-Scheduler 将一次投机周期交给 Spec Worker，内部再展开 Draft、Verify、Accept 和提交。Worker 返回后，Scheduler 处理输出、更新请求，并安排下一轮。
+一次 Verify 推进了 4 枚 Token，设备已经准备下一轮，CPU 的请求长度却还没变。这在 Overlap 中可以是正常状态：设备执行、Host 结果处理、下一轮发布，使用各自的进度。
 
-Overlap 允许设备侧下一轮输入先就绪，CPU 结果处理稍后完成。下面跟随请求，看长度、KV 预留、publish、FutureMap 怎样接住这种时差；Mixed Tail 的特殊转换放到后半部分。
+Scheduler 将一个投机周期交给 Spec Worker，内部的 Draft、Verify、Accept、状态提交完成后，再结算请求输出。理解这段交接，需要沿同一条请求追长度、KV 预留和 FutureMap，而不能只比两个字段是否相等。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
 
-> 源码固定到 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。覆盖 Spec V2 Scheduler、EAGLE/EAGLE3、DSpark、DFLASH、UNO、NGRAM 和 overlap relay，重点看各对象的修改责任、跨轮进度、KV 边界与执行交接。
+源码固定为 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`，核对日期为 2026-09-20。范围包括 Spec V2 Scheduler、EAGLE/EAGLE3、DSpark、DFLASH、UNO、NGRAM 与 overlap relay，重点跟踪各对象由谁修改、何时交接。
 
 </details>
 
 ## 一、Scheduler 与 Spec Worker 的分工
 
-Scheduler 管执行机会和容量，Spec Worker 管本轮候选算法。同一轮工作，在两者眼中有不同的粒度。
+Scheduler 决定请求何时运行、容量是否足够；Spec Worker 再把本轮工作展开为候选算法。两者观察同一轮的粒度不同。
 
-### 第一层：Scheduler Macro State
+<a id="scheduler-macro-state"></a>
 
-Scheduler 通过 `Req`、`ScheduleBatch` 判断请求能否运行、处于 Prefill 还是 Decode、本轮要预留多少 KV、可以和谁组批，以及是否完成、retract 或继续留在 `running_batch`。请求的外层状态可画为：
+### Scheduler 管理请求与 batch
+
+`Req`、`ScheduleBatch` 保存外层计划：请求处于 Prefill 还是 Decode，和谁组批，预留多少 KV，以及完成、retract 或继续留在 `running_batch`。外层状态为：
 
 ```text
 WAITING
@@ -34,17 +36,19 @@ RUNNING / DECODE
 FINISHED         RETRACT
 ```
 
-### 第二层：Spec Worker Micro State
+<a id="spec-worker-micro-state"></a>
 
-选定本轮 DECODE 后，Worker 才展开 Draft / Proposal、Target Verify、Accept、设备状态提交，以及 Draft Extend 或下一轮状态准备。这些阶段可以发生在同一次 Scheduler iteration 内。
+### Spec Worker 展开本轮候选周期
 
-EAGLE 依次执行 `draft()`、`verify()`、`eagle_sample()`、accepted-path commit，再进入 `_draft_extend_for_decode()`。[`EAGLEWorkerV2.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/eagle_worker_v2.py)
+Scheduler 选定 DECODE，Worker 才运行 Draft / Proposal、Target Verify、Accept，提交设备状态，并准备 Draft Extend 或下一轮输入。这些步骤可以都落在同一次 Scheduler iteration 中。
 
-DSpark 则由 `proposer.propose()` 开始，经过 `resolve_verify_token_budget()`、`schedule_layout()`、Target Verify、`accept_and_finalize()`，最后提交 hidden / state。[`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
+EAGLE 的顺序是 `draft()`、`verify()`、`eagle_sample()`、accepted-path commit，随后 `_draft_extend_for_decode()`。[`EAGLEWorkerV2.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/eagle_worker_v2.py)
 
-算法内部步骤不同，外层 `ScheduleBatch.forward_mode` 都仍可为 DECODE。Worker 为实际模型调用另建 Draft、TARGET_VERIFY、DRAFT_EXTEND_V2 等 ForwardBatch。
+DSpark 则从 `proposer.propose()` 进入，经过 `resolve_verify_token_budget()`、`schedule_layout()`、Target Verify、`accept_and_finalize()`，最后提交 hidden / state。[`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-### 为什么 `model_worker` 是这个边界的关键
+算法内部步骤不同，外层 `ScheduleBatch.forward_mode` 仍可统一为 DECODE。实际模型调用再构建 Draft、TARGET_VERIFY、DRAFT_EXTEND_V2 等 ForwardBatch。
+
+### model_worker 连接两层调用
 
 Scheduler 初始化时选择普通 Worker 或 Spec Worker：
 
@@ -55,23 +59,23 @@ else:
     self.model_worker = self.draft_worker
 ```
 
-普通路径由 `TpModelWorker` 运行 Target；投机路径则由 Spec Worker 编排 Draft side 与 Target Worker。Scheduler 始终调用 `self.model_worker.forward_batch_generation(batch)`，由已选中的 Worker 展开这一周期。[`Scheduler.init_model_worker()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)
+普通路径用 `TpModelWorker` 运行 Target；投机路径由 Spec Worker 编排 Draft side 和 Target Worker。选好以后，Scheduler 都调用 `self.model_worker.forward_batch_generation(batch)`。[`Scheduler.init_model_worker()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)
 
-### `ForwardMode` 也说明了两层状态
+### ForwardMode 描述不同层次的工作
 
-`EXTEND`、`DECODE`、`MIXED`、`IDLE` 用于描述外层调度工作，`TARGET_VERIFY`、`DRAFT_EXTEND_V2` 等模式再说明内部单次 forward 的设备输入。因此，看到一次 Scheduler DECODE，不能据此数成一次普通模型 Decode。
+外层以 `EXTEND`、`DECODE`、`MIXED`、`IDLE` 描述调度工作；内部再用 `TARGET_VERIFY`、`DRAFT_EXTEND_V2` 描述单次 forward 的设备输入。统计一次 Scheduler DECODE，可能已经包含多次模型调用。
 
 ## 二、CPU、设备与下一轮状态怎样错开
 
-跨轮交接从 `Req`、`ReqKvInfo` 保存的请求状态开始，经 `ScheduleBatch` 形成本轮计划，再整理成 `ForwardBatch` 的 Tensor 与执行 metadata。Worker 用 `GenerationBatchResult` 返回结果，`FutureMap` 则承接 overlap 下的下一轮输入与长度。
+请求从 `Req`、`ReqKvInfo` 进入 `ScheduleBatch` 的本轮计划，再整理为 `ForwardBatch` 的 Tensor 和 metadata。执行结果由 `GenerationBatchResult` 返回；Overlap 还通过 `FutureMap` 传递下一轮输入和长度。
 
-固定源码将 `ScheduleBatch` 作为 Scheduler 管理的高层调度数据，将 `ForwardBatch` 作为模型执行层使用的低层 Tensor 视图。[`schedule_batch.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
+源码也据此将 `ScheduleBatch` 定义为高层调度数据，将 `ForwardBatch` 定义为模型执行使用的低层 Tensor 视图。[`schedule_batch.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
 
-这些对象分别服务 CPU 结果结算、当前设备执行和下一轮交接。Overlap 下更新时刻不同，长度不必瞬间相等，读取时要先确定所处阶段。
+CPU 结果结算、设备执行、下一轮交接各自在不同时间修改数据。下面分别看它们的长度。
 
 ### `Req.seqlen`：用户逻辑序列时钟
 
-Req.seqlen 定义为：
+`Req.seqlen` 按逻辑输入、输出计数：
 
 ```python
 @property
@@ -79,27 +83,21 @@ def seqlen(self) -> int:
     return len(self.origin_input_ids) + len(self.output_ids)
 ```
 
-它统计 CPU 请求记录已经接受的逻辑长度。
+这里能看到的是 CPU 请求记录已接受的长度。
 
+`output_ids` 由 Result Processor 处理结果时追加：
 
-
-其中 output_ids 只在 Result Processor 处理结果时追加。
-
-
-
-所以这个进度需要等 Host 结算。
-
-
+Host 尚未结算，`Req.seqlen` 就还没有推进。
 
 ### `kv_committed_len`：Host KV Ledger 的 committed boundary
 
-`ReqKvInfo` 的 `kv_committed_len`、`kv_allocated_len` 都初始化为 0。前者记录 Host 已结算的正式 KV 边界，后者记录已分配容量，并保持 `kv_committed_len <= kv_allocated_len`。[`ReqKvInfo`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
+`ReqKvInfo` 将 `kv_committed_len`、`kv_allocated_len` 初始化为 0。前者记 Host 已结算的正式 KV 边界，后者记已分配容量，始终有 `kv_committed_len <= kv_allocated_len`。[`ReqKvInfo`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
 
-Spec V2 的正常修改者是 `SchedulerBatchResultProcessor._resolve_spec_v2_tokens()`。Draft Worker 不能提前推进 Host committed，而要由结果处理统一提交实际接受的完整区间。固定 AST 回归检查也约束了这份修改责任。[`test_decode_bookkeeping_ownership.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/test/registered/unit/spec/test_decode_bookkeeping_ownership.py)
+Spec V2 正常由 `SchedulerBatchResultProcessor._resolve_spec_v2_tokens()` 推进 Host committed，Draft Worker 只准备执行，接受区间留给结果处理统一提交。固定 AST 回归检查也约束了修改者。[`test_decode_bookkeeping_ownership.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/test/registered/unit/spec/test_decode_bookkeeping_ownership.py)
 
 ### `ScheduleBatch.seq_lens`：本轮 Device Forward Frontier
 
-ScheduleBatch.seq_lens 则描述本轮设备边界，约定为：
+设备这一轮使用的 `ScheduleBatch.seq_lens` 约定为：
 
 ```text
 batch.seq_lens
@@ -107,32 +105,28 @@ batch.seq_lens
 当前这一轮 forward 能安全认为已经 KV-ready 的 prefix boundary
 ```
 
-EAGLE、DSpark Verify 后会产生：
+EAGLE、DSpark 在 Verify 后产生新边界：
 
 ```python
 new_seq_lens = old_seq_lens + accept_lens
 ```
 
-并经 `FutureMap.publish()` 提前交给下一轮。
+`FutureMap.publish()` 将它提前交给下一轮。
 
-所以 overlap 时设备长度可已到 Verify N 的新 frontier，CPU 却仍停留于：
-
-
-
-
+于是设备可能已到 Verify N 的新 frontier，CPU 仍停在旧位置：
 
 ```text
 Req.seqlen
 Req.kv.kv_committed_len
 ```
 
-等待上轮结果处理。
+等上轮结果处理完成，Host 才追上。
 
+<a id="verify-iteration-token"></a>
 
+### Overlap 允许领先一轮 Verify
 
-### 允许错开“最多一个 Verify iteration”，不是“一个 Token”
-
-相关窗口注释明确为：
+窗口注释给出的限制是：
 
 ```text
 kv_committed_len lags device seq_lens
@@ -140,17 +134,11 @@ by up to one verify under overlap;
 the 2x window absorbs it.
 ```
 
+判断入口为 [`mamba_lazy_spec_in_window()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)。
 
+这里限制的是 Verify 轮次，一轮可以推进多枚 Token。
 
-固定入口见 [`mamba_lazy_spec_in_window()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)。
-
-限制是一轮 Verify 的差距，并非只差一枚 Token。
-
-
-
-例如 `accept_lens = 4` 时：
-
-
+例如 `accept_lens = 4`：
 
 ```text
 Device frontier:
@@ -160,13 +148,9 @@ Host ledger:
 Req.kv.kv_committed_len = C
 ```
 
-相差 4 个 Token，仍只是一轮尚未 CPU 结算的 Verify。
-
-
+设备与 Host 相差 4 个 Token，仍只有一轮 Verify 等待 CPU 结算。
 
 普通 overlap 循环也只保留前一批未处理结果：
-
-
 
 ```text
 run current batch
@@ -176,17 +160,15 @@ append result
 process previous batch result
 ```
 
-由此形成一轮 forward lookahead。
+它由此向前准备一轮 forward。
 
+<a id="reserve-2x"></a>
 
+### KV reserve 怎样覆盖这段领先
 
-### 为什么 reserve 要做 2x？
+[`get_alloc_reserve_per_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/mem_cache/allocation_sizing.py) 据此计算 reserve。
 
-reserve 的设计见 [`get_alloc_reserve_per_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/mem_cache/allocation_sizing.py)。
-
-
-
-实现为：
+实现使用：
 
 ```python
 def get_alloc_reserve_per_decode() -> int:
@@ -197,21 +179,13 @@ def get_alloc_reserve_per_decode() -> int:
     return 2 * get_alloc_len_per_decode()
 ```
 
-它为 Host 落后的一轮进度留空间。
+N+1 开始规划时，Host committed 可能还在 C，设备已经到 C+accepted_N。
 
-N+1 规划时，Host committed 可能仍在 C，而设备已到 C+accepted_N。
+预留空间要同时容纳尚未结算的推进，以及接下来的一轮：
 
+只留一次最大 footprint 可能不够，所以当前采用 `2 × alloc_len`。
 
-
-
-
-仅保留一轮最大 footprint 可能低估需求，当前采用 `2 × alloc_len`。
-
-
-
-
-
-覆盖下面两部分：
+这两段分别是：
 
 ```text
 one-verify host lag
@@ -219,38 +193,36 @@ one-verify host lag
 current speculative working set
 ```
 
-
-
 ### `Req.seqlen` 与 `kv_committed_len` 为什么经常差 1？
 
-另外还有 pending bonus 带来的一位差。它已经追加到 `output_ids`，但要到下一轮作为输入执行，才有自己的 KV。
+活跃请求还常有一枚 pending bonus。它已追加进 `output_ids`，要到下轮当作输入计算，才会拥有 KV。
 
-例如 `kv_committed_len=P` 时，已形成的 KV 覆盖 `[0,P)`，pending bonus 位于 P，`Req.seqlen=P+1`。下一轮以它为 root，若输出为 `D1 D2 D3 B2`，实际执行的输入就是 old_bonus、D1、D2、D3。
+`kv_committed_len=P` 时，KV 覆盖 `[0,P)`，pending bonus 位于 P，因此 `Req.seqlen=P+1`。下轮以它为 root，若输出 `D1 D2 D3 B2`，实际算过的输入就是 old_bonus、D1、D2、D3。
 
-CPU 结算时，两份进度分别更新：
+CPU 结算后：
 
 ```python
 req.kv.kv_committed_len += 4
 req.output_ids.extend([D1, D2, D3, B2])
 ```
 
-此时仍有 `Req.seqlen = kv_committed_len + 1`，只是 pending Token 换成 B2。这是一条活跃稳态请求的关系；Transition、Mixed、Finished 要按各自阶段读取，不能无条件套用差一公式。
+两份进度仍相差一位，pending Token 换为 B2。这描述活跃稳态请求；Transition、Mixed、Finished 要按各自执行阶段解释长度。
 
 ## 三、预留 KV 空间并保留提交边界
 
-下一轮从 `batch.prepare_for_decode()` 开始准备。普通路径为每请求分配一个 Token 的位置，写入 req_to_token 并推进相应长度；投机路径则进入 `spec_prepare_for_decode(batch)`，先为候选执行留空间。[`ScheduleBatch.prepare_for_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
+`batch.prepare_for_decode()` 为下一轮准备空间。普通路径给每请求分配一个 Token 位置、写入 req_to_token、推进对应长度；投机路径转入 `spec_prepare_for_decode(batch)`，先给候选留容量。[`ScheduleBatch.prepare_for_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/schedule_batch.py)
 
 ### EAGLE 做的是 speculative reserve
 
-EAGLE 最终调用 `eagle_prepare_for_decode(batch)`。它取得 `get_alloc_reserve_per_decode()` 的 reserve，调用 `page_aligned_decode_alloc_lens()` 算出 `cur_kv_lens`、`nxt_kv_lens`、`num_needed_tokens`，再交给 `alloc_for_spec_decode(...)` 分配。[`eagle_prepare_for_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/eagle_utils.py) [`alloc_for_spec_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/mem_cache/allocation.py)
+EAGLE 进入 `eagle_prepare_for_decode(batch)`，取得 reserve，经 `page_aligned_decode_alloc_lens()` 算出 `cur_kv_lens`、`nxt_kv_lens`、`num_needed_tokens`，再调用 `alloc_for_spec_decode(...)`。[`eagle_prepare_for_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/eagle_utils.py) [`alloc_for_spec_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/mem_cache/allocation.py)
 
-更新的是持有容量，即 `req.kv.kv_allocated_len = max(req.kv.kv_allocated_len, nxt_kv_len)`，不会同时执行 `kv_committed_len += speculative width`。
+这时更新 `req.kv.kv_allocated_len = max(req.kv.kv_allocated_len, nxt_kv_len)`，Host committed 保持原值。
 
 <a id="watermark"></a>
 
-两个边界因此各有含义：allocated 限制当前可写容量，committed 表示 Host 已结算的有效历史。空间要在候选计算前准备，正式 Host commit 则等待接受结果处理，预留容量本身不确认候选正确。
+allocated 表示可写容量，committed 表示 Host 已确认的历史。候选必须先有写入空间，是否提交则要等接受结果。
 
-### 一个典型状态
+### 预留区间中的候选
 
 ```text
 0
@@ -262,13 +234,11 @@ EAGLE 最终调用 `eagle_prepare_for_decode(batch)`。它取得 `get_alloc_rese
                     kv_committed_len          kv_allocated_len
 ```
 
-Draft、Verify 可暂写 `[C,A)`，接受结果才决定其中哪段成为正式前缀。
+Draft、Verify 可以暂写 `[C,A)`；接受结果再从中确定有效前缀。
 
 ## 四、on_publish 发布哪一部分进度
 
-接着看本轮执行与发布。
-
-外层循环为：
+本轮执行结束前，Worker 会发布下一轮所需的长度。外层循环首先调用：
 
 ```text
 get_next_batch_to_run()
@@ -280,7 +250,7 @@ run_batch()
 process_batch_result()
 ```
 
-Spec V2 调用：
+Spec V2 走到：
 
 ```text
 run_batch()
@@ -288,13 +258,11 @@ run_batch()
 self.model_worker.forward_batch_generation()
 ```
 
-model_worker 已是对应投机编排者。
-
-
+此时 model_worker 已是投机编排者。
 
 ### EAGLE：一次 Scheduler DECODE 包含 Draft → Verify → Accept → Draft Extend
 
-EAGLE 的 Decode 内部为：
+EAGLE 在 Decode 内部执行：
 
 ```text
 ScheduleBatch(DECODE)
@@ -314,9 +282,7 @@ _draft_extend_for_decode()
 GenerationBatchResult
 ```
 
-Verify 临时切为 TARGET_VERIFY，构造 Target ForwardBatch。
-
-
+Verify 暂时切换 TARGET_VERIFY，创建 Target ForwardBatch：
 
 ```text
 Scheduler Macro State:
@@ -329,13 +295,13 @@ DRAFT
 → DRAFT_EXTEND
 ```
 
-外层管理请求、batch，内部执行候选周期，再以结果交接。
+完成候选周期后，Worker 把结果交回外层管理请求和 batch。
 
+<a id="dspark-scheduler-contract"></a>
 
+### DSpark 的 GenerationBatchResult
 
-### DSpark：内部算法完全不同，但 Scheduler Contract 一样
-
-DSpark 虽使用另一算法，最后仍返回相同类别信息：
+DSpark 的候选算法不同，返回信息仍包括：
 
 ```text
 Proposal
@@ -353,8 +319,6 @@ accept_and_finalize()
 commit_hidden / Mamba state
 ```
 
-
-
 ```python
 GenerationBatchResult(
     next_token_ids=...,
@@ -364,13 +328,9 @@ GenerationBatchResult(
 )
 ```
 
-所以外层无需展开候选树或预算算法。
+Scheduler 据此继续工作，无需自己展开候选树或重算预算。
 
-
-
-
-
-它只需要得到：
+外层消费的是这些交接结果：
 
 ```text
 本轮接受了什么？
@@ -378,11 +338,11 @@ GenerationBatchResult(
 下一轮 draft state 是什么？
 ```
 
+<a id="on_publishnew_seq_lens"></a>
 
+### on_publish 发布确定的 frontier
 
-### 所有 `on_publish(new_seq_lens)` 的语义边界是一致的，但物理位置不完全一致
-
-共同含义是下一轮可以安全取得已确定的 frontier，具体发布位置则不同：
+各 Worker 都通过 `on_publish(new_seq_lens)` 发布下一轮可用的 frontier，调用位置有所不同：
 
 <a id="eagle-multi-layer-eagle-frozen-kv-mtp"></a>
 <a id="dspark"></a>
@@ -397,15 +357,13 @@ GenerationBatchResult(
 | NGRAM | accepted KV 搬运后发布，之后更新 Host corpus |
 | UNO | 接受得到新长度后直接发布 |
 
-EAGLE 注释将 fence 放在 verify-end，DSpark 也明确在 publish 之后继续一部分提交。发布长度、设备尾部完成、Worker 返回，是三个不同的时刻。[`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
+EAGLE 将 fence 注释放在 verify-end；DSpark 在 publish 以后还继续部分提交。长度已发布、设备尾部工作完成、Worker 返回，因而可能是三个时刻。[`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)
 
-### 为什么这样仍然安全？
+### 发布之后怎样保证依赖
 
-这允许 schedule_stream 提前做 Host、allocation 准备。
+publish 之后，schedule_stream 能提前进行 Host 和 allocation 准备。
 
-
-
-下一次模型仍不能越过当前 forward stream 上的：
+下一次模型仍受当前 forward stream 上这些工作约束：
 
 ```text
 Draft Extend
@@ -413,9 +371,9 @@ Mamba commit
 hidden materialization
 ```
 
-这些依赖保持程序顺序。
+它们通过流依赖保持程序顺序。
 
-所以可以形成：
+时间上形成：
 
 ```text
 Forward Stream:
@@ -436,17 +394,13 @@ Schedule Stream:
           Prepare Schedule N+1
 ```
 
-重叠的是准备与本轮尾部设备工作，依赖状态的模型执行并未乱序。
+下一轮准备与本轮设备尾部重叠；真正依赖状态的模型执行仍要等待。
 
+<a id="prefill-publish"></a>
 
+### Prefill 发布已物化的 Prefix
 
-
-
-
-
-### Prefill 的 publish 也遵守同一个思想
-
-Prefill 也按以下方式发布：
+Prefill 的发布为：
 
 ```text
 Target Prefill
@@ -458,9 +412,7 @@ publish()
 Draft prefill / hidden injection
 ```
 
-这里不加一，是因为：
-
-
+这里沿用当前长度，因为：
 
 ```text
 batch.seq_lens
@@ -468,21 +420,17 @@ batch.seq_lens
 当前已经 KV-ready 的 prompt boundary
 ```
 
-新采样 Token 仍是下轮 pending root，不属于已物化 Prefix。
+新采样 Token 留作下一轮 pending root，本次尚未为它计算 KV。
 
-
-
-因此 frontier 继续为 batch.seq_lens，与 Decode 末尾 bonus 一致。
-
-
+所以发布 frontier 仍为 batch.seq_lens，与 Decode 的末尾 bonus 处理相同。
 
 ## 五、隔离临时字段与保护共享对象
 
-再区分字段重新绑定与共享对象原地修改。
+Worker 临时替换一个字段，与原地修改字段指向的共享对象，后果不同。
 
-Worker 可临时替换 `forward_mode`、`input_ids`、`seq_lens`、`seq_lens_cpu`、`seq_lens_sum`、`spec_info`、`out_cache_loc`、`sampling_info` 等字段。
+内部可能重绑 `forward_mode`、`input_ids`、`seq_lens`、`seq_lens_cpu`、`seq_lens_sum`、`spec_info`、`out_cache_loc`、`sampling_info`。
 
-例如：
+例如切换模式：
 
 ```text
 DECODE
@@ -490,22 +438,20 @@ DECODE
 TARGET_VERIFY
 ```
 
-或替换为 `batch.spec_info = EagleVerifyInput`。
+也可能替换 `batch.spec_info = EagleVerifyInput`。
 
-若这些模式、位置泄漏到外层，下轮可能误判为：
+临时模式、位置留到外层，会让下一轮误以为仍在内部阶段：
 
 ```text
 EXTEND
 TARGET_VERIFY
 ```
 
-再造成重复合并或错误分配。
-
-
+结果可能是重复合并，或按错误形态分配缓存。
 
 ### `_forward_isolation()` 恢复字段绑定，不深拷贝整个 Batch
 
-isolation 先保存：
+`_forward_isolation()` 进入时保存字段引用：
 
 ```python
 snapshot_v2_full = not batch.spec_algorithm.is_none()
@@ -516,18 +462,16 @@ sched_snapshot = {
 }
 ```
 
-退出时恢复：
+退出时恢复原绑定：
 
 ```python
 for name, value in sched_snapshot.items():
     setattr(batch, name, value)
 ```
 
+实现为 [`Scheduler._forward_isolation()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)。
 
-
-实现见 [`Scheduler._forward_isolation()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)。
-
-保存的是字段引用，而非整对象深拷贝。操作效果分别为：
+它没有深拷贝整个 batch，因此替换引用与修改共享内容会出现不同结果：
 
 | Worker 内的操作 | 退出 isolation 后 |
 | --- | --- |
@@ -535,36 +479,24 @@ for name, value in sched_snapshot.items():
 | `batch.seq_lens.add_(1)` | 原 Tensor 的内容已改变，恢复引用不能撤销它 |
 | 修改字段所引用的列表或嵌套对象 | 不会因 `setattr` 自动恢复内部内容 |
 
-因此临时替换由 isolation 恢复，共享内容还需单独复制、同步；sampling_info.copy_for_forward 负责其中一项。
-
-
-
-
+isolation 负责恢复临时绑定，共享内容另靠复制或同步保护，`sampling_info.copy_for_forward` 就处理其中一项。
 
 ### `sampling_info` 为什么还要额外换成 forward-only copy？
 
-进入隔离前还会创建：
+进入隔离前，先创建 forward-only copy：
 
 ```python
 batch.sampling_info =
     sched_sampling_info.copy_for_forward()
 ```
 
-因为内部可能多次 ForwardBatch.init_new，直接共用 Scheduler sampling state 会重复累计 penalty。
+内部可能多次调用 `ForwardBatch.init_new`。若一直共用 Scheduler sampling state，penalty 会被重复累计。
 
-
-
-所以将 Scheduler 状态与 forward-local view 分开。
-
-
-
-
-
-
+这份副本让每次内部 forward 使用自己的 view，Scheduler 保留原状态。
 
 ### Overlap 下还要保活两轮 tensor reference
 
-record_batch_in_overlap 另将以下 Tensor 保存在两槽 ring：
+`record_batch_in_overlap` 还用两槽 ring 保存这些 Tensor：
 
 ```text
 batch
@@ -572,11 +504,9 @@ batch
 attr_snapshot
 ```
 
+即使字段后来被重绑，旧 Tensor 也要保活。
 
-
-这用于保活引用。
-
-Worker 可能执行：
+例如 Worker 执行：
 
 ```text
 rebind batch.input_ids
@@ -584,27 +514,21 @@ rebind batch.out_cache_loc
 rebind batch.spec_info
 ```
 
-若旧引用过早释放，allocator 可在 forward stream 尚未读完时复用空间。
+forward stream 可能仍在读取旧 Tensor；引用提前释放，就可能让 allocator 复用那块空间。
 
-字段语义恢复与设备 Tensor lifetime 都需处理，恢复绑定并不能替代保活。
+恢复字段保证外层含义正确，保活引用保证设备仍读到原数据，两项工作缺一不可。
 
+<a id="re-commit"></a>
 
+### isolation 之后怎样接回跨轮状态
 
+退出 isolation 会恢复旧绑定。本轮产生的下一轮状态，需要通过明确的结果字段重新接入。
 
-
-
-
-### 那么哪些字段最终必须显式 re-commit？
-
-退出恢复后，跨轮新状态还要显式接回。
-
-先恢复旧绑定，再按 next-iteration contract 提交结果。
-
-
+两条执行路径分别处理这一步。
 
 #### Overlap 路径
 
-Overlap 返回后接入：
+Overlap 接入：
 
 ```python
 batch.input_ids = None
@@ -616,23 +540,17 @@ batch.spec_info.future_indices =
     future_indices
 ```
 
-这里不会直接用 new_seq_lens 覆盖 batch.seq_lens。
+这里不直接用 new_seq_lens 覆盖 batch.seq_lens。
 
-
-
-长度已进入 FutureMap.publish relay，下轮从以下入口解析：
-
-
-
-
+新长度先进入 `FutureMap.publish` relay，下轮到这里解析：
 
 ```python
 future_map.resolve_seq_lens_cpu(batch)
 ```
 
-取得 fresh frontier。
+解析后才取得本次要用的 fresh frontier。
 
-所以两类显式提交分别为：
+所以结果字段和长度 relay 分别接入：
 
 ```text
 ScheduleBatch object:
@@ -643,11 +561,9 @@ new_seq_lens
 bonus/topk/hidden...
 ```
 
-
-
 #### Non-overlap 路径
 
-Non-overlap 没有该 relay，恢复后需要直接接入：
+Non-overlap 没有 relay，恢复旧绑定后直接更新：
 
 ```python
 batch.spec_info = batch_result.next_draft_input
@@ -663,24 +579,22 @@ batch.seq_lens_sum =
 batch.input_ids = None
 ```
 
-这是同步路径的跨轮提交。
+新状态由此进入下一轮同步执行。
 
+<a id="rollback"></a>
 
+### ForwardMode 临时绑定的恢复
 
-### 哪些字段必须保持 rollback？
+内部 forward_mode 要恢复为外层 DECODE。
 
-临时 forward_mode 需恢复为外层 DECODE。
-
-
-
-不能保留内部的：
+这些内部模式只描述本轮调用：
 
 ```text
 TARGET_VERIFY
 DRAFT_EXTEND_V2
 ```
 
-其他临时绑定还有：
+其他临时字段包括：
 
 ```text
 verify-time input_ids
@@ -689,13 +603,11 @@ temporary EagleVerifyInput
 temporary verify seq_lens
 ```
 
-本次结束后恢复，下一轮状态从结果接入。
-
-
+它们在本次执行结束后恢复，下一轮数据从结果重新接入。
 
 ### 字段隔离与显式提交的边界
 
-因此可临时改变本轮模式、缓存位置、spec_info、长度，但仅通过规定结果提交下一轮。
+本轮可以换模式、缓存位置、spec_info、长度，跨轮则通过规定的结果交接：
 
 | 对象变化 | 隔离区退出后的处理 |
 | --- | --- |
@@ -703,18 +615,18 @@ temporary verify seq_lens
 | 原 Tensor 或嵌套对象被原地修改 | 浅快照不会自动撤销，需要调用方单独保护 |
 | 下一轮 Draft 输入、长度与 bonus | 通过对应结果和交接路径显式发布或提交 |
 
-调试还要查看共享对象是否原地写入，只比字段最终引用不能覆盖此类修改。
+如果修改发生在共享对象内部，最终字段引用即使相同，内容也可能已经改变，需要沿实际写入追踪。
 
-前面是普通 Spec Decode，Mixed Tail 还要将边界 Token 当作单 Token EXTEND，下面另看。
+到这里讨论的是普通 Spec Decode。Mixed Tail 会将 pending bonus 改作单 Token EXTEND，长度解释也随之转换。
 
 ## 六、进阶：Mixed Tail 的 FutureMap 重建
 
 <details markdown="1">
 <summary>展开 Mixed Tail 的字段变化与 +1 来源</summary>
 
-Mixed Tail 的 +1 必须放在这条路径里理解。
+Mixed Tail 在 resolve 时执行了一个局部的长度转换：
 
-resolve 中会设置：
+设置：
 
 ```python
 fresh = self.new_seq_lens_buf[idx]
@@ -731,9 +643,7 @@ out_cache_loc[-n:] =
     req_to_token[idx, fresh]
 ```
 
-这里需要 +1，而通常的定义是：
-
-
+它与普通 Spec 的定义相差一位：
 
 ```text
 new_seq_lens
@@ -741,11 +651,11 @@ new_seq_lens
 next KV-ready frontier
 ```
 
----
+<a id="mixed-chunk"></a>
 
-### 先看 Mixed Chunk 在做什么
+### Mixed Chunk 合并 Prefill 与单 Token tail
 
-mixed chunked prefill 将以下工作放到一起：
+mixed chunked prefill 合并这些工作：
 
 ```text
 new prefill requests
@@ -753,35 +663,23 @@ new prefill requests
 running decode requests
 ```
 
-形成 ForwardMode.MIXED。
+外层模式成为 ForwardMode.MIXED。
 
+原 Decode 请求在这里作为 1-token EXTEND tail 执行，还没有进入普通投机 Verify。
 
+`mix_with_running` 的注释是 `a tail's prefix is its row length - 1`。
 
-已有 Decode 在此被改写为 1-token EXTEND tail，尚不是普通投机 Verify。
+Spec 行在这之前停留在 committed base。
 
-mix_with_running 注释为 `a tail's prefix is its row length - 1`。
+<a id="speculative-request-1-token-tail"></a>
 
-Spec 行则停在 committed base。
+### tail 物化的是 pending bonus
 
+这一个输入就是 pending bonus。
 
+fresh frontier 为 C，表示 `[0,C)` 已有 KV；bonus 在位置 C，等待本次执行。
 
-### 对 speculative request 来说，那个“1 token tail”是什么？
-
-这个 tail 正是 pending bonus。
-
-若 fresh frontier 为 C，表示 `[0,C)` 已有 KV，bonus 位于 C 尚未执行。
-
-
-
-
-
-
-
-
-
-
-
-Mixed Extend 要做的是：
+Mixed Extend 要完成：
 
 ```text
 prefix:
@@ -791,26 +689,24 @@ extend token:
 bonus at C
 ```
 
-所以 EXTEND 的 full length 应为 C+1。
+因此本次 EXTEND 的 full length 是 C+1。
 
-相应设置为：
+字段设置为：
 
 ```python
 seq_lens = fresh + 1
 ```
 
-
-
-并将：
+缓存位置也改为：
 
 ```python
 out_cache_loc =
     req_to_token[idx, fresh]
 ```
 
-定位到 bonus 在 C 的写入槽。
+指向 bonus 在 C 的写入槽。
 
-整段关系可画为：
+执行关系为：
 
 ```text
 FutureMap new_seq_lens = C
@@ -835,15 +731,13 @@ write position = C
 full seq_len = C + 1
 ```
 
-它将 KV-ready base 转为这次单 Token 执行后的完整长度。
+这次转换从 KV-ready base，得到单 Token 执行后的 full length。
 
+<a id="result-processor-kv_committed_len-1"></a>
 
+### Result Processor 提交已执行的 bonus
 
-### 为什么 Result Processor 还要专门 `kv_committed_len += 1`？
-
-本次确实执行了 bonus，所以 prefill Result Processor 有单独的提交分支：
-
-
+本次确实算过 bonus，因此 prefill Result Processor 单独提交它：
 
 ```python
 if (
@@ -855,7 +749,7 @@ if (
     req.kv.kv_committed_len += 1
 ```
 
-其注释为：
+代码注释为：
 
 ```text
 A mixed spec tail committed its pending bonus token;
@@ -863,66 +757,46 @@ advance so the next spec prepare_for_decode
 reserves from the right base.
 ```
 
+调用见 [`SchedulerBatchResultProcessor.process_batch_result_prefill()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/batch_result_processor.py)。
 
+这里 `kv_committed_len += 1` 提交的是 Mixed Extend 刚物化的 pending bonus。
 
-入口见 [`SchedulerBatchResultProcessor.process_batch_result_prefill()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/batch_result_processor.py)。
+<a id="futuremap-resolve-1"></a>
 
-因此这里 +1 具有局部含义：Mixed Extend 将 pending bonus 物化并提交。
+### 普通 FutureMap resolve 保留原 frontier
 
+普通 Spec 下轮仍从 C 开始，让 bonus 作为 Verify root。
 
-
-
-
-### 为什么不是所有 FutureMap resolve 都 `+1`？
-
-普通 Spec 下轮则仍要从 C 开始，把 bonus 作为 Verify root。
-
-
-
-
-
-若先把 seq_lens 设 C+1，就提前宣称该 Token 已有 KV。
-
-
-
-
+若提前设成 C+1，就会把尚无 KV 的 Token 当成历史。
 
 所以普通解析使用 `seq_lens = new_seq_lens`。
 
-只有 Mixed Tail 改作 EXTEND 才转换为 new_seq_lens+1。
+Mixed Tail 改作 EXTEND 时，才使用 new_seq_lens+1。
 
+<a id="1-dp-attention"></a>
 
+### DP Attention 有另一条模式转换路径
 
-
-
-### 这个 `+1` 也不是 DP Attention 的通用规则
-
-这还不能推广为 DPA 规则。
-
-Spec+DPA 明确采用：
-
-
+Spec+DPA 的组批约定为：
 
 ```text
 make sure prefill and decode batches
 will not be mixed
 ```
 
-merge 前先协调 Prefill/Decode 模式，避免当成普通 mixed chunk。
+它在 merge 前协调 Prefill/Decode 模式，避免直接当成普通 mixed chunk。
 
+入口位于 [`Scheduler.get_next_batch_to_run()` 附近](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)。
 
-
-入口见 [`Scheduler.get_next_batch_to_run()` 附近](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler.py)。
-
-DPA 另有：
+DPA 还可能执行：
 
 ```python
 maybe_convert_decode_to_extend()
 ```
 
-其他 DP 跑 Extend、本地跑 Decode 时，可为 mode-homogeneous 和 Extend Graph，将整个 Decode 暂转 1-token EXTEND view。
+其他 DP 跑 Extend、本地跑 Decode 时，为了 mode-homogeneous 和 Extend Graph，会将整个 Decode 临时转为 1-token EXTEND view。
 
-对应入口为：
+实现位于：
 
 [`SchedulerDPAttnAdapter.maybe_convert_decode_to_extend()`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/dp_attn.py)
 
@@ -932,38 +806,32 @@ maybe_convert_decode_to_extend()
 batch.convert_decode_to_extend()
 ```
 
-直接按已准备的 full sequence length 解释：
+并按已经准备的 full sequence length 解释：
 
 ```text
 prefix = seq_len - 1
 extend_len = 1
 ```
 
-它不是 FutureMap.resolve_mixed_spec_tails。
+这条路径没有经过 FutureMap.resolve_mixed_spec_tails。
 
-所以 new_seq_lens+1 只属于 overlap mixed-tail 的 late binding，不是 FutureMap 或 DPA 的统一长度定义。
+new_seq_lens+1 属于 overlap mixed-tail 的 late binding。DPA 的模式转换，要按自己的长度来源理解。
 
+<a id="late-bind"></a>
 
+### FutureMap 执行前再绑定长度
 
+schedule time 的 Host 可能还落后一轮，`mix_with_running` 先用旧进度构造 provisional tail。
 
-
-### 为什么要 late-bind？
-
-schedule time 的 Host 可能仍落后一轮，mix_with_running 先据此构造 provisional tail。
-
-
-
-
-
-到真正执行入口：
+到了真正执行入口：
 
 ```python
 resolve_forward_inputs()
 ```
 
-再等待 publish_ready，读取最新 FutureMap.new_seq_lens_buf。
+代码等待 publish_ready，再读取最新 FutureMap.new_seq_lens_buf。
 
-重新绑定：
+随后重新绑定：
 
 ```text
 fresh prefix
@@ -971,15 +839,13 @@ fresh out_cache_loc
 fresh seq_lens
 ```
 
-这样才能以最新设备进度执行本次 tail。
-
-
+这时 tail 才会从最新设备 frontier 开始执行。
 
 </details>
 
-## 七、把跨轮状态交还 Scheduler
+## 七、对齐 Scheduler 跨轮日志
 
-将整条交接放在一起：
+把 Host、当前执行、下一轮发布放到同一条时间线上：
 
 ```mermaid
 flowchart TD
@@ -1024,7 +890,7 @@ flowchart TD
     Y --> B
 ```
 
-图中分别是 Host 已结算、本轮执行、下一轮已发布三种进度。它们短暂错开，由各自负责的组件更新：
+图中三种进度由各自的组件更新：
 
 <a id="pastcpu-settle"></a>
 <a id="present-scheduler-transaction"></a>
@@ -1036,15 +902,11 @@ flowchart TD
 | 本轮执行 | `ScheduleBatch`、`ForwardBatch` | 当前调度事务及临时 TARGET_VERIFY / DRAFT_EXTEND 状态 |
 | 下一轮已发布 | `FutureMap.new_seq_lens`、`FutureMap.output_tokens_buf`、`next_draft_input`，以及 topk / hidden / confidence | 下一轮可以依赖的输入和进度 |
 
-### 四个跨轮状态边界
+<a id="debug-scheduler"></a>
 
-对齐日志时，先保留这几处差别：设备 frontier 可以领先 Host 一轮 Verify，差距可大于一枚 Token；publish 可以早于 Draft Extend、Mamba commit 或 hidden 注入结束，但后续模型受流依赖保护；isolation 恢复字段绑定，跨轮新状态仍需经结果或 FutureMap 接入，原地修改也需单独保护。
+### 按请求、轮次记录交接字段
 
-Mixed Tail 的 `+1` 还要另看：KV-ready base 为 C，本次单 Token EXTEND 正在物化位置 C 的 bonus，才将 full length 转成 C+1。这个转换不属于普通 Spec 或 DPA 的统一规则。
-
-### Debug Scheduler 时建议同时打印这些字段
-
-记录字段时按请求、轮次并排：
+这些字段可以放在同一条请求的逐轮日志里：
 
 ```text
 rid
@@ -1072,15 +934,15 @@ FutureMap.new_seq_lens_buf[req_pool_idx]
 FutureMap.output_tokens_buf[req_pool_idx]
 ```
 
-再问四个具体问题：当前值属于 Host 结算还是设备执行？由 Scheduler、Worker、ResultProcessor 还是 FutureMap 修改？它表示 committed、allocated 还是 pending bonus？当前是普通 Decode、TARGET_VERIFY、Mixed 单 Token Extend，还是 DPA 的 decode→extend view？
+一条日志还需要标出写入者、所属阶段，以及 committed、allocated 或 pending bonus 的含义。同样的长度，在普通 Decode、TARGET_VERIFY、Mixed 单 Token Extend、DPA decode→extend view 中可能对应不同输入。
 
-这样可先区分长度属于哪个阶段、由谁修改，再检查是否漏提交、重复处理或共享对象被改写。
+这样才能沿 publish、resolve、结果处理的先后顺序，定位漏提交、重复处理或共享内容被改写的位置。
 
 ## 源码阅读入口
 
-源码版本仍为开头固定的 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`。
+以下入口采用本文固定版本 `sgl-project/sglang @ 5f017ffabb6ab8d214f6a4616ee8bd98a376034a`。
 
-源码可按以下顺序进入：
+按调用顺序查阅：
 
 | 目标 | 固定版本源码 |
 | --- | --- |
@@ -1105,5 +967,3 @@ FutureMap.output_tokens_buf[req_pool_idx]
 | `FutureMap.publish / stash / resolve` | [`overlap_utils.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/overlap_utils.py) |
 | DP decode→extend conversion | [`dp_attn.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/python/sglang/srt/managers/scheduler_components/dp_attn.py) |
 | Bookkeeping ownership regression test | [`test_decode_bookkeeping_ownership.py`](https://github.com/sgl-project/sglang/blob/5f017ffabb6ab8d214f6a4616ee8bd98a376034a/test/registered/unit/spec/test_decode_bookkeeping_ownership.py) |
-
-跨轮日志先标 Host、设备或已发布结果，再追 publish、resolve、结果处理的消费时刻。长度不同可能是预期滞后，也可能是漏提交、重复提交或原地修改，需要沿同一请求逐步判断。

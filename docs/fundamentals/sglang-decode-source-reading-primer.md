@@ -1,18 +1,18 @@
 # 从一次 Decode 读懂 SGLang：Tensor、缓存与下一枚 Token
 
-读 Decode 可以从一枚刚采样的 Token 开始：下一轮把它送进模型，为它计算并写入缓存，读取本请求历史，经过 MoE、LM Head 与采样，再得到下一枚输出。
+上一轮采样出一枚 Token，只是确定了整数 ID，它还没有作为输入经过模型。这一轮才会计算它的各层状态，再预测下一枚输出。
 
-下面用三条请求的小 batch 走一轮。首先分清采样和执行：知道一个 Token ID 时，它还没有作为输入经过模型；下轮执行才产生它在各层的 KV。后面的长度、位置与缓存映射，都沿这个先后关系理解。
+下面用三条请求走一次普通 Decode。把输入 ID 接到逻辑位置、缓存目标，再经过 Attention、MoE、LM Head、Sampler，最后回到同一请求。源码中的长度加一、行重排和分组通信，都可以在这次执行中找到对应。
 
-主线为普通非投机 Target Decode，源码固定到 SGLang commit <code>0f6761b54facebb47f2068f87ecccd8f14da3a0e</code>，核对日期 2026-09-21。采用 DeepSeek-V4，只展开执行链所需的 mHC、DSV4 Attention、MoE 和 Vocab Parallel LM Head。
+主线为普通非投机 Target Decode，采用 DeepSeek-V4，源码固定为 SGLang commit <code>0f6761b54facebb47f2068f87ecccd8f14da3a0e</code>，核对日期为 2026-09-21。mHC、DSV4 Attention、MoE、Vocab Parallel LM Head 只展开这条链需要的部分。
 
 ## 一、上一轮的输出怎样成为本轮输入
 
-假设某请求在本轮开始前已有 L 个位置的 KV，对应逻辑位置 `0,1,2,...,L-1`。
+设本轮开始前已缓存 L 个位置，逻辑历史为 `0,1,2,...,L-1`。
 
-上一轮采样出 <code>y_L</code>，它将成为当前 <code>input_ids</code>。此前只选出了整数 ID，位置 L 的 K/V 尚未计算。因此，当前轮先安排缓存槽位，模型执行时再写入内容。
+上轮采样的 <code>y_L</code> 成为当前 <code>input_ids</code>。位置 L 尚无 K/V，先由本轮分配槽位，再由各层执行写入。
 
-普通 Decode 的这些动作依次为：
+普通 Decode 的顺序为：
 
 ~~~mermaid
 flowchart TD
@@ -33,7 +33,7 @@ flowchart TD
     C --> D --> E --> F --> G --> H --> I --> J --> K
 ~~~
 
-固定 <code>ScheduleBatch.prepare_for_decode()</code> 先执行：
+固定 <code>ScheduleBatch.prepare_for_decode()</code> 先运行：
 
 ~~~python
 self.out_cache_loc = alloc_for_decode(
@@ -42,14 +42,14 @@ self.out_cache_loc = alloc_for_decode(
 )
 ~~~
 
-之后再推进长度：
+然后推进长度：
 
 ~~~python
 self.seq_lens = self.seq_lens + 1
 self.seq_lens_cpu = self.seq_lens_cpu + 1
 ~~~
 
-<code>alloc_for_decode()</code> 仍使用加一前的 L，将物理 slot 写入：
+<code>alloc_for_decode()</code> 使用加一之前的 L，把分配的 slot 填到：
 
 ~~~text
 req_to_token[
@@ -60,13 +60,13 @@ req_to_token[
 new_slot
 ~~~
 
-allocation 只为位置 L 安排空间和映射，各层 Attention 真正处理当前 Token 时，才形成并写入状态。不能由槽位已分配推断 KV 已计算完成。
+allocation 完成空间、映射准备。Attention 真正处理该 Token 时，才会向各层缓存写入状态。
 
-到 <code>ForwardBatch.init_new()</code> 时，<code>seq_lens</code> 已为 L+1，普通 Decode 默认按 `positions = clamp(seq_lens - 1, min=0)` 得到位置。
+到 <code>ForwardBatch.init_new()</code>，<code>seq_lens</code> 已是 L+1。普通 Decode 默认使用 `positions = clamp(seq_lens - 1, min=0)`。
 
-因此本轮仍是 `positions = L`。
+所以当前 Token 的 `positions = L`。
 
-字段可按时间顺序对照：
+字段按先后顺序为：
 
 | 字段 | 普通 Decode 当前语义 |
 | --- | --- |
@@ -79,24 +79,24 @@ allocation 只为位置 L 安排空间和映射，各层 Attention 真正处理�
 | <code>out_cache_loc[i]</code> | 当前 input token 的新 KV 写入目标 |
 | 本轮 Sampler 输出 | 下一轮使用的 <code>y_(L+1)</code> |
 
-例如已有 10 个位置，旧 L=10，新输入位于 position 10，ForwardBatch 长度则为 11。位置从 0 编号，长度统计位置总数；这里的普通非投机 <code>ForwardBatch.seq_lens</code> 供 Kernel 使用，已经包含当前输入。
+已有 10 个位置，旧 L=10，新输入 position=10，ForwardBatch 长度为 11。位置从 0 开始编号，长度统计总位置数；普通非投机 <code>ForwardBatch.seq_lens</code> 已包含当前输入，供 Kernel 使用。
 
-Draft / Verify 的长度另有语义，不能直接套用这条普通 Decode 关系。
+Draft / Verify 另外约定长度含义，本文先沿普通 Decode 继续。
 
 ## 二、把三条请求组织为 ForwardBatch
 
-调度器用 ScheduleBatch 描述这一轮选中了哪些请求，再由 ForwardBatch 把设备执行所需的 Tensor 交给 ModelRunner。字段包括 `forward_mode`、`batch_size`、`input_ids`、`req_pool_indices`、`seq_lens`、`out_cache_loc`、`seq_lens_sum`、`positions` 和 `sampling_info`。
+ScheduleBatch 描述本轮选中的请求，ForwardBatch 再把执行 Tensor 交给 ModelRunner：`forward_mode`、`batch_size`、`input_ids`、`req_pool_indices`、`seq_lens`、`out_cache_loc`、`seq_lens_sum`、`positions`、`sampling_info`。
 
-先跟踪本轮输入及其位置，也就是 `input_ids` 与 `positions`，再接上请求身份和缓存目标。
+先把 `input_ids`、`positions` 按行配对。
 
-三条请求都继续时，各自贡献一个新 Token。忽略 Graph padding，两个 Tensor 的形状为：
+三条继续中的请求各贡献一枚新 Token。不计 Graph padding，两份 Tensor 为：
 
 ~~~text
 input_ids   [3]
 positions   [3]
 ~~~
 
-三行可以有不同历史。例如原有 KV 长度分别为 10、7、20，本轮字段为：
+假设原 KV 长度分别为 10、7、20：
 
 | 本轮 Batch 行 | 原有 KV 长度 | 本轮 position | ForwardBatch.seq_lens |
 | ---: | ---: | ---: | ---: |
@@ -104,23 +104,23 @@ positions   [3]
 | 1 | 7 | 7 | 8 |
 | 2 | 20 | 20 | 21 |
 
-这是一个假设例子：ID、position 都只有三行，各行访问的历史却不同，因此还需 `req_pool_indices` 和 `seq_lens` 记录请求身份与长度。
+ID、position 各只有三行，每行读取的历史长度却不同。因此还需要 `req_pool_indices`、`seq_lens`。
 
-batch 行号仅是本轮排列。<code>req_pool_indices[i]</code> 选择 ReqToTokenPool 中的请求记录行，再由该行查历史，自己并非 KV 地址；<code>seq_lens[i]</code> 则向 Attention、页表逻辑提供本轮可见长度。
+本轮 batch 行号随组批变化。<code>req_pool_indices[i]</code> 先选 ReqToTokenPool 的请求记录行，由该行查历史；<code>seq_lens[i]</code> 提供本轮可见长度。请求记录行本身还不是 KV 地址。
 
-新增状态的写入目标由 `out_cache_loc` 描述。
+`out_cache_loc` 再给出新增状态写入的位置。
 
-写入坐标在执行边界还可能转换。<code>ForwardBatch.init_new()</code> 会调用：
+到执行边界，位置编号还可能再转换，<code>ForwardBatch.init_new()</code> 调用：
 
 ~~~python
 model_runner.kv_index_translator.rebind_write_loc(ret)
 ~~~
 
-固定 KVIndexTranslator 区分 virtual、physical、kernel-facing 三种 ID。它们在普通非 unified pool 中可以相同，unified / DCP 等布局则会将 <code>ForwardBatch.out_cache_loc</code> 重新绑定为 kernel-facing FULL-side ID，并把原值保留为 <code>out_cache_loc_virtual</code>。
+固定 KVIndexTranslator 区分 virtual、physical、kernel-facing ID。普通非 unified pool 中它们可以相同；unified / DCP 等布局会将 <code>ForwardBatch.out_cache_loc</code> 重绑为 kernel-facing FULL-side ID，原值留在 <code>out_cache_loc_virtual</code>。
 
-因此要连同阶段理解 <code>out_cache_loc</code>：ScheduleBatch 取得 canonical allocation，ForwardBatch 又可能转为 Kernel 接口编号。比较两个整数前，需先确定 ID 空间。
+因此 ScheduleBatch 中的 canonical allocation，到了 ForwardBatch 可能已换成 Kernel 接口编号。字段同名，读取时仍要识别它所处的 ID 空间。
 
-从请求到模型的交接可以画为：
+从请求到模型的交接为：
 
 ~~~mermaid
 flowchart TD
@@ -133,23 +133,23 @@ flowchart TD
     R --> SB --> FB --> MR --> M
 ~~~
 
-到 <code>ForwardBatch</code> 后，执行集合已经选定，接着需要跟踪设备收到的输入行、长度和缓存目标。
+进入 <code>ForwardBatch</code> 时，本轮请求已经选定。接下来跟踪这些行怎样被模型消费。
 
 ## 三、Embedding 与 mHC 的形状变化
 
-本轮普通 Decode 取 `T=B=3`，`input_ids` 形状为 `[3]`。执行 Embedding：
+本轮 `T=B=3`，`input_ids` 为 `[3]`。Embedding 执行：
 
 ~~~python
 hidden_states = self.embed_tokens(input_ids)
 ~~~
 
-以 DeepSeek-V4-Flash 的 hidden_size=4096 为例，得到 `[3,4096]` 的 hidden states。
+DeepSeek-V4-Flash 的 hidden_size=4096，因此输出 hidden states 为 `[3,4096]`。
 
-此例 V4 的 `hc_mult = 4`，表示扩展为 `[T,4,H]`。T=3、H=4096 时，每 Token 保存四路状态，4 并非请求数或 Attention Head 数。mHC 在子层前将它们混为二维 Working Hidden，子层后再混回多路状态。
+本例 `hc_mult = 4`，再扩为 `[T,4,H]`。T=3、H=4096，每 Token 保留四路状态。mHC 在子层前把它们混成二维 Working Hidden，子层后再混回多路。
 
-这里同时存在两种形状：持久 mHC State 为 `[T,4,H]`，Attention/MoE 使用的临时 Working Hidden 为 `[T,H]`。
+持久 mHC State 因而为 `[T,4,H]`，Attention/MoE 的临时 Working Hidden 为 `[T,H]`。
 
-一层内对应以下变化：
+一层内形状变化为：
 
 ~~~mermaid
 flowchart TD
@@ -168,15 +168,15 @@ flowchart TD
     P --> PRE --> W1 --> ATT --> W2 --> MID --> W3 --> MOE --> W4 --> POST --> P2
 ~~~
 
-<code>hc_pre()</code> 将四路 persistent state 混为子层所需 Working Hidden，同时维护 mixing coefficient；<code>hc_post()</code> 将 <code>[T,H]</code> 子层输出混回 <code>[T,4,H]</code>。
+<code>hc_pre()</code> 混合四路状态、生成 Working Hidden，同时维护 mixing coefficient；<code>hc_post()</code> 再把 <code>[T,H]</code> 子层输出混回 <code>[T,4,H]</code>。
 
-因此 Attention、MoE 收到 `[T,H]`，并不意味着四路状态丢失，前后混合操作仍在维护它。先跟清这两种形状，再读 Sinkhorn、post、comb 的数学，较容易确认每项作用。
+Attention、MoE 使用二维 Tensor 时，多路状态仍由前后的混合操作维护。读到 Sinkhorn、post、comb，可以先将它们放回这组输入、输出形状。
 
 ## 四、当前 Token 写入缓存并读取历史
 
-进入 Attention 的 Working Hidden 为 `[T,4096]`。
+Attention 接收 `[T,4096]` Working Hidden。
 
-它产生当前 Query 和新增 KV，Query 的概念路径为：
+由它生成当前 Query、新增 KV。Query 的概念路径为：
 
 ~~~text
 x [T,4096]
@@ -186,16 +186,16 @@ q_lora [T,1024]
 q [T, local_heads, 512]
 ~~~
 
-随后写入新状态、读取历史：写由 `out_cache_loc` 定位，读由请求记录及页表定位。逻辑位置与物理槽位通过映射连接。下方展开 DSV4 细节，也可以先跳到 MoE。
+新增 KV 经 `out_cache_loc` 写入；历史经请求记录、页表读取，逻辑位置由映射接到物理 slot。DSV4 的具体映射放在折叠段中，暂时略过也能继续接到 MoE。
 
 <details markdown="1">
 <summary>深入：Ascend DSV4 的写入、页表和压缩状态</summary>
 
 ### 写路径：当前 Token 的新状态写到哪？
 
-位置 L 已在 allocation 阶段取得 canonical full-side slot。
+位置 L 的 canonical full-side slot 已在 allocation 阶段分配。
 
-Ascend DSV4 的 SWA 写入继续将其转为 SWA location：
+Ascend DSV4 写 SWA 前，继续转成 SWA location：
 
 ~~~python
 swa_loc = token_to_kv_pool.translate_loc_from_full_to_swa(
@@ -204,7 +204,7 @@ swa_loc = token_to_kv_pool.translate_loc_from_full_to_swa(
 )
 ~~~
 
-再更新对应层：
+然后更新对应层：
 
 ~~~python
 pool.set_swa_buffer(
@@ -214,9 +214,9 @@ pool.set_swa_buffer(
 )
 ~~~
 
-DSV4 专用分配还可通过 <code>out_cache_loc_dsv4</code> 提供 `out_c4_loc` 与 `out_c128_loc`。若当前逻辑位置完成相应 compression ratio 的 block，便有新的 C4/C128 压缩目标。
+DSV4 专用分配还可以通过 <code>out_cache_loc_dsv4</code> 提供 `out_c4_loc`、`out_c128_loc`。当前位置完成相应 compression ratio 的 block 时，才形成新的压缩目标。
 
-因此当前 Token 的状态还可能分属以下位置：
+所以新增状态可能分属：
 
 ~~~text
 canonical full-side allocation
@@ -228,9 +228,7 @@ canonical full-side allocation
 
 ### 读路径：req_pool_indices 首先只是 Request row
 
-<code>req_pool_indices</code> 先选择 <code>ReqToTokenPool.req_to_token</code> 的请求行：
-
-
+历史读取先用 <code>req_pool_indices</code> 选择 <code>ReqToTokenPool.req_to_token</code> 的请求行：
 
 ~~~text
 req_to_token[
@@ -241,13 +239,13 @@ req_to_token[
 canonical token-slot id
 ~~~
 
-Base Ascend Backend 从该行读取历史 slots，再按 page size 转换为 page ID，构造 Block Table。
+Base Ascend Backend 从记录行取历史 slots，按 page size 转成 page ID，建立 Block Table。
 
-这里依次定位请求身份、逻辑 Token 位置和物理缓存页。
+这次查找依次经过请求、逻辑 Token 位置、物理缓存页。
 
 ### SWA、C4、C128 的 ownership 不是同一种映射
 
-Ascend 910C DSV4 的几条映射可展开为：
+Ascend 910C DSV4 的映射为：
 
 ~~~mermaid
 flowchart TD
@@ -274,11 +272,11 @@ flowchart TD
     R --> SIDE --> C128T --> C128P
 ~~~
 
-SWA 页表沿 full slot 做 Full→SWA 映射。
+SWA 页表通过 Full→SWA 映射转换 full slot。
 
-C4 同样从本请求 <code>req_to_token</code> 记录出发，在 ratio-4 的逻辑边界派生页。
+C4 也从本请求 <code>req_to_token</code> 开始，在 ratio-4 逻辑边界派生页。
 
-C128 则使用独立记录：
+C128 使用独立记录：
 
 ~~~python
 req_to_c128_sidecar[
@@ -287,19 +285,19 @@ req_to_c128_sidecar[
 ]
 ~~~
 
-它通过 request-scoped sidecar 管理物理页，不能简单把 full Token slot 除以 128。
+物理页由 request-scoped sidecar 管理，不能直接拿 full Token slot 除以 128。
 
-最终 Kernel 一起消费 Query、sequence lengths、page table 和对应的物理 pool。
+Kernel 最后共同消费 Query、sequence lengths、page table、物理 pool。
 
-沿请求、逻辑位置、物理池查明历史后，再对照 Query、长度、页表等实参，才能检查是否读错位置或用了错误长度。
+沿这一层层映射查回当前行，再对照实参，才能确认读取的历史和长度属于该请求。
 
 </details>
 
 ## 五、MoE 怎样分发并合并 Token
 
-Attention 输出经过 mHC 和 Norm，MoE 前又得到 `[T,4096]` Working Hidden。本例三行仍各自代表当前 Token，需要分别决定专家去向。
+Attention 输出经过 mHC、Norm，MoE 前又得到 `[T,4096]` Working Hidden。三行仍各自代表本轮 Token，Router 再为它们选择专家。
 
-公开配置有 256 个 routed experts，每 Token 选择 6 个。先看 Router：
+公开配置有 256 个 routed experts，每 Token 选 6 个：
 
 ~~~python
 router_logits = self.gate(hidden_states)
@@ -311,11 +309,9 @@ topk_output = self.topk(
 )
 ~~~
 
-Router 将 `[T,4096]` 的 hidden states 投影成 `[T,256]` 的 router logits，再由 TopK 为每个 Token 选 6 个 Expert，决定该行交给哪些专家权重计算。
+Router 将 `[T,4096]` 投影成 `[T,256]` logits，TopK 为每行挑选 6 份专家权重。
 
-
-
-若权重在远端 Rank，Dispatch / All-to-All 将这行表示送给 Expert owner。
+专家在远端 Rank 时，Dispatch / All-to-All 把 Token 表示发给 owner。
 
 ~~~mermaid
 flowchart TD
@@ -330,15 +326,15 @@ flowchart TD
     T --> R --> D --> E --> G --> C --> O
 ~~~
 
-数据在此期间从 Token/Batch 行顺序转为专家任务顺序，再由 Combine 恢复原 Token 顺序。跨 Rank 的输入由 DeepEP/A2A 发给专家，贡献计算完后返回对应 Token。
+执行顺序从 Token/Batch 行变为专家任务，贡献算完后，由 Combine 恢复原 Token 顺序。DeepEP/A2A 承担跨 Rank 的发送、返回。
 
-例如某个专家可一起收到三条请求中被路由来的行，前馈计算仍分别处理它们。Combine 要恢复每份贡献的 Token 对应关系。ownership 描述当前由谁持有、处理数据，本地重排后的行号不能代替请求身份。
+一个专家可以同时收到来自三条请求的行，前馈仍逐行计算。Combine 需要知道每份贡献属于哪个 Token；重排后的本地行号，无法单独标识原请求。ownership 描述的则是这一步由谁持有、处理数据。
 
 ## 六、从 hidden states 到下一枚 Token
 
-层栈结束后得到的还是 hidden states，需要继续投影到词表。
+层栈输出仍是 hidden states，接着要投影到词表。
 
-常见逻辑示意为：
+逻辑上可以画为：
 
 ~~~text
 [B,H]
@@ -346,7 +342,7 @@ flowchart TD
 [B,V]
 ~~~
 
-但词表并行时，本地 LM Head MatMul 先得到词表 shard：
+词表并行的本地 LM Head MatMul，首先只算一个 vocabulary shard：
 
 ~~~text
 [rows,H]
@@ -358,11 +354,11 @@ flowchart TD
 [rows,V_shard]
 ~~~
 
-固定 DeepSeek-V4 在 PP 最后阶段构造 <code>ParallelLMHead</code>。启用 <code>enable_dp_lm_head</code> 则使用 Attention TP Group，否则通常采用全局 TP Group。
+固定 DeepSeek-V4 在 PP 最后阶段创建 <code>ParallelLMHead</code>。`enable_dp_lm_head` 开启时使用 Attention TP Group，否则通常沿全局 TP Group。
 
 ### DP Attention，但 LM Head 仍沿全局 TP 分片
 
-全局 TP 的 gather/scatter 路径需同时处理两件事：DPA 分布的请求行、TP 分布的词表列。LogitsProcessor 的语义顺序如下：
+全局 TP 路径同时面对 DPA 分布的请求行和 TP 分片的词表列。LogitsProcessor 分别处理：
 
 ~~~mermaid
 flowchart TD
@@ -376,7 +372,7 @@ flowchart TD
     L --> DG --> LM --> VG --> DS --> O
 ~~~
 
-对应源码依次执行：
+对应调用为：
 
 ~~~text
 _gather_dp_attn_hidden_states()
@@ -388,15 +384,15 @@ TP vocab-shard gather
 _scatter_dp_attn_logits()
 ~~~
 
-先收集要计算的请求行，再拼齐词表分片，最后把各 DP 的请求行分回本地。完整 Vocabulary 是词表通信后的结果，请求归属恢复则是另一项操作。
+先 gather 请求行，再拼齐 vocabulary shards，最后 scatter 请求行回各 DP。恢复完整词表、恢复请求归属，分别作用于列和行。
 
-同一版本另有条件控制的 LM Head All-to-All：开关、行布局等满足时，用一次重分布替代词表 gather 和 row scatter。实际路径需核对 `_can_use_tp_lm_head_all_to_all()`，图中序列并非所有配置必经。
+同一版本还可按条件使用 LM Head All-to-All，一次重分布替代词表 gather 与 row scatter。实际是否走这条路径，由 `_can_use_tp_lm_head_all_to_all()` 检查开关、行布局等条件。
 
 ### 开启 DP LM Head
 
-DP LM Head 则让 <code>ParallelLMHead</code> 使用 <code>attn_tp_group</code>。
+DP LM Head 把 <code>ParallelLMHead</code> 切到 <code>attn_tp_group</code>。
 
-各 DP 保留 local rows，只在自己的 Attention TP 组内拼词表：
+各 DP 保留 local rows，在自己的 Attention TP 组拼齐词表：
 
 ~~~text
 [B_local,H]
@@ -406,15 +402,15 @@ DP LM Head 则让 <code>ParallelLMHead</code> 使用 <code>attn_tp_group</code>�
 [B_local,V]
 ~~~
 
-<code>attn_tp_size=1</code> 时，本地 LM Head 已有完整 Vocabulary Weight，不再需要 vocab gather。
+<code>attn_tp_size=1</code>，本地已持有完整 Vocabulary Weight，就省掉 vocab gather。
 
-两种布局最终都需为本地请求提供完整词表分数，差别是沿哪个组分片权重，以及中间是否重新收集、分发请求行。
+两条路径都为本地请求提供完整词表分数，区别在权重分给哪个组，以及中间是否重新 gather/scatter 请求行。
 
-普通生成交给 Sampler 的 `next_token_logits` 形状为 `[#local_sequences,vocab_size]`。
+交给普通生成 Sampler 的 `next_token_logits` 因而为 `[#local_sequences,vocab_size]`。
 
 ### Sampler 默认不再同步最终 Token ID
 
-Greedy 拿到完整本地 logits 后可直接取最大值：
+Greedy 从完整本地 logits 取最大值：
 
 ~~~python
 batch_next_token_ids = torch.argmax(
@@ -423,19 +419,17 @@ batch_next_token_ids = torch.argmax(
 )
 ~~~
 
-其他采样使用 <code>SamplingBatchInfo</code> 的 temperature、top-k、top-p、min-p、grammar 等参数。
+其他采样再使用 <code>SamplingBatchInfo</code> 中的 temperature、top-k、top-p、min-p、grammar。
 
-Sampler 的 sync group 在普通模式下为 `tp_group`，DP Attention 下为 `attn_tp_group`。
+普通模式的 Sampler sync group 为 `tp_group`，DP Attention 下则为 `attn_tp_group`。
 
-固定默认并不逐轮同步最终 Token ID，而依赖末端 collective、LM Head MatMul 和 Sampling Kernel 在相关 Rank 保持确定性，以减少这次通信。
+固定默认不逐轮同步最终 Token ID，而依赖相关 Rank 的末端 collective、LM Head MatMul、Sampling Kernel 保持确定性，减少一次通信。
 
-若 `SYNC_TOKEN_IDS_ACROSS_TP=1`，或当前 Batch 使用 Grammar，才执行 `MIN all_reduce(next_token_ids)`。
+`SYNC_TOKEN_IDS_ACROSS_TP=1` 或当前 Batch 使用 Grammar 时，执行 `MIN all_reduce(next_token_ids)`。
 
+它在 <code>tp_sync_group</code> 内对齐同批请求的 ID。DPA 使用 <code>attn_tp_group</code>，不同 DP 的请求因此各自在对应组处理。
 
-
-这次同步针对同一批请求的最终 ID，使用 <code>tp_sync_group</code>；DPA 下对应 <code>attn_tp_group</code>。不同 DP 处理不同请求，不能把它们的 ID 直接放在全局 TP 中归约。
-
-采样结果再经调度器成为下一轮输入：
+采样结果再交给调度器：
 
 ~~~mermaid
 flowchart TD
@@ -451,11 +445,11 @@ flowchart TD
     H --> LM --> G --> L --> S --> N --> R --> I
 ~~~
 
-下一轮又从 L → L+1 的长度变化开始。
+新输出成为下一轮输入，继续从 L → L+1 推进。
 
 ## 七、按这个例子读源码
 
-实际阅读时，可先沿同一枚 Token 核对 Decode 状态与 KV allocation：
+可以沿这条路径进入 Decode 状态、KV allocation：
 
 ~~~text
 python/sglang/srt/managers/schedule_batch.py
@@ -463,9 +457,9 @@ python/sglang/srt/mem_cache/allocation.py
 python/sglang/srt/model_executor/forward_batch_info.py
 ~~~
 
-第一遍只跟踪 `input_ids`、`seq_lens`、`positions`、`req_pool_indices`、`out_cache_loc`，将旧 L 代入，确认“分配逻辑位置 L → 长度变为 L+1 → 当前 position=L”。接着从 ForwardBatch 进入 Graph/Eager、Model Forward、Logits 和 Sampler，把本轮输入接回下轮输入。
+第一遍将旧 L 代入 `input_ids`、`seq_lens`、`positions`、`req_pool_indices`、`out_cache_loc`，得到“分配位置 L → 长度 L+1 → 当前 position=L”。再从 ForwardBatch 进入 Graph/Eager、Model Forward、Logits、Sampler，接回下一轮。
 
-读到 `deepseek_v4.py` 时，重点核对表示和行归属怎样变化：
+`deepseek_v4.py` 中的表示、行归属变化为：
 
 | 执行位置 | 追踪重点 |
 | --- | --- |
@@ -474,9 +468,9 @@ python/sglang/srt/model_executor/forward_batch_info.py
 | MoE | gate、topk、dispatch、experts、combine 前后，一行属于哪个 Token，专家贡献怎样返回 |
 | LM Head 与 Sampler | `[T,H]` 怎样变为本地 `[rows,V_shard]`，何时取得 `[B_local,V]`，再生成 `next_token_ids` |
 
-每到一个边界，都记录 Token 数、Tensor shape、请求身份、逻辑位置，以及读取的历史和写入的新状态。遇到 gather/scatter，先判断变化发生在 Token 行归属还是 Tensor/词表分片，再继续追踪消费结果的位置。
+逐边界记录 Token 数、shape、请求身份、位置、历史读取、新状态写入。gather/scatter 则继续区分是在重新分配 Token 行，还是在拼 Tensor/词表分片。
 
-把三条请求代回去：ID 已采样，KV 先分配后写入，专家任务会重排行，词表投影又需要恢复本地请求。最后确认输出回到同一请求的下一轮输入。沿这些具体状态继续读，比单独记住每个函数名更容易发现错位。
+三条请求从采样 ID 出发，先安排再写 KV；MoE 按专家重排行；词表投影后恢复本地请求。把最后的输出接回原请求，下轮仍能从相同身份继续，这一轮的数据关系就连起来了。
 
 ## 源码阅读入口
 

@@ -1,6 +1,6 @@
 {
   "docs/sglang/sglang-ascend-request-lifecycle.md": {
-    "summary": "一句聊天消息怎样变成 NPU 上的一轮计算？跟随一条请求，串起分词、排队、缓存、组批和持续生成。",
+    "summary": "从聊天消息进入服务开始，跟随一条请求走过分词、缓存、组批、模型计算与文本返回。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -10,10 +10,10 @@
     "topic": "sglang",
     "role": "entry",
     "seo_title": "SGLang 推理执行链路：一次请求如何跑到 Ascend NPU",
-    "seo_summary": "一句聊天消息怎样变成 NPU 上的一轮计算？跟随一条请求，串起分词、排队、缓存、组批和持续生成。"
+    "seo_summary": "从聊天消息进入服务开始，跟随一条请求走过分词、缓存、组批、模型计算与文本返回。"
   },
   "docs/sglang/sglang-scheduler-source-analysis.md": {
-    "summary": "请求会持续很多轮，设备每轮只执行一个批次。看 Scheduler 怎样在前缀缓存、Token 预算和 KV 空间之间安排工作。",
+    "summary": "两条请求既可能需要九行 Prefill，也可能只需要两行 Decode。沿这个变化看 Scheduler 怎样安排 Token 预算和 KV 空间。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -24,7 +24,7 @@
     "role": "advanced"
   },
   "docs/sglang/sglang-modelrunner-source-analysis.md": {
-    "summary": "两条请求共有九个输入 Token，为什么最后只需两行 Logits？用这个例子读懂 ModelRunner 的输入、前向和采样交接。",
+    "summary": "九行模型输入，最后只取两行 Logits。用一个小批次解释 ModelRunner 的输入准备、前向与采样交接。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -35,7 +35,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-attention-source-analysis.md": {
-    "summary": "多条请求打包进同一个 Tensor 后，Attention 怎样找到各自的历史？沿 Query、缓存写入和页表追踪一次 Decode。",
+    "summary": "同位置的 Token 打包到同一个 Tensor，仍各有自己的历史。沿 Query、缓存写入与页表看 Attention 怎样找到它们。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -47,7 +47,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-moe-source-analysis.md": {
-    "summary": "一个 Token 会被送到哪些专家，算完又怎样回到原位置？用四个 Rank、八个专家的例子解释路由、分发和合并。",
+    "summary": "Rank0 的 Token 要去 Rank2 找专家，算完还得回原行。用四个 Rank、八个专家追踪路由、分发和合并。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -59,7 +59,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-distributed-parallel-source-analysis.md": {
-    "summary": "同一批进程在 Attention 和 MoE 中怎样改变分工？用 TP32 / DP16 的 Target 布局追踪 Token 行的转换与恢复。",
+    "summary": "Attention 做完，进入 MoE 的 Token 行又换了一种分工。用 TP32 / DP16 布局解释拆行、求和与拼接。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -71,7 +71,7 @@
     "role": "advanced"
   },
   "docs/sglang/deepseek-v4-pd-disaggregation-source-analysis.md": {
-    "summary": "P 端已经采样出首 Token，为什么它还没有自己的 KV？从这个交接点看 Decode 接管需要哪些缓存、资源和确认。",
+    "summary": "P 已采样出首枚输出，它自己的 KV 却还没生成。从这个交接点追踪 D 接管所需的缓存、资源与确认。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -83,7 +83,7 @@
     "role": "advanced"
   },
   "docs/fundamentals/ai-infra-working-glossary.md": {
-    "summary": "读源码时遇到陌生名词，可以按正在解决的问题查：输入表示、模型计算、缓存调度、多卡通信和 Ascend 执行。",
+    "summary": "按正在查的问题找名词：输入表示、模型计算、缓存调度、多卡通信与 Ascend 执行，附小例子和源码入口。",
     "category": "基础原理",
     "tags": [
       "AI Infra",
@@ -94,10 +94,10 @@
     "topic": "fundamentals",
     "role": "reference",
     "seo_title": "AI Infra 名词表：SGLang、DeepSeek 与 Ascend 910C",
-    "seo_summary": "读源码时遇到陌生名词，可以按正在解决的问题查：输入表示、模型计算、缓存调度、多卡通信和 Ascend 执行。"
+    "seo_summary": "按正在查的问题找名词：输入表示、模型计算、缓存调度、多卡通信与 Ascend 执行，附小例子和源码入口。"
   },
   "docs/distributed/sglang-rank-group-deepseek-v4.md": {
-    "summary": "同一个进程为什么有好几个 Rank 编号？用 TP16 / DP8 展开它在 Attention、请求分组和 MoE 中的不同位置。",
+    "summary": "一条 rank=2 日志可能使用不同组的编号。用 TP16 / DP8 对照同一进程的全局身份、Attention 分工与 MoE 位置。",
     "category": "分布式基础",
     "tags": [
       "SGLang",
@@ -108,10 +108,10 @@
     "topic": "distributed",
     "role": "reference",
     "seo_title": "SGLang Rank 和 Group 是什么？TP / DP / EP 图解",
-    "seo_summary": "同一个进程为什么有好几个 Rank 编号？用 TP16 / DP8 展开它在 Attention、请求分组和 MoE 中的不同位置。"
+    "seo_summary": "一条 rank=2 日志可能使用不同组的编号。用 TP16 / DP8 对照同一进程的全局身份、Attention 分工与 MoE 位置。"
   },
   "docs/distributed/sglang-collectives-deepseek-v4.md": {
-    "summary": "该求和、拼接，还是把 Token 送给另一位专家？先看四类通信的小张量例子，再对照 SGLang 的 Attention 与 MoE。",
+    "summary": "两个同形状张量未必该做同一种通信。从小张量出发，分清求和、拼接、分片归约与按专家分发。",
     "category": "分布式基础",
     "tags": [
       "SGLang",
@@ -123,10 +123,10 @@
     "topic": "distributed",
     "role": "reference",
     "seo_title": "AllReduce、AllGather、ReduceScatter、All-to-All 有什么区别？",
-    "seo_summary": "该求和、拼接，还是把 Token 送给另一位专家？先看四类通信的小张量例子，再对照 SGLang 的 Attention 与 MoE。"
+    "seo_summary": "两个同形状张量未必该做同一种通信。从小张量出发，分清求和、拼接、分片归约与按专家分发。"
   },
   "docs/performance/deepseek-v4-speculative-decoding-ascend-profiling.md": {
-    "summary": "DSpark 慢在哪一段，怎样从计时字段追到 NPU 时间线？说明阶段边界、通信等待和 Profiling 对照方法。",
+    "summary": "Verify 计时之外还有 Accept、同步和 Commit。沿固定实现的阶段边界，把日志字段接到 NPU 时间线上。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -139,7 +139,7 @@
     "role": "deep"
   },
   "docs/ascend/deepseek-v4-w8a8-ascend-910c.md": {
-    "summary": "W8A8 权重加载后，激活在哪里量化，矩阵乘法又交给谁？分别沿 Dense 与 MoE 追到 Ascend 算子入口。",
+    "summary": "从 ModelSlim 加载到动态激活量化，分别追踪 Dense、MoE 的 INT8 计算与 Ascend 算子入口。",
     "category": "Ascend 实践",
     "tags": [
       "DeepSeek-V4",
@@ -152,7 +152,7 @@
     "role": "advanced"
   },
   "docs/performance/deepseek-v4-w8a8-ascend-910c-performance.md": {
-    "summary": "INT8 矩阵乘法省下的时间，能否覆盖动态量化等额外开销？结合小 M、专家批次和 NZ 布局分析该怎样测量。",
+    "summary": "从一个没有传入 wrapper 的 Tiling hint 开始，检查小 M、专家批次、NZ 格式与动态量化成本怎样影响 W8A8。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -165,7 +165,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-dspark-adaptive-verify-scheduler.md": {
-    "summary": "验证预算有限时，每条请求都分配相同长度合适吗？解释 DSpark 的候选预算分配，以及 Ascend 固定版本仍使用 static 的原因。",
+    "summary": "两条请求争两行验证预算，最合算的分配未必平均。解释候选存活概率、预算算法与固定 Ascend 版本的 static 限制。",
     "category": "投机解码",
     "tags": [
       "DeepSeek-V4",
@@ -179,7 +179,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md": {
-    "summary": "Draft 猜 A/B/C，Target 接受 A/B 后生成 X，下一轮从哪里继续？沿一个例子走完 DSpark 的提议、验证、接受和提交。",
+    "summary": "Draft 提 A/B/C，Target 留 A/B 再给 X。跟着这轮候选走过提议、验证、接受和缓存提交。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -191,7 +191,7 @@
     "role": "advanced"
   },
   "docs/speculative-decoding/sglang-speculative-decoding-scheduler-source-analysis.md": {
-    "summary": "开启重叠执行后，CPU 记录和设备进度可能暂时不同。看请求长度、KV 预留和结果发布怎样保证下一轮接得上。",
+    "summary": "设备已推进，CPU 请求长度还没更新。沿 Overlap 中的长度、KV 预留与结果发布，看下一轮如何接上。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -203,7 +203,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md": {
-    "summary": "三枚 Draft 候选需要几次 NextN Forward？算清第一枚候选的来源、后续逐步预测和 Target 验证窗口的关系。",
+    "summary": "三个候选只调用两次 NextN forward，第一枚来自上轮 Extend。沿输入位置与 hidden states 解释这次错位。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -215,7 +215,7 @@
     "role": "advanced"
   },
   "docs/speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md": {
-    "summary": "EAGLE 怎样把候选分支整理成一次 Verify 输入？跟着小树读索引和接受路径；DeepSeek-V4 固定版本仍限定 topk=1。",
+    "summary": "从候选小树追到 Verify 输入，分清旧池索引、树节点与接受路径；DeepSeek-V4 固定实现仍限 topk=1。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -228,7 +228,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-tree-attention-source-analysis.md": {
-    "summary": "候选树排成 Tensor 后，一行怎样只读自己的祖先？用一棵小树解释位置和可见性；多分支部分属于通用 EAGLE 机制。",
+    "summary": "树节点排在前面，不代表它属于当前分支的历史。用小树推演位置、祖先 Mask 与 Attention 合并。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -240,7 +240,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-accept-decision-source-analysis.md": {
-    "summary": "Verify 算出了候选位置的预测，哪些 Token 最终能输出？区分几种接受规则，并解释行索引与新 bonus 的错位关系。",
+    "summary": "Verify 输入 R/A/C，输出却是 A/C/X。由这组错位解释接受规则、行索引与新 bonus 的来源。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -253,7 +253,7 @@
     "role": "deep"
   },
   "docs/speculative-decoding/deepseek-v4-speculative-kv-commit-compact-rollback-source-analysis.md": {
-    "summary": "候选算过了，不代表都能留在历史里。看接受路径怎样映射到正式 KV，以及被拒绝候选的空间何时整理、复用或释放。",
+    "summary": "候选写入过 KV，最后未必能留在历史。沿接受路径追踪槽位整理、正式提交与剩余容量的复用。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -265,7 +265,7 @@
     "role": "deep"
   },
   "docs/performance/deepseek-v4-speculative-performance-analysis.md": {
-    "summary": "接受长度变大，投机解码为什么仍可能变慢？把每轮有效输出与 Draft、Verify、通信和并发成本放在一起算。",
+    "summary": "先分清 AL 与严格接受率，再把每轮输出和 Draft、Verify、通信、并发成本放到同一笔时间账里。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -277,7 +277,7 @@
     "role": "advanced"
   },
   "docs/performance/deepseek-v4-speculative-ascend-performance-critical-path-analysis.md": {
-    "summary": "开了 Graph 和多流，下一步为什么仍在等？沿 EAGLE/NextN 标出候选、缓存和通信依赖，再说明怎样与实测时间线对应。",
+    "summary": "15 行真实 Verify 进入图后可能变成 24 行。沿候选、缓存、多流与通信依赖，追踪完整投机周期的关键路径。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -290,7 +290,7 @@
     "role": "deep"
   },
   "docs/distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md": {
-    "summary": "一张卡接受两枚候选，另一张接受三枚，会发生什么？区分模型分片通信与投机决策同步，追踪分歧怎样传到下一轮。",
+    "summary": "同一请求在两个 Rank 接受不同长度，分歧会传到缓存和下一轮通信。沿执行路径解释哪些状态必须一致。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -303,7 +303,7 @@
     "role": "deep"
   },
   "docs/distributed/deepseek-v4-dspark-parallel-layout-analysis.md": {
-    "summary": "Target 能使用 TP32 / DP16，为什么 MoE Draft 启动时被拒绝？追踪 DSpark 的配置检查、Token 布局和决策同步。",
+    "summary": "Target 能跑 TP32 / DP16，MoE Draft 却在启动检查被挡住。追踪派生宽度、Token 布局与决策同步的约束。",
     "category": "源码解析",
     "tags": [
       "SGLang",
@@ -316,7 +316,7 @@
     "role": "deep"
   },
   "docs/fundamentals/prefill-vs-decode-performance.md": {
-    "summary": "同一份权重，为什么处理长输入和逐枚生成的性能不同？从矩阵形状讲到权重复用、专家 Token 数和每轮固定开销。",
+    "summary": "同一份权重，一次处理长输入与逐枚生成的代价不同。从矩阵行数算到权重复用、专家分流与固定开销。",
     "category": "基础原理",
     "tags": [
       "AI Infra",
@@ -329,10 +329,10 @@
     "topic": "fundamentals",
     "role": "entry",
     "seo_title": "Prefill 和 Decode 有什么区别？为什么性能差这么多",
-    "seo_summary": "同一份权重，为什么处理长输入和逐枚生成的性能不同？从矩阵形状讲到权重复用、专家 Token 数和每轮固定开销。"
+    "seo_summary": "同一份权重，一次处理长输入与逐枚生成的代价不同。从矩阵行数算到权重复用、专家分流与固定开销。"
   },
   "docs/fundamentals/sglang-decode-source-reading-primer.md": {
-    "summary": "刚生成的 Token，下一轮怎样变成模型输入？用三条请求的小批次串起长度、KV 写入、Attention、MoE 和采样。",
+    "summary": "上一轮得到 Token ID，这一轮才计算它的状态。用三条请求串起长度、KV 写入、Attention、MoE 和采样。",
     "category": "基础原理",
     "tags": [
       "SGLang",
@@ -346,10 +346,10 @@
     "topic": "fundamentals",
     "role": "entry",
     "seo_title": "第一次读 SGLang 源码：从一次 Decode 看懂推理链路",
-    "seo_summary": "刚生成的 Token，下一轮怎样变成模型输入？用三条请求的小批次串起长度、KV 写入、Attention、MoE 和采样。"
+    "seo_summary": "上一轮得到 Token ID，这一轮才计算它的状态。用三条请求串起长度、KV 写入、Attention、MoE 和采样。"
   },
   "docs/pr-reviews/sglang-pr-39871-attention-parallel-widths.md": {
-    "summary": "TP16 / DP2 的 Attention 实际宽度是 8，日志却打印 16。这个小补丁说明了原始配置值和运行时派生值为什么要分清。",
+    "summary": "TP16 / DP2 派生出的 Attention 宽度为 8，日志却报 16。沿这个小补丁区分原始配置和运行时分组。",
     "category": "PR 精读",
     "tags": [
       "SGLang",
@@ -362,7 +362,7 @@
     "role": "deep"
   },
   "docs/pr-reviews/sglang-pr-39120-tensor-view-storage-cache.md": {
-    "summary": "缓存里只有 0.8 MiB 的小 Tensor，为什么可能占住约 7.8 MiB？解释 View 如何引用整块存储，以及补丁为什么选择复制。",
+    "summary": "一个约 0.8 MiB 的 View 可能留住约 7.8 MiB 存储。解释缓存补丁如何判断何时值得复制。",
     "category": "PR 精读",
     "tags": [
       "SGLang",
@@ -375,7 +375,7 @@
     "role": "deep"
   },
   "docs/distributed/why-large-models-need-multi-card-tp-dp-ep.md": {
-    "summary": "每个 Token 只激活部分专家，为什么仍需要放下整套权重？先算设备内存，再区分 TP、DP 和 EP 各自拆分什么。",
+    "summary": "每 Token 只激活部分专家，权重仍要常驻。从 DeepSeek 的内存账出发，区分 TP、DP、EP 分别拆分什么。",
     "category": "分布式基础",
     "tags": [
       "DeepSeek-V4",
@@ -386,10 +386,10 @@
     "topic": "distributed",
     "role": "entry",
     "seo_title": "大模型为什么需要多卡？TP、DP、EP 一次讲清",
-    "seo_summary": "每个 Token 只激活部分专家，为什么仍需要放下整套权重？先算设备内存，再区分 TP、DP 和 EP 各自拆分什么。"
+    "seo_summary": "每 Token 只激活部分专家，权重仍要常驻。从 DeepSeek 的内存账出发，区分 TP、DP、EP 分别拆分什么。"
   },
   "docs/sglang/gsm8k-accuracy-debugging-from-200-to-full-evaluation.md": {
-    "summary": "200 题得分未过线，扩大到 1314 题后却通过了。沿配置对照和逐题结果，分开检查评测覆盖与输出稳定性。",
+    "summary": "两轮全量成绩只差两题，逐题却翻转了 168 道。沿 200 题到 1314 题的对照，检查覆盖与生成稳定性。",
     "category": "工程排查",
     "tags": [
       "SGLang",
@@ -401,10 +401,10 @@
     "topic": "sglang",
     "role": "advanced",
     "seo_title": "GSM8K 精度不达标怎么排查？从 200 题到全量评测",
-    "seo_summary": "200 题得分未过线，扩大到 1314 题后却通过了。沿配置对照和逐题结果，分开检查评测覆盖与输出稳定性。"
+    "seo_summary": "两轮全量成绩只差两题，逐题却翻转了 168 道。沿 200 题到 1314 题的对照，检查覆盖与生成稳定性。"
   },
   "docs/performance/deepseek-v4-pro-32k-prefix-cache-concurrency-tuning.md": {
-    "summary": "先把缓存命中率校准，再比较并发。记录一次 32K/1K 调优中，吞吐、TPOT 与首 Token 等待之间的取舍。",
+    "summary": "C72 吞吐更高，C24 首事件等待更短。记录缓存校准之后，一轮 32K/1K 调优留下的两种选择。",
     "category": "调优实践",
     "tags": [
       "DeepSeek-V4",
@@ -416,10 +416,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "DeepSeek-V4-Pro 性能调优：缓存命中、并发与 TTFT/TPOT",
-    "seo_summary": "先把缓存命中率校准，再比较并发。记录一次 32K/1K 调优中，吞吐、TPOT 与首 Token 等待之间的取舍。"
+    "seo_summary": "C72 吞吐更高，C24 首事件等待更短。记录缓存校准之后，一轮 32K/1K 调优留下的两种选择。"
   },
   "docs/performance/ascend-950dt-single-node-pd-optimization.md": {
-    "summary": "一次 Ascend 950DT 单机长输入调优记录：解释两端配置、缓存与并发如何一起影响结果，避免把总收益归给一个开关。",
+    "summary": "代表吞吐从约 750 到 1626 tok/s，配置、并发与缓存也同时改变。按原始条件复盘 Ascend 950DT 单机 PD 调优。",
     "category": "调优实践",
     "tags": [
       "SGLang",
@@ -431,10 +431,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 950DT 单机 PD 调优：128K 长上下文的 TTFT 与吞吐",
-    "seo_summary": "一次 Ascend 950DT 单机长输入调优记录：解释两端配置、缓存与并发如何一起影响结果，避免把总收益归给一个开关。"
+    "seo_summary": "代表吞吐从约 750 到 1626 tok/s，配置、并发与缓存也同时改变。按原始条件复盘 Ascend 950DT 单机 PD 调优。"
   },
   "docs/performance/inference-tuning-workflow-postmortem.md": {
-    "summary": "正式请求只跑了约三分钟，准备和修统计却耗时更久。沿几次真实返工，看连续调优的时间花在了哪里。",
+    "summary": "正式请求约三分钟，加载、准备与修统计花得更久。从几次真实返工追查连续调优的时间去了哪里。",
     "category": "工程复盘",
     "tags": [
       "性能调优",
@@ -445,10 +445,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "让AI连续调优几天后，我发现实验流程也有瓶颈",
-    "seo_summary": "正式请求只跑了约三分钟，准备和修统计却耗时更久。沿几次真实返工，看连续调优的时间花在了哪里。"
+    "seo_summary": "正式请求约三分钟，加载、准备与修统计花得更久。从几次真实返工追查连续调优的时间去了哪里。"
   },
   "docs/performance/ai-driven-inference-autotuning-decision-loop.md": {
-    "summary": "把吞吐目标交给 AI 后，下一轮实验该怎么选？结合真实调优，讨论比较条件、候选依据和停止投入的时机。",
+    "summary": "平均 TPOT 小于 20ms、吞吐争取超过 230 tok/s/卡。围绕这次真实目标，分析 AI 怎样选择下一轮实验。",
     "category": "工程实践",
     "tags": [
       "性能调优",
@@ -458,10 +458,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "把性能目标交给AI之后：大模型推理的全自动调优闭环",
-    "seo_summary": "把吞吐目标交给 AI 后，下一轮实验该怎么选？结合真实调优，讨论比较条件、候选依据和停止投入的时机。"
+    "seo_summary": "平均 TPOT 小于 20ms、吞吐争取超过 230 tok/s/卡。围绕这次真实目标，分析 AI 怎样选择下一轮实验。"
   },
   "docs/performance/ai-driven-inference-autotuning-execution-and-evidence.md": {
-    "summary": "640 条请求已成功，统计程序却退出非零。怎样接着处理原数据，并让配置、进程和结果始终对得上？",
+    "summary": "640 条请求成功，统计进程却非零退出。沿原数据恢复过程解释配置、执行与结果怎样对得上。",
     "category": "工程实践",
     "tags": [
       "自动化",
@@ -471,10 +471,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "一轮实验什么时候算完成：全自动调优的状态、证据与恢复",
-    "seo_summary": "640 条请求已成功，统计程序却退出非零。怎样接着处理原数据，并让配置、进程和结果始终对得上？"
+    "seo_summary": "640 条请求成功，统计进程却非零退出。沿原数据恢复过程解释配置、执行与结果怎样对得上。"
   },
   "docs/performance/ascend-910c-inference-tuning-effective-optimizations-and-costs.md": {
-    "summary": "哪些改动带来了吞吐，哪些只增加了实验成本？放在一起看 P 端合批、IndexCache、静态布局和 Compact 的真实对照。",
+    "summary": "P 端接纳上限从 1 改 2 带来主要收益。并列核对 IndexCache、静态组合和 Compact 的结果与实验成本。",
     "category": "性能调优",
     "tags": [
       "Ascend 910C",
@@ -486,10 +486,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 910C推理调优复盘：有效优化、失败假设与实验成本",
-    "seo_summary": "哪些改动带来了吞吐，哪些只增加了实验成本？放在一起看 P 端合批、IndexCache、静态布局和 Compact 的真实对照。"
+    "seo_summary": "P 端接纳上限从 1 改 2 带来主要收益。并列核对 IndexCache、静态组合和 Compact 的结果与实验成本。"
   },
   "docs/performance/ascend-910c-inference-tuning-negative-results-and-stop-rules.md": {
-    "summary": "TPOT 降了，吞吐却没涨；分块少了，执行反而慢了。沿几项负例，判断原假设漏了什么、何时值得重试。",
+    "summary": "速率、chunk、布局和 Compact 并非每项都有效。保留不利结果，解释原假设漏掉了什么、何时停止投入。",
     "category": "性能调优",
     "tags": [
       "Ascend 910C",
@@ -501,10 +501,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 910C调优负例分析：Compact、静态EPLB与实验取舍",
-    "seo_summary": "TPOT 降了，吞吐却没涨；分块少了，执行反而慢了。沿几项负例，判断原假设漏了什么、何时值得重试。"
+    "seo_summary": "速率、chunk、布局和 Compact 并非每项都有效。保留不利结果，解释原假设漏掉了什么、何时停止投入。"
   },
   "docs/performance/decode-fast-throughput-limited-by-prefill.md": {
-    "summary": "平均 TPOT 已经低至 8.7ms，吞吐仍没跟上。一个 4-token 尾块，把排查方向从 Decode 带回了 Prefill 合批。",
+    "summary": "16388 个输入按 8192 分块，最后剩 4 个。沿这个短尾块追到 Prefill 合批，解释 Decode 很快却吃不满的原因。",
     "category": "性能分析",
     "tags": [
       "PD 分离",
@@ -515,10 +515,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Decode已经很快了，吞吐为什么上不去？一次Prefill尾块合批优化",
-    "seo_summary": "平均 TPOT 已经低至 8.7ms，吞吐仍没跟上。一个 4-token 尾块，把排查方向从 Decode 带回了 Prefill 合批。"
+    "seo_summary": "16388 个输入按 8192 分块，最后剩 4 个。沿这个短尾块追到 Prefill 合批，解释 Decode 很快却吃不满的原因。"
   },
   "docs/performance/ascend-910c-prefill-scenario-static-eplb.md": {
-    "summary": "专家布局怎样从路由计数拟合出来？沿一次 P 端静态方案解释放置与分发，并说明 14.18% 的组合收益该怎样归因。",
+    "summary": "从路由计数生成 P 端静态布局，再看副本怎样分发。14.18% 对照来自布局和 static dispatch 的组合。",
     "category": "性能调优",
     "tags": [
       "Ascend 910C",
@@ -530,10 +530,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Ascend 910C P端静态EPLB：路由计数、专家布局与实测收益",
-    "seo_summary": "专家布局怎样从路由计数拟合出来？沿一次 P 端静态方案解释放置与分发，并说明 14.18% 的组合收益该怎样归因。"
+    "seo_summary": "从路由计数生成 P 端静态布局，再看副本怎样分发。14.18% 对照来自布局和 static dispatch 的组合。"
   },
   "docs/performance/deepseek-v4-indexcache-freq2-cross-layer-topk-reuse.md": {
-    "summary": "跨层复用 TopK 后，哪些计算省下了，哪些状态还得更新？对照实际执行路径和同负载实验，看 freq2 的收益与代价。",
+    "summary": "21 个 c4 层中，11 层计算、10 层复用 TopK。沿执行路径和同负载对照看 freq2 省下什么、仍需更新什么。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -545,10 +545,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "DeepSeek-V4 IndexCache freq2：跨层 TopK 复用省了什么，又改变了什么",
-    "seo_summary": "跨层复用 TopK 后，哪些计算省下了，哪些状态还得更新？对照实际执行路径和同负载实验，看 freq2 的收益与代价。"
+    "seo_summary": "21 个 c4 层中，11 层计算、10 层复用 TopK。沿执行路径和同负载对照看 freq2 省下什么、仍需更新什么。"
   },
   "docs/performance/deepseek-v4-prefill-chunk-size-selection.md": {
-    "summary": "把 chunk 从 8192 增到 8320，分块少了，吞吐却略降。结合页对齐、并行布局和通信轮次解释为什么。",
+    "summary": "chunk 8192 到 8320 少了一次分块，吞吐却略降。对照有效行、页对齐、并行布局和通信轮次追查原因。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -560,10 +560,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批",
-    "seo_summary": "把 chunk 从 8192 增到 8320，分块少了，吞吐却略降。结合页对齐、并行布局和通信轮次解释为什么。"
+    "seo_summary": "chunk 8192 到 8320 少了一次分块，吞吐却略降。对照有效行、页对齐、并行布局和通信轮次追查原因。"
   },
   "docs/performance/128k-prefix-cache-benchmark-calibration.md": {
-    "summary": "输入长度正确、请求全部成功，缓存却没达到九成。记录公共前缀、预热与逐条检查怎样把压测场景校准。",
+    "summary": "8 条请求全部成功，缓存却没达到约定的九成。沿公共前缀、准备请求和逐条 usage 校准 128K 场景。",
     "category": "压测实践",
     "tags": [
       "前缀缓存",
@@ -574,10 +574,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "128K输入、90%前缀缓存：怎样把压测场景真正跑准",
-    "seo_summary": "输入长度正确、请求全部成功，缓存却没达到九成。记录公共前缀、预热与逐条检查怎样把压测场景校准。"
+    "seo_summary": "8 条请求全部成功，缓存却没达到约定的九成。沿公共前缀、准备请求和逐条 usage 校准 128K 场景。"
   },
   "docs/performance/npu-timeline-gaps-and-recoverable-speedup.md": {
-    "summary": "NPU 时间线约两成空白，为什么不能当成可回收的加速空间？先算清区间覆盖，再检查等待、跨 Rank 依赖和测量范围。",
+    "summary": "约两成 trace 没有记录到设备任务，还不能当成可删时间。先求区间并集，再查等待、跨 Rank 依赖与采样范围。",
     "category": "性能分析",
     "tags": [
       "Ascend 910C",
@@ -589,10 +589,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "NPU 时间线里有 19% 空隙，为什么不能直接得到 19% 加速？",
-    "seo_summary": "NPU 时间线约两成空白，为什么不能当成可回收的加速空间？先算清区间覆盖，再检查等待、跨 Rank 依赖和测量范围。"
+    "seo_summary": "约两成 trace 没有记录到设备任务，还不能当成可删时间。先求区间并集，再查等待、跨 Rank 依赖与采样范围。"
   },
   "docs/performance/expert-count-export-hccl-gloo.md": {
-    "summary": "160 条请求已生成完，存专家计数时服务却崩了。沿错误栈追到设备通信，再看 CPU/Gloo 导出怎样保住统计含义。",
+    "summary": "生成已结束，导出专家计数却让 scheduler 退出。沿错误栈解释 CPU/Gloo 导出为何能保持原统计含义。",
     "category": "故障排查",
     "tags": [
       "Ascend",
@@ -603,10 +603,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "专家计数都采到了，为什么导出还会失败？",
-    "seo_summary": "160 条请求已生成完，存专家计数时服务却崩了。沿错误栈追到设备通信，再看 CPU/Gloo 导出怎样保住统计含义。"
+    "seo_summary": "生成已结束，导出专家计数却让 scheduler 退出。沿错误栈解释 CPU/Gloo 导出为何能保持原统计含义。"
   },
   "docs/performance/ascend-910c-cp2-vs-cp4-prefill-throughput.md": {
-    "summary": "CP4 改成 CP2 后，TPOT 降了，整套 PD 吞吐却略降。沿每 Rank 行数、页预算和通信轮次，看这次联合配置改变了什么。",
+    "summary": "CP4/DP4 改成 CP2/DP8，TPOT 降低，PD 总吞吐却略降。逐项对照行数、页预算与联合配置。",
     "category": "性能分析",
     "tags": [
       "Ascend 910C",
@@ -618,10 +618,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "CP2 替代 CP4：通信组变小了，为什么整体吞吐没有提高？",
-    "seo_summary": "CP4 改成 CP2 后，TPOT 降了，整套 PD 吞吐却略降。沿每 Rank 行数、页预算和通信轮次，看这次联合配置改变了什么。"
+    "seo_summary": "CP4/DP4 改成 CP2/DP8，TPOT 降低，PD 总吞吐却略降。逐项对照行数、页预算与联合配置。"
   },
   "docs/performance/aisbench-sglang-first-request-to-report.md": {
-    "summary": "先用一条请求接通 SGLang，再检查独立配置、JSONL 和负载参数。附完整小样例，说明原始结果怎样保存、稳态报告怎样重算。",
+    "summary": "先用一条请求接通 SGLang，再核实际请求体、独立配置与结果文件。附可运行小样例和稳态报告重算入口。",
     "category": "压测实践",
     "tags": [
       "AISBench",
@@ -634,7 +634,7 @@
     "seo_title": "用AISBench压测SGLang：从第一条请求到一份可信报告"
   },
   "docs/performance/128k-prefix-cache-remaining-costs.md": {
-    "summary": "命中了九成输入，为什么仍不能当作一条独立的 12K 请求？沿新 Query、长历史访问和 PD 交接，解释剩下的工作。",
+    "summary": "缓存后只剩 12292 个新位置，它们仍接在 128K 历史上。沿 Query、压缩状态与 PD 交接解释剩余工作。",
     "category": "性能分析",
     "tags": [
       "DeepSeek-V4",
@@ -646,10 +646,10 @@
     "topic": "performance",
     "role": "advanced",
     "seo_title": "128K 已经命中 90% 前缀缓存，为什么推理仍然不轻松？",
-    "seo_summary": "命中了九成输入，为什么仍不能当作一条独立的 12K 请求？沿新 Query、长历史访问和 PD 交接，解释剩下的工作。"
+    "seo_summary": "缓存后只剩 12292 个新位置，它们仍接在 128K 历史上。沿 Query、压缩状态与 PD 交接解释剩余工作。"
   },
   "docs/performance/sglang-stream-acceptance-cache-timing.md": {
-    "summary": "8 条请求已带投机开关，SSE 却没有明细。先查字段有没有返回，再沿原解析和计时路径保存计数，核对接受率与统计窗口。",
+    "summary": "8 条请求带了投机开关，却没有返回明细。从服务字段追到客户端写盘，解释尾部事件怎样影响原计时。",
     "category": "压测实践",
     "tags": [
       "AISBench",
@@ -663,7 +663,7 @@
     "seo_title": "SGLang流式压测：保留接受率与缓存计数，沿用原计时"
   },
   "docs/distributed/ascend-dynamic-eplb-weight-migration.md": {
-    "summary": "服务运行中，怎样把专家搬到新槽位？沿 Ascend 权重暂存、通信等待和映射提交，解释迁移顺序，再看功能验证与性能代价。",
+    "summary": "跟随 B、C 两个专家交换槽位，追踪暂存、ND 工作区、通信等待与映射更新，再核迁移的功能和性能代价。",
     "category": "分布式工程",
     "tags": [
       "SGLang",
@@ -675,10 +675,10 @@
     "topic": "distributed",
     "role": "deep",
     "seo_title": "静态 EPLB 之后：动态专家负载均衡怎样安全地迁移权重？",
-    "seo_summary": "服务运行中，怎样把专家搬到新槽位？沿 Ascend 权重暂存、通信等待和映射提交，解释迁移顺序，再看功能验证与性能代价。"
+    "seo_summary": "跟随 B、C 两个专家交换槽位，追踪暂存、ND 工作区、通信等待与映射更新，再核迁移的功能和性能代价。"
   },
   "docs/performance/aisbench-whole-native-tpot-itl.md": {
-    "summary": "TPOT 10.4ms、ITL 58.6ms 为什么能同时成立？沿真实报告和固定源码，分清请求时间线、事件样本与 whole/native 窗口。",
+    "summary": "TPOT 略升，系统吞吐却提高。沿真实报告重算请求时间线、ITL 样本与 whole/native 分母，解释这些数字为何共存。",
     "category": "压测实践",
     "tags": [
       "AISBench",
@@ -690,10 +690,10 @@
     "topic": "performance",
     "role": "entry",
     "seo_title": "AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？",
-    "seo_summary": "TPOT 10.4ms、ITL 58.6ms 为什么能同时成立？沿真实报告和固定源码，分清请求时间线、事件样本与 whole/native 窗口。"
+    "seo_summary": "TPOT 略升，系统吞吐却提高。沿真实报告重算请求时间线、ITL 样本与 whole/native 分母，解释这些数字为何共存。"
   },
   "docs/performance/ascend-eplb-memory-bounded-staging.md": {
-    "summary": "逐层迁移仍让临时张量跨 stream 积压。沿分配地址和完成事件追踪原因，解释 P、D 每芯片缓存驻留量减少约 3.05、3.32 GiB 的实现与实测。",
+    "summary": "Python 逐层处理，临时张量仍在跨 stream 积压。沿地址和完成事件解释每芯片缓存驻留减少 P 约 3.05、D 约 3.32 GiB 的修复。",
     "category": "性能分析",
     "tags": [
       "Ascend",
@@ -705,7 +705,7 @@
     "role": "deep"
   },
   "docs/performance/ascend-eplb-tp-world-memory.md": {
-    "summary": "OFF 后续也会分配 TP 资源，复用为什么还能省显存？用启动记录和四组 16-rank 实验，追踪默认 WORLD 首次通信的几个 GiB。",
+    "summary": "从小统计触发几个 GiB 占用查起，分开核对 OFF 的 TP 初始化和 WORLD 的额外激活，比较四次 16-rank 实验。",
     "category": "性能分析",
     "tags": [
       "Ascend",
@@ -717,7 +717,7 @@
     "role": "deep"
   },
   "docs/performance/deepep-received-vs-valid-routes.md": {
-    "summary": "图补齐行的权重为零，专家 ID 却仍进入 dispatch。用真实双 Rank 通信与图回放计数，解释 64/64 的接收量为何掩盖 64/0 的有效需求。",
+    "summary": "两个 Rank 各收 64 条，真实需求却是 64/0。用双设备通信和计数图说明 padding 如何掩盖专家倾斜。",
     "category": "性能分析",
     "tags": [
       "Ascend",
@@ -729,7 +729,7 @@
     "role": "deep"
   },
   "docs/performance/eplb-zero-record-rolling-window.md": {
-    "summary": "加零不改变求和，却会占掉环形窗口的位置。用 200 条真实入窗记录和七轮副本复算，追踪 draft 空记录怎样缩短 target 历史。",
+    "summary": "draft 的零记录不增加负载，却挤掉 target 历史。沿 200 次真实入窗与七轮离线复算追踪副本决策的变化。",
     "category": "性能分析",
     "tags": [
       "EPLB",
@@ -741,7 +741,7 @@
     "role": "deep"
   },
   "docs/performance/dynamic-eplb-decode-benefit-measurement.md": {
-    "summary": "从固定 A/B/A、迁移回本预算到 AISBench 稳态 OFF/ON，结合 batch、I/W 和 DSpark 实验，分清局部计算收益与整服务收益。",
+    "summary": "普通 forward、target verify 与稳态吞吐测到不同收益。结合固定 A/B/A、热态成本和完整服务配对解释测量边界。",
     "category": "性能分析",
     "tags": [
       "EPLB",
@@ -753,7 +753,7 @@
     "role": "deep"
   },
   "docs/distributed/eplb-redundant-expert-allocation.md": {
-    "summary": "从每层 16 个额外位置出发，用 4 个专家的完整算例解释负载、副本数量、固定槽位 packing 与逻辑/物理映射，再核对真实专家分配。",
+    "summary": "用四专家、两冗余跑完副本分配和固定槽 packing，再对照真实层的 16 步分配，说明热点为何能连续拿到副本。",
     "category": "分布式工程",
     "tags": [
       "EPLB",
@@ -765,7 +765,7 @@
     "role": "deep"
   },
   "docs/distributed/eplb-skip-unnecessary-migration.md": {
-    "summary": "到了更新间隔，流程仍可能提前退出。沿均衡度、整层布局和本地 Rank 的参与判断，看每处跳过省下了哪些工作。",
+    "summary": "更新间隔到了，也未必搬权重。沿均衡度、整层布局、本地 Rank 参与三个判断，看流程在哪里提前结束。",
     "category": "分布式工程",
     "tags": [
       "EPLB",

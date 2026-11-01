@@ -1,14 +1,14 @@
 # AI 推理基础设施名词表：从 Token 到 Ascend Kernel
 
-同一屏推理日志里可能同时出现 Token、KV Cache、TP、Backend、Kernel。它们分别说明数据、历史状态、设备分工和执行实现，沿一次请求看就比较容易分清。
+Token、KV Cache、TP、Backend、Kernel 经常出现在同一屏日志里。Token 是模型处理的数据，KV Cache 留住历史，TP 规定设备怎样分工，Backend 和 Kernel 决定具体怎样执行。这些词说的是同一条请求的不同部分。
 
-这份名词表先讲文本与模型，再讲缓存、调度、多卡通信，最后落到 Ascend 执行。查词可用速查表，初次阅读可从全局地图顺着走；源码入口固定在同一版本，便于继续定位实际对象。
+正文按文本、模型、缓存、调度、通信、Ascend 执行排列。查单个词可以从速查表跳转，需要把几个词连起来时再看全局地图。源码入口固定在同一版本，便于找到对应对象。
 
 > SGLang 入口固定到 <code>sgl-project/sglang @ 176dbcb85d3b7737564e4911947035cc0af65f0a</code>，核对日期为 2026-09-21。这里给出模块定位，完整调用关系在专题中展开。
 
 ## 速查：按当前问题找术语
 
-速查链接跳到解释，同组术语并列放置，便于核对各自职责。
+同组链接放在一起，点击可到相应解释。
 
 | 看到这个词 | 第一反应 |
 | --- | --- |
@@ -45,9 +45,9 @@
 
 ## 一、一次请求的全局地图
 
-例如输入 `请解释一下 DeepSeek 的 MoE 是怎么工作的？`。
+以输入 `请解释一下 DeepSeek 的 MoE 是怎么工作的？` 为例。
 
-请求从文本到输出，主要经过：
+文本到回答，会经过这些处理。
 
 ~~~mermaid
 flowchart TD
@@ -78,7 +78,7 @@ flowchart TD
     K --> NPU[Ascend 910C]
 ~~~
 
-图中可按七类职责查找问题：缓存容量先查内存，组成员不符先查并行布局。
+图里的七类职责分别承担请求的一部分。缓存容量属于内存问题，组成员则属于并行布局。
 
 | 层级 | 你会看到的词 | 核心问题 |
 | --- | --- | --- |
@@ -90,13 +90,11 @@ flowchart TD
 | 投机解码 | Draft、Verify、Accept、DSpark | 怎样用更便宜的预测换取更少的 Target Decode？ |
 | Device 执行 | Backend、CANN、Operator、Tiling、Kernel、Stream | Python 里的 Forward 最终怎样落到 910C？ |
 
-遇到陌生对象，先找到它所在的层，再看输入来自哪里、输出交给谁。
-
-
+一个对象所处的位置，决定了它接收什么、把结果交给谁。
 
 ### 快速源码入口索引
 
-参数、日志或源码中的对象，可从这些模块进入。
+参数、日志里遇到的对象，可以在下列模块中找到。
 
 | 核心词 | SGLang 当前入口 | 进去先看什么 |
 | --- | --- | --- |
@@ -127,31 +125,27 @@ flowchart TD
 | ModelSlim | [modelslim.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/quantization/modelslim/modelslim.py) | ModelSlim quantization scheme 怎样接入 Linear / MoE |
 | PD 分离 | [disaggregation/prefill.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/prefill.py) / [Ascend transfer_engine.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/ascend/transfer_engine.py) | Prefill / Decode ownership 与 KV/state transfer |
 
-例如查 Attention 的历史访问，可由模型输入追到 Runtime metadata，再到 backend 的缓存和算子。metadata 是长度、位置、缓存索引等辅助信息，用来说明 Tensor 该怎样被解释。
+例如 Attention 的历史访问，从模型输入经过 Runtime metadata，进入 backend 的缓存与算子。metadata 指长度、位置、缓存索引等辅助信息，它们给出了 Tensor 的解释方式。
 
 ## 二、模型：从 Token 与 Tensor 到 Logits
 
-模型处理的是有 shape、dtype 的多维数组。Tokenizer 将文本切成片段并映射为 ID，片段可以是字、词的一部分或其他内容，不保证与汉字一一对应。Embedding 再将 ID 映射为 H 维向量，各 Token 的表示组成 hidden states。
+Tokenizer 将文本切成片段，再映射为整数 ID。片段可能是一个字、词的一部分或其他内容，与汉字不保证一一对应。Embedding 将 ID 换成 H 维向量，各 Token 的向量组成 hidden states。模型后面处理的 Tensor，就是带 shape 和 dtype 的多维数组。
 
-读 Tensor 时先核对：
+一个 Tensor 的意义，要由内容、各维 shape 和 dtype 一起说明。
 
-1. 数据表示什么；
-2. shape 各维对应什么；
-3. dtype 使用哪种数值格式。
-
-二维数组可能是 hidden、权重或工作 buffer。`[T,H]` 通常表示本轮 T 行、每行 H 个特征，但是否含多个请求、是否 padding，仍需查路径，维数本身不能决定语义。
+例如 `[T,H]` 常表示本轮 T 行、每行 H 个特征。它可能打包多个请求，也可能带 padding，具体由执行路径决定。同样是二维数组，也可能存权重或工作 buffer。
 
 ### Hidden States、Residual 与 Norm
 
-Hidden states 是 Token 在当前层的内部表示，初始由 Embedding 产生，再由各 Decoder Layer 变换。
+Hidden states 是当前层里的 Token 表示，最初来自 Embedding，随后被各 Decoder Layer 变换。
 
-Residual 将模块结果加回原表示；RMSNorm 按均方根归一化并施加可学习缩放。Add+RMSNorm 等融合可将相邻工作合并，减少中间搬运或启动，但实际范围要看接口。
+Residual 将模块输出加回原表示。RMSNorm 按均方根归一化，再施加可学习缩放。Add+RMSNorm 等融合把相邻工作合到一起，可能省中间搬运或启动，具体覆盖范围随接口而变。
 
 ### Attention、Q/K/V 与 Head
 
-Attention 计算当前 Token 如何从可见上下文取信息。
+Attention 从可见上下文中，为当前 Token 聚合信息。
 
-经典形式用投影得到：
+经典形式先投影出下面三个量。
 
 ~~~text
 Q = XWq
@@ -159,11 +153,11 @@ K = XWk
 V = XWv
 ~~~
 
-Q 发起查询，K 用于匹配，V 提供被聚合内容。Q/K 分数经缩放、mask、归一化后成为权重，再加权 V。因果模型限制可见位置，不能读取尚未生成的未来。
+Q 提供查询，K 与它匹配，V 提供聚合内容。Q/K 分数经过缩放、mask、归一化，形成权重，再对 V 加权。因果模型只允许读取相应可见位置，未来内容被屏蔽。
 
-Multi-Head 在不同投影子空间建模关联。具体功能由训练形成，语法、实体等 Head 名称只能用于相应局部观察或类比。
+Multi-Head 用不同投影子空间建模关联。head 的实际功能由训练形成，语法、实体等称呼只是局部观察或类比，不是每个 head 固定的职责。
 
-MLA 改变 K/V 表示和缓存方式，是缓解 KV 压力的一条路径。其影响可沿下面关系理解：
+MLA 改变 K/V 表示和缓存方式，以减轻 KV 压力，关系如下。
 
 ~~~text
 Attention 结构
@@ -175,13 +169,13 @@ Attention 结构
 影响显存与分布式布局
 ~~~
 
-V4 又有专用滑窗、压缩历史，因此具体读取与保存还需回到模型和 dsv4 backend。入口为 [deepseek_v4.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/models/deepseek_v4.py) [ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)。
+V4 另有专用滑窗与压缩历史，具体保存、读取方式在模型及 dsv4 backend 中实现。[deepseek_v4.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/models/deepseek_v4.py) [ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)
 
 ### MLP、GEMM 与 MoE
 
-MLP/FFN 是线性与非线性组成的前馈计算，大量 Linear 落为 GEMM。BF16、INT8 描述精度，Grouped 描述多组组织，Expert 说明来自专家模块；实际工作量仍需矩阵形状、布局。
+MLP/FFN 由线性与非线性计算组成，大量 Linear 由 GEMM 完成。名字中的 BF16、INT8 是精度，Grouped 是多组计算的组织方式，Expert 表示来自专家模块；工作量还要由矩阵形状和布局确定。
 
-MoE 按以下路径选择专家计算：
+MoE 根据路由结果选择专家执行。
 
 ~~~text
 Token
@@ -197,17 +191,17 @@ Expert Compute
 Combine
 ~~~
 
-Router 选目标，EP 分布权重，DeepEP 等实现传送输入、合回贡献，Expert Runner 执行计算。跨设备后，需要把这些职责接起来看。
+Router 选专家，EP 分配专家权重，DeepEP 等实现把输入送过去、把贡献合回来，Expert Runner 执行前馈。跨设备的 MoE 需要衔接这几部分。
 
-性能上也应分别定位 Router、重排、Dispatch/Combine 与 Expert GEMM。
+因此 Router、重排、Dispatch/Combine 和 Expert GEMM 的耗时，需要分开定位。
 
 ### Logits 与 Sampling
 
-Logits 是对词表候选的原始分数。
+Logits 是词表各候选的原始分数，还不是输出 Token ID。
 
-Sampler 决定输出 ID：Greedy 取最大分数，temperature 改分布刻度，top-k 限候选数，top-p 按累计概率保留集合。组合顺序以实现为准。这里筛词表，与 Router 选专家的 Top-K 不同。
+Sampler 从分数决定 ID。Greedy 取最大值，temperature 调整分布刻度，top-k 限制候选数，top-p 按累计概率保留集合，具体组合顺序随实现而定。这里的 Top-K 筛词表，Router 的 Top-K 则选专家。
 
-生成关系为：
+从输入到下一枚 ID 的关系如下。
 
 ~~~text
 Hidden States
@@ -221,37 +215,37 @@ Sampler
 Next Token
 ~~~
 
-对应入口见 [logits_processor.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/logits_processor.py) [sampler.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/sampler.py)。
+词表分数处理与采样分别在 [logits_processor.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/logits_processor.py)、[sampler.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/sampler.py)。
 
-模型到这里得到下一 ID，缓存、并行和设备执行则继续回答哪些结果保留、数据怎样分布、计算怎样提交。
+输出 ID 得到了，服务端还得保存状态、安排下一轮，并将结果交回请求。
 
 ## 三、运行时：生成阶段、缓存与调度
 
-在线服务还要管理同时到达的请求：选择本轮工作、分配 Token 预算、处理缓存不足，并在请求完成后接纳新的任务。
+在线服务同时管理多条请求，选择本轮工作、划分 Token 预算、处理缓存不足，完成的请求退出后再接纳新任务。
 
-这些持续状态与轮次管理构成推理 Runtime。
+推理 Runtime 管理的就是这些跨轮状态和执行安排。
 
 ### Prefill 与 Decode
 
-普通生成先后经过：
+普通自回归生成包含下面两个阶段。
 
-Prefill 处理已知 Prompt，一次可有较多新 Token，较大矩阵通常更容易利用计算单元。
+Prefill 处理已知 Prompt，一次可计算较多新 Token，较大的矩阵通常更容易利用计算单元。
 
-Decode 逐轮接续输出，普通单请求新输入较少，还要访问历史，因此常受缓存、带宽、小 GEMM、启动或通信延迟影响。
+Decode 逐轮续接输出。普通单请求每轮新增输入少，还要读取历史，常见开销落在缓存、带宽、小 GEMM、启动或通信延迟上。
 
-读性能结果时分别看：
+性能结果里，几个常见指标分别描述这些时间与产出。
 
 - TTFT：发请求到收到首 Token，客户端口径常含排队、网络、输入处理；
 - TPOT：首 Token 后的平均逐 Token 时间，公式需看工具，并和 ITL 区分；
 - Throughput：单位时间的请求或 Token 数，需注明输入、输出或合计。
 
-提高并发可能同时增加总吞吐和请求等待，两种指标都要报告。
+并发提高，总吞吐可能上升，每条请求的等待也可能变长，比较时两边都要保留。
 
 ### KV Cache 与 Page
 
-KV Cache 保存 Attention 历史状态，避免生成下一位置时重新计算此前全部 K/V。
+KV Cache 保存 Attention 的历史状态，让生成下一位置时不必重算此前全部 K/V。
 
-上下文、并发增加通常会增加状态需求，具体增长取决于缓存结构：
+上下文变长、并发增加，通常都需要更多状态，实际增长由缓存结构决定。
 
 ~~~text
 Context Length ↑
@@ -266,40 +260,40 @@ Concurrency ↑
 HBM 压力 ↑
 ~~~
 
-Runtime 常将池按 Page/Block 管理，用映射连接逻辑序列与物理空间，不为每请求固定一块大连续区。
+Runtime 常按 Page/Block 管理缓存池，用映射连接逻辑序列和物理空间，请求不必各自绑定一块大连续内存。
 
-ReqToTokenPool 记录请求、位置关系，KVCache 管理存储抽象，可从 [memory_pool.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/mem_cache/memory_pool.py) 进入。
+ReqToTokenPool 记录请求与位置关系，KVCache 提供存储抽象，对应入口为 [memory_pool.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/mem_cache/memory_pool.py)。
 
-这一层负责分配、寻址、回收，与后端内存管理职责相近。
+这部分承担分配、寻址与回收，职责与后端内存管理相近。
 
 ### Prefix Cache 与 RadixCache
 
-例如两请求共享长系统前缀，后缀不同，若 KV 仍驻留且匹配条件成立，第二条可复用前缀、仅处理后缀。相同文本还不够，需要 Token 序列、命名空间和条目生命周期都符合。
+两条请求共享长系统前缀、后缀不同，前缀 KV 仍驻留且匹配条件满足时，第二条可以复用，只算后缀。Token 序列、命名空间和条目生命周期都得匹配，文本相同还不足够。
 
-SGLang 的具体前缀缓存结构 RadixCache 位于 [radix_cache.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/mem_cache/radix_cache.py)。
+RadixCache 是 SGLang 具体的前缀缓存数据结构，入口在 [radix_cache.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/mem_cache/radix_cache.py)。
 
-讨论 Radix 时应区分语境：
+相近名字在不同语境里，可能指设计，也可能指一个代码对象。
 
 - RadixAttention 常用于整体 prefix reuse 设计的说明；
 - RadixCache 是固定 Runtime 的具体前缀缓存数据结构。
 
-查问题时先确认说的是机制，还是代码对象。
+定位实现时，这两种含义需要对应到具体名称。
 
 ### Req、Scheduler、ScheduleBatch、ForwardBatch、ModelRunner
 
-五个对象衔接请求与设备执行。
+这五个对象把一条持续的请求，接到多轮设备执行。
 
-Req 保存跨轮输入、输出、采样、长度、缓存、停止条件及 metadata。
+Req 保存跨轮的输入、输出、采样、长度、缓存、停止条件和 metadata。
 
-Scheduler 根据等待、运行集合、Token 预算、KV 容量和各阶段状态，决定本轮执行谁。
+Scheduler 从等待与运行集合里选本轮请求，同时考虑 Token 预算、KV 容量和各阶段状态。
 
-ScheduleBatch 描述这轮选中的请求、输入区间及缓存安排。
+ScheduleBatch 是本轮计划，记录选中请求、输入区间和缓存安排。
 
-ForwardBatch 提供模型输入 Tensor、positions、seq_lens、cache locations。Attention metadata 的准备时机还需看 backend，不能由对象名判断。
+ForwardBatch 将输入 Tensor、positions、seq_lens、cache locations 交给模型。seq_lens 要连同对象与阶段解释，它会影响位置和 KV 准备；Attention metadata 的具体准备时机由 backend 决定。
 
-ModelRunner 将这些输入交到模型，并协调 backend、Eager 或 Graph 执行。
+ModelRunner 把输入交到模型，协调 backend 与 Eager、Graph 等执行方式。
 
-阅读时可沿下面的循环：
+它们通过下面这条循环衔接。
 
 ~~~mermaid
 flowchart TD
@@ -313,54 +307,52 @@ flowchart TD
     H --> B
 ~~~
 
-各对象入口为：
+对应源码入口如下。
 
 - Req / ScheduleBatch：[schedule_batch.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/schedule_batch.py)
 - Scheduler：[scheduler.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/managers/scheduler.py)
 - ForwardBatch：[forward_batch_info.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/model_executor/forward_batch_info.py)
 - ModelRunner：[model_runner.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/model_executor/model_runner.py)
 
-其中 Req 跨轮存在，ScheduleBatch 是本轮计划，ForwardBatch 是一次执行视图。
+Req 跨轮保留进度，ScheduleBatch、ForwardBatch 分别服务本轮计划和这一次执行。
 
-
-
-投机和 Overlap 中，逻辑输出、KV 预留、正式提交在不同时刻更新，这种职责差别尤为重要。
+投机与 Overlap 中，逻辑输出、KV 预留、正式提交会在不同时刻更新，各对象要维持这些状态的对应。
 
 ### Continuous Batching、Chunked Prefill、Graph 与 Overlap
 
-Continuous Batching 逐轮移出完成请求、加入新请求，无需等待一个固定 batch 全部结束。
+Continuous Batching 让完成请求逐轮退出、新请求逐轮加入，不用等固定一批全部生成完。
 
-Chunked Prefill 将长输入分段，控制单轮预算并给 Decode 调度机会，属于 Runtime 策略。
+Chunked Prefill 把长输入分段，控制单轮预算，给 Decode 留出调度机会，是 Runtime 的一种策略。
 
-小 Kernel 还会放大 Host 提交成本，Graph Capture/Replay 尝试减少重复启动。NPU 入口见 [npu_graph_runner.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)。
+Kernel 很小时，Host 重复提交的成本更突出。Graph Capture/Replay 复用执行安排，尝试减少重复启动，NPU 入口为 [npu_graph_runner.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)。
 
-Overlap 安排独立计算、通信、结果处理或准备同时推进，也可能增加争用、buffer 和同步，收益需实测。
+Overlap 让独立计算、通信、结果处理或准备重叠推进。它也可能增加争用、buffer 和同步，是否划算取决于实测。
 
-因此批次填充、工作分块、重复提交、独立工作重叠各有不同目标，比较时要看节省和新增的时间。
+批次填充、工作分块、减少重复提交、重叠独立任务，各自节省和新增的时间不同。
 
 ### PD Disaggregation
 
-PD 分离将 Prefill、Decode 放进不同实例，分别调度资源，再将输入阶段完成的 KV、请求状态交给 D 接续。
+PD Disaggregation 把 Prefill、Decode 放在不同实例，分别调度。P 将输入阶段算好的 KV 和请求状态交给 D，后续生成从这些状态继续。
 
-ownership 说明谁持有、修改、释放；handoff metadata 传递请求身份、长度、位置。目标预分配、内存注册、网络传输和恢复都会增加成本，需要与隔离收益比较。
+ownership 描述谁持有、修改、释放状态，handoff metadata 传请求身份、长度与位置。目标预分配、内存注册、传输、恢复都是新增成本，要与隔离收益一起评估。
 
-P 侧与 Ascend transfer 入口为 [disaggregation/prefill.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/prefill.py) [disaggregation/ascend/transfer_engine.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/ascend/transfer_engine.py)。
+P 侧与 Ascend transfer 分别见 [disaggregation/prefill.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/prefill.py)、[disaggregation/ascend/transfer_engine.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/disaggregation/ascend/transfer_engine.py)。
 
-可跟踪同请求状态何时写完、何时可读、由谁释放，而不只依赖发送/接收日志。
+状态的写入完成、可读时刻和释放方，决定接续能否正确进行，发送、接收日志只是其中的部分记录。
 
 ## 四、分布式：Rank、TP、DP Attention 与 EP
 
-容量或吞吐超过单设备能力时，需要将存储、计算分给多卡。
+模型放不下，或者服务吞吐超过单设备能力，存储和计算就需要分到多卡。
 
-并行策略规定分工，Rank/Group 标识参与者，collective、backend 完成数据交换，先按这几层读。
+并行策略规定怎样分工，Rank/Group 标识谁参与，collective 和 backend 完成实际交换。
 
 ### Rank、World Size 与 Process Group
 
-Process Group 是通信集合，Rank 是集合内编号，World Size 是成员数。Global Rank 常指默认全局组，TP、EP Rank 则是各自子组位置，world size 也需查语境。
+Process Group 是通信集合，Rank 是组内编号，World Size 是成员数量。Global Rank 通常指默认全局组，TP、EP Rank 则各有子组语境，world size 也随所指的组解释。
 
-一进程一卡也不代表编号含义相同，多机设备编号可重复，全局 Rank 则区分进程。
+即使一进程一卡，设备编号与 Rank 也不等价。多机的本地设备号可以重复，全局 Rank 用来区分进程。
 
-一个进程可同时属于多个组：
+同一进程可以属于几个组。
 
 ~~~text
 Global Rank = 6
@@ -372,29 +364,25 @@ DP Group = [2, 6, 10, 14]
 → DP Rank = 1
 ~~~
 
-全局 6 在 TP 组排第三、DP 组排第二，对应局部 2、1。这里只示意编号，真实成员需查配置，Draft、Verify 的编号也要带组名解释。
+例中全局 6 在 TP 组排第三、DP 组排第二，局部编号为 2、1。真实成员由配置确定，Draft、Verify 编号也需要带组名；`attn_tp_group` 还要看有序成员和当前 Attention 坐标。
 
-组初始化见 [parallel_state.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/parallel_state.py)。
+这些组在 [parallel_state.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/parallel_state.py) 初始化。
 
 ### TP：Tensor Parallelism
 
-TP 将同层 Tensor/GEMM 分给多 Rank。
+TP 将同一层 Tensor、GEMM 分给多个 Rank 协作。
 
-例如 Y=XW，权重沿维度分成 shards，本地计算后再用 collective 形成下游所需结果。
+例如 Y=XW，W 沿某一维切成 shards，各 Rank 本地计算，再通过 collective 形成后续需要的结果。
 
-这些 Rank 协作处理同一请求、同一层，也因此引入相应通信。
-
-
-
-
+这些 Rank 服务同一请求、同一层，分片计算也引入了相应通信。
 
 ### DP 与 DP Attention
 
-普通 DP 创建完整模型副本，让 Replica 分别服务不同请求，以提高系统的服务吞吐。
+普通 DP 建完整模型副本，各 Replica 接不同请求，提高整套服务吞吐。
 
-DPA 则在同一个模型并行 world 内划分 Attention 请求和 KV。
+DP Attention 则在同一个模型并行 world 内，划分 Attention 请求与 KV。
 
-固定派生集中在 Runtime Context，产生以下宽度。[runtime_context.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/runtime_context.py)
+固定版本由 Runtime Context 派生下面这些宽度。[runtime_context.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/runtime_context.py)
 
 ~~~text
 attn_dp_size
@@ -402,9 +390,9 @@ attn_cp_size
 attn_tp_size
 ~~~
 
-启用 DPA 后，Attention DP 来自相应配置，组内 TP 还需结合总宽与 CP 计算。
+DPA 开启后，配置给出 Attention DP，组内 Attention TP 再结合总宽和 CP 计算。
 
-例如配置为：
+例如下面的配置。
 
 ~~~text
 tp_size = 16
@@ -412,18 +400,15 @@ dp_size = 8
 enable_dp_attention = true
 ~~~
 
-需继续核对：
+它描述的成员与分工，还包括这些关系。
 
-- Attention DP 的成员；
-- 每请求组内的 Attention TP 宽度；
-- 请求和 KV 的归属；
-- MoE 如何重新组织同批 Rank。
+这组参数要落实为 Attention DP 成员与请求、KV 的归属，组内 Attention TP 给出协作宽度。到了 MoE，同一批 Rank 再按专家布局重新组织。
 
-相关 per-process metadata 见 [dp_attention.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/dp_attention.py)。
+对应的 per-process metadata 在 [dp_attention.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/dp_attention.py)。
 
 ### EP：Expert Parallelism
 
-EP 将不同专家权重分给不同 Rank，避免每卡复制所有专家：
+EP 把不同专家权重放到不同 Rank，每卡不必复制全部专家。
 
 ~~~text
 Rank 0 → Experts A/B
@@ -432,11 +417,9 @@ Rank 2 → Experts E/F
 ...
 ~~~
 
-Token 选中远端专家后，输入先送到权重所在 Rank，计算完再返回贡献。
+Token 选中远端专家，就把输入送到权重所在 Rank，算完再取回贡献。
 
-于是 Router→Expert 的模型过程在系统中展开为：
-
-
+Router 到 Expert 的模型计算，因而展开成下面的设备协作。
 
 ~~~text
 Router
@@ -450,17 +433,17 @@ Expert Runner
 Combine
 ~~~
 
-入口见 [ep_moe/layer.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/ep_moe/layer.py)。
+专家并行层入口为 [ep_moe/layer.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/ep_moe/layer.py)。
 
 ### DeepEP 与专家计算的边界
 
-DeepEP 承接专家并行的 Dispatch、Combine，而非专家矩阵乘本身。
+DeepEP 承担专家并行的 Dispatch 和 Combine，专家矩阵乘另由计算实现执行。
 
-Dispatcher 实现包括 [deepep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py) [deepep_v2.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep_v2.py)。
+Dispatcher 的具体实现有 [deepep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)、[deepep_v2.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep_v2.py)。
 
-Ascend 专家计算另由 Runner 承接，见 [moe_runner/ascend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/moe_runner/ascend.py)。
+Ascend 专家计算的 Runner 在 [moe_runner/ascend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/moe_runner/ascend.py)。
 
-两层对应为：
+分发与计算的对应关系如下。
 
 ~~~text
 DeepEP
@@ -470,24 +453,24 @@ Ascend MoE Runner
 → 到了本 Rank 后 Expert GEMM 怎么算
 ~~~
 
-分发时长大还需区分重排、传输、跨 Rank 等待。部分若已被其他工作覆盖，缩短通信总时长未必等量缩短周期。
+Dispatch 时间还包括重排、传输和跨 Rank 等待。通信若已被其他工作覆盖，缩短其总时长，未必等量缩短整个周期。
 
 ### Collective：AllReduce、AllGather、ReduceScatter、All-to-All
 
-常见原语为：
+几种常见原语的操作对象不同。
 
 - AllReduce 合并局部贡献，并将归约结果交给各 Rank；
 - AllGather 收齐各 Rank 的分片；
 - ReduceScatter 合并贡献后分别交付结果区间；
 - All-to-All 按目的地交换各自的数据。
 
-ReduceScatter+AllGather 可用来解释常见 AllReduce 算法，语义分解不代表底层必调用这两个 API。
+常见 AllReduce 算法可用 ReduceScatter+AllGather 解释，但这种语义分解不保证底层直接调用这两个 API。
 
-HCCL 属于 Ascend collective library，承接相关分布式调用。
+HCCL 是 Ascend collective library，承接相应分布式调用。
 
-RDMA 描述跨机器远程内存和搬运能力，属于更下层传输，不能等同 TP、EP。
+RDMA 是更下层的远程内存与跨机搬运能力，TP、EP 则规定计算分工，处在不同层次。
 
-层次为：
+这些层次的关系如下。
 
 ~~~text
 并行策略：
@@ -505,23 +488,21 @@ HCCL / 专用 MoE backend / 网络传输能力
 
 ### PP、CP、SP
 
-PP 沿深度分层，各 stage 执行不同层。
+PP 沿模型深度分层，各 stage 执行不同层。
 
-CP 沿上下文分布数据，Attention 还可能访问其他 Rank 历史，不能只按切 Token 数组理解。
+CP 沿上下文分布数据，Attention 可能需要访问其他 Rank 的历史，协作不止切开 Token 数组。
 
-SP 也涉及 sequence，但经典形式常用于 TP activation 分片、节约内存，与 CP 的整段上下文协作不同。
+SP 也涉及 sequence，经典形式常用于 TP activation 分片以节省内存，与 CP 的上下文协作不同。
 
-具体定义需连同框架 Group、本地 Tensor 和交换方式确认。
+具体到框架，还要结合 Group、本地 Tensor 与交换方式确定含义。
 
 ## 五、投机解码：Draft、Verify 与 Accept
 
-普通 Target Decode 每次完整前向推进的输出较少。
+普通 Target Decode 每次完整前向，通常只推进较少输出。
 
-投机先由较轻路径提多个候选，再交 Target 验证。
+投机先用较轻的路径提一组候选，再让 Target 验证。
 
-
-
-过程为：
+候选到正式输出经过下面几步。
 
 ~~~mermaid
 flowchart TD
@@ -537,9 +518,9 @@ flowchart TD
 
 ### Draft 是角色，不一定是独立小模型
 
-Draft 是提议角色，可以由独立模型或大模型附带模块实现。
+Draft 是提出候选的角色，可以来自独立模型，也可以来自大模型附带的模块。
 
-例如：
+常见提议路径如下。
 
 - 独立 Draft Model；
 - MTP / NextN Head；
@@ -547,17 +528,15 @@ Draft 是提议角色，可以由独立模型或大模型附带模块实现。
 - DSpark Head；
 - N-gram 等非神经路径。
 
-V4 可使用 checkpoint 自带 DSpark head，部分 Ascend CI 也显式传 draft model path。两者都是提议路径，权重组织方式不同。
+V4 可以使用 Checkpoint 自带 DSpark head，部分 Ascend CI 也显式提供 draft model path。两种都承担提议，权重组织却不同。
 
-是否独立权重、独立实例或额外 head，需要按算法、checkpoint 确认。
-
-
+独立权重、独立实例与额外 head 是不同安排，选择由算法和 Checkpoint 决定。
 
 ### Verify 与 Accept
 
-Verify 为候选位置计算 Target 结果，Accept 按算法规则选有效历史，候选在此之前尚未成为正式输出。
+Verify 计算候选位置的 Target 结果，Accept 按算法选有效历史。在此之前，候选还不是正式输出。
 
-结果还会影响：
+接受结果也会更新下面这些状态。
 
 - Sequence Length；
 - Position；
@@ -565,15 +544,13 @@ Verify 为候选位置计算 Target 结果，Accept 按算法规则选有效历�
 - Draft/Verify Metadata；
 - 下一轮 Draft State。
 
-需分清临时候选状态与已提交历史。
+候选写入的临时状态，还不等于已经提交的历史。
 
-
-
-Commit 确认有效输入状态，Compact 转为下游布局，Rollback 阻止拒绝状态影响后续，Reclaim 回收空间。具体对象和顺序由算法、缓存决定。
+Commit 确认有效输入状态，Compact 整理成下游布局，Rollback 避免拒绝状态继续生效，Reclaim 回收空间。对象与执行顺序由算法和缓存实现决定。
 
 ### 接受长度怎样与周期成本一起决定收益
 
-性能比较可先看：
+周期成本与输出推进的关系如下。
 
 ~~~text
 有效接受的 Token 数
@@ -581,27 +558,23 @@ Commit 确认有效输入状态，Compact 转为下游布局，Rollback 阻止�
 Draft + Verify + KV + Scheduler + Communication 的总成本
 ~~~
 
-接受长度通常含周期输出推进，严格接受率则需明确实际接受/提出的候选计数，并说明 bonus。二者都要与周期耗时并列。
+接受长度通常反映周期输出推进，严格接受率则要有实际接受、提出的候选计数，并说明 bonus 的处理。推进多长和周期花多久，一起决定收益。
 
-Draft、宽 Verify、KV 搬运或同步增加过多时，投机也可能比普通 Decode 慢。
+Draft、宽 Verify、KV 搬运或同步开销增加太多，投机也会慢过普通 Decode。
 
 ### DSpark 在源码里从哪里看
 
-源码可顺次进入：
+DSpark 的数据结构、执行组织和模型分别在下列入口。
 
-1. [spec_info.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/speculative/spec_info.py)：先理解 speculative metadata 的数据结构；
-2. [dspark_worker_v2.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py)：看 worker 如何组织 Draft / Target / Verify；
-3. [deepseek_v4_dspark.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/models/deepseek_v4_dspark.py)：看 V4 DSpark 模型结构怎样进入 forward。
+1. [spec_info.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/speculative/spec_info.py) 定义 speculative metadata；
+2. [dspark_worker_v2.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py) 组织 Draft / Target / Verify；
+3. [deepseek_v4_dspark.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/models/deepseek_v4_dspark.py) 实现 V4 DSpark 的模型 forward。
 
-多卡还需核对：
+多卡执行还牵涉这些分工。
 
-- Draft 的 TP/DP/EP 布局；
-- Verify 使用的 Group；
-- Accept 的同步参与者；
-- KV 的坐标和所有权；
-- 两种布局之间的转换。
+Draft 有自己的 TP/DP/EP 布局，Verify 使用相应 Group，Accept 需要确定同步参与者，KV 有坐标和所有权；两种布局之间还要完成转换。
 
-扩展配置需同时满足：
+支持一种配置，需要这些条件一起成立。
 
 ~~~text
 允许新的配置
@@ -617,32 +590,32 @@ KV / Sequence State 正确
 输出结果正确
 ~~~
 
-这些依赖连接算法、Runtime、内存、通信，不能只放开参数。
+参数放行之后，算法、Runtime、内存与通信的状态仍必须衔接，DSPARK 从候选到 Verify、Accept、Commit 都有自己的更新时刻。
 
 ## 六、Ascend：Backend、CANN、Kernel 与量化
 
-最后由 Backend、算子和 Kernel 将计算交给 Ascend 910C。
+这些计算最后由 Backend、算子和 Kernel 接到 Ascend 910C。
 
 ### Backend：同一高层语义的具体实现选择
 
-常见选择包括：
+推理框架常见的 Backend 选择有下面几类。
 
 - Attention Backend；
 - MoE A2A Backend；
 - MoE Runner Backend；
 - Quantization Backend。
 
-Backend 将高层计算映射为具体布局、算子和执行分支。
+Backend 将高层计算落实为布局、算子与执行分支。
 
-设备、模型、精度、阶段不同，选择也可能不同，分析性能要找到实际进入的分支。
+设备、模型、精度和阶段变了，实际选中的分支也可能变，性能分析需要落到运行的实现。
 
-例如 Attention 是计算语义，dsv4 则决定平台对应的实现。
+例如 Attention 描述计算语义，dsv4 给出相应平台的实现路径。
 
-注册和 NPU 实现分别见 [attention_registry.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/attention/attention_registry.py) [ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)。
+注册入口与 NPU 实现分别为 [attention_registry.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/attention/attention_registry.py)、[ascend_dsv4_backend.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/attention/ascend_dsv4_backend.py)。
 
 ### Operator 怎样映射到 Kernel
 
-调用层次可画为：
+高层 Operator 到设备 Kernel，调用会经过这些层次。
 
 ~~~text
 Model Forward
@@ -658,26 +631,19 @@ NPU Kernel
 Ascend 910C
 ~~~
 
-映射并不一一对应：
+两者并不一一对应。
 
-- 一个 Operator 可启动多个 Kernel；
-- 相邻高层操作可融合；
-- shape、dtype、mode 可选择不同 Kernel；
-- 路径还可能包含 Host 准备、workspace 或通信。
+一个 Operator 可以启动多个 Kernel，相邻高层操作也可以融合。shape、dtype、mode 会选择不同 Kernel，调用周围还可能有 Host 准备、workspace 或通信。
 
-核对 Attention 耗时时应保留：
+Attention 耗时取决于下面这些实际执行条件。
 
-- 实际 dispatch 分支；
-- shape、dtype；
-- Tiling 选择；
-- 计算与搬运限制；
-- 额外布局转换。
+实际 dispatch 分支和 shape、dtype 决定输入，Tiling 选择具体执行安排，计算、搬运限制以及额外布局转换共同构成开销。
 
 ### CANN、Tiling 与 TilingKey
 
-CANN 向上承接算子调用，向下组织 Ascend 执行。
+CANN 向上承接算子接口，向下组织 Ascend 执行。
 
-高性能或自定义算子常经过：
+高性能或自定义算子常经过下面这条路径。
 
 ~~~text
 Host
@@ -691,40 +657,36 @@ Host
 Device Kernel
 ~~~
 
-片上高速空间有限，大 Tensor 需分 Tile 搬入、计算、写回。
+片上高速空间有限，大 Tensor 通常分成 Tile，分批搬入、计算、写回。
 
-Tiling 决定：
+Tiling 决定这些工作的安排。
 
-- 每块数据量；
-- 各 Core 的分工；
-- 循环次数；
-- Local Buffer 使用；
-- 搬运和计算的安排。
+每块多大、各 Core 做哪部分、循环几次、Local Buffer 怎么用，以及计算和搬运怎样衔接，都属于 Tiling。
 
-TilingKey 用于选择相应形状、精度、模式的 Kernel 分支。
+TilingKey 用于选相应形状、精度、模式的 Kernel 分支，读到 key 还需要对应到具体设备实现。
 
-所以算子同名不保证内部执行相同。
+同名算子因此也可能执行不同的内部路径。
 
 ### Stream、Graph 与异步执行
 
-Host 提交后，设备通常按 Stream 异步执行，API 返回不等于计算完成。
+Host 提交任务后，设备通常在 Stream 上异步执行，API 返回时计算未必已经完成。
 
-计时需区分：
+时间线里会分别出现这些区间。
 
 - Host API 时间；
 - Kernel 执行时间；
 - Stream Synchronization；
 - Compute / Communication overlap。
 
-NPU Graph 尝试减少重复 Launch、Host 调度，入口为 [npu_graph_runner.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)。
+NPU Graph 复用安排，尝试减少重复 Launch 和 Host 调度，入口为 [npu_graph_runner.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py)。
 
 ### BF16、W8A8 与 ModelSlim
 
-BF16 是 16-bit 浮点，比 FP32 占用更少字节，支持良好时可能提高吞吐，但实际收益不必与位宽成比例。
+BF16 是 16-bit 浮点，相比 FP32 少占字节，硬件与实现支持良好时可能提高吞吐，但收益并不保证与位宽成比例。
 
-W8A8 表示权重和激活都使用 8-bit 表示，但这两个位宽还不足以描述完整量化方案。
+W8A8 说明权重、激活都是 8-bit，完整量化方案还包含粒度、scale 和计算路径。
 
-还需继续确认：
+同样的位宽，下面这些条件仍可能不同。
 
 - 权重的 per-tensor/channel/group 粒度；
 - 激活静态或动态；
@@ -734,46 +696,46 @@ W8A8 表示权重和激活都使用 8-bit 表示，但这两个位宽还不足�
 - 排除层；
 - Dense、MoE Kernel。
 
-比较同名 W8A8 前，需先对齐这些格式与路径。
+因此比较 W8A8，需要对齐格式和实际路径。
 
-ModelSlim 入口见 [modelslim.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/quantization/modelslim/modelslim.py)，各 Scheme 位于相应目录。
+ModelSlim 入口在 [modelslim.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/quantization/modelslim/modelslim.py)，各 Scheme 位于相应目录。
 
-可以选一层，将权重、激活、scale 与算子实参逐项接上，再分辨耗时来自量化、矩阵乘或转换。
+一层的权重、激活、scale 最后对应到算子实参，量化、矩阵乘和转换各自在这条路径上花时间。
 
 ## 七、按工作任务继续阅读
 
-下面按任务列出后续文章，查过定义即可返回当前问题，无需先记全表。
+这些文章把相应术语放回实际请求，按正在看的问题选择即可。
 
 ### 从一次请求开始
 
-请求到设备可依次读：
+请求到设备的过程，分在这三篇中。
 
-1. 先读 [SGLang 请求生命周期](../sglang/sglang-ascend-request-lifecycle.md)；
-2. 再读 [SGLang Scheduler](../sglang/sglang-scheduler-source-analysis.md)；
-3. 再读 [SGLang ModelRunner](../sglang/sglang-modelrunner-source-analysis.md)。
+1. [SGLang 请求生命周期](../sglang/sglang-ascend-request-lifecycle.md)；
+2. [SGLang Scheduler](../sglang/sglang-scheduler-source-analysis.md)；
+3. [SGLang ModelRunner](../sglang/sglang-modelrunner-source-analysis.md)。
 
-这三篇分别跟踪请求接入、调度组批和模型执行，适合连着读。
+它们分别跟踪接入、组批和模型执行。
 
 ### 如果你在看 Attention / KV Cache
 
-缓存访问可读：
+缓存读取的具体实现见下文。
 
 - [DeepSeek-V4 Attention 源码解析](../sglang/deepseek-v4-attention-source-analysis.md)
 
-沿着位置和长度看 Query 怎样写入缓存、读取历史，再到 Ascend backend 核对实际算子参数。
+Query 怎样写缓存、沿长度和位置读取历史，最后传哪些参数给 Ascend backend，都在这篇里展开。
 
 ### 如果你在看 MoE / TP / DP / EP
 
-MoE 与并行可依次读：
+路由与层间并行分别见这两篇。
 
 1. [DeepSeek-V4 MoE：从路由到专家计算](../sglang/deepseek-v4-moe-source-analysis.md)
 2. [DeepSeek-V4 分布式 Forward](../sglang/deepseek-v4-distributed-parallel-source-analysis.md)
 
-第一篇跟路由到专家输出，第二篇看同一批 Rank 怎样在 Attention、MoE 两阶段转换数据布局和通信组。
+前一篇从选专家走到输出，后一篇说明同一批 Rank 怎样切换 Attention、MoE 的数据布局与通信组。
 
 ### 如果你在看 DSpark / 投机解码
 
-投机系列可依次读：
+投机的主过程与状态管理，分别见这些专题。
 
 1. [DeepSeek-V4 Speculative Decoding 总链路](../speculative-decoding/deepseek-v4-speculative-decoding-source-analysis.md)
 2. [DeepSeek-V4 DSpark Parallel Layout](../distributed/deepseek-v4-dspark-parallel-layout-analysis.md)
@@ -783,7 +745,7 @@ MoE 与并行可依次读：
 6. [多卡一致性](../distributed/deepseek-v4-speculative-distributed-consistency-source-analysis.md)
 7. [Speculative 性能模型](../performance/deepseek-v4-speculative-performance-analysis.md)
 
-候选生成和树语义另见：
+候选生成和树结构还包括下面几篇。
 
 - [MTP / NextN](../speculative-decoding/deepseek-v4-mtp-speculative-decoding-source-analysis.md)
 - [EAGLE Draft Tree](../speculative-decoding/deepseek-v4-eagle-draft-tree-source-analysis.md)
@@ -791,15 +753,15 @@ MoE 与并行可依次读：
 
 ### 如果你在看 PD 分离
 
-PD 可读：
+PD 的跨实例接续见下文。
 
 - [DeepSeek-V4 Prefill / Decode Disaggregation 源码解析](../sglang/deepseek-v4-pd-disaggregation-source-analysis.md)
 
-沿阶段差异继续看 KV、state 如何跨实例交接。
+其中展开了 KV、state 如何从 Prefill 交到 Decode。
 
 ### 把术语放回正在排查的问题
 
-把术语放回数据流：
+把这些名词连到同一条数据流上，是下面的关系。
 
 ~~~mermaid
 flowchart TD
@@ -816,20 +778,4 @@ flowchart TD
     K --> L[Latency / Throughput / Memory]
 ~~~
 
-查词后，可核对：
-
-1. 它表达的计算或状态；
-2. shape、dtype、归属；
-3. 所在 Runtime 边界；
-4. 相关 Group、通信；
-5. 消费它的 backend、算子、Kernel。
-
-这些问题要落到具体对象上：
-
-- 读 `seq_lens`，先确认对象和阶段，再看它怎样影响 positions、KV。
-- 读 `attn_tp_group`，核对有序成员及当前 Attention 坐标。
-- 读 DeepEP，先追分发、合并，再到 Runner 看专家计算。
-- 读 TilingKey，继续检查对应的设备分支。
-- 读 DSPARK，沿候选、Verify、Accept、Commit 追状态。
-
-例如 Decode 变慢，先确认本请求的上下文，再查历史访问、Group，最后对齐设备时间线。这份表用于减少概念停顿，具体行为仍由固定源码与当前运行证据确认。
+例如一次 Decode 变慢，当前请求的上下文、历史访问、参与 Group 和设备时间线，需要对应到同一轮工作。这里给出词义与入口，具体行为仍以固定源码和当前运行记录为准。

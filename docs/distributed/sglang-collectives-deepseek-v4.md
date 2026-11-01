@@ -1,13 +1,13 @@
 # SGLang Collective：从张量分片到 Attention 与 MoE 通信
 
-两个 Rank 各持一个 Tensor，应该 AllReduce 还是 AllGather，先得看数据代表什么。同一结果的局部贡献需要求和，不同区间的 shard 需要拼接，送往远端专家的 Token 则需要重新分发。
+两个 Rank 都拿着 `[M,H]`，还看不出该求和还是拼接。它们可能算了同一输出的不同贡献，也可能各有不同请求的完整行。到了 MoE，输入还要送去持有目标专家的 Rank。
 
-即使两张卡都有 `[M,H]`，它们也可能属于不同请求，或只是同一输出的不同贡献。下面先用小张量分清四种 Collective，再进入 DeepSeek-V4 的 Attention、MoE，把通信前后的数值含义和数据归属接起来。
+Collective 处理这些不同的数据关系。先看四种操作各自改变什么，再放进 DeepSeek-V4 的 Attention、MoE，通信范围和输出归属就能与具体调用对应。
 
 <details markdown="1">
 <summary>版本与源码入口</summary>
 
-以下阅读固定版本源码：
+下文使用固定版本源码。
 
 ~~~text
 sgl-project/sglang
@@ -15,7 +15,7 @@ commit: 176dbcb85d3b7737564e4911947035cc0af65f0a
 核对日期：2026-09-21
 ~~~
 
-相关入口包括：
+相关模块入口如下。
 
 - [distributed/communication_op.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/distributed/communication_op.py)
 - [layers/linear.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/linear.py)
@@ -25,13 +25,13 @@ commit: 176dbcb85d3b7737564e4911947035cc0af65f0a
 - [layers/moe/token_dispatcher/deepep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py)
 - [hardware_backend/npu/moe/fuseep.py](https://github.com/sgl-project/sglang/blob/176dbcb85d3b7737564e4911947035cc0af65f0a/python/sglang/srt/hardware_backend/npu/moe/fuseep.py)
 
-需要分别看高层通信语义与具体实现。同一种数据交换，可能由通用 API、专用库或融合算子完成。
+同一种交换关系，可以由通用 API、专用库或融合算子实现。高层语义和底层调用因而分别解释。
 
 </details>
 
 ## 一、四种 Collective 的输入与输出
 
-假设通信组为 `Group = [R0, R1, R2, R3]`。Collective 要由组内相应参与者共同按约定调用，仅看单个进程不够。归约示例统一使用 SUM，AllReduce 也可以使用其他归约操作。
+假设组为 `Group = [R0, R1, R2, R3]`，参与者按协议共同调用。这里归约统一演示 SUM，AllReduce 本身也支持其他归约操作。
 
 ### AllReduce：同一个逻辑结果的局部贡献需要求和
 
@@ -53,9 +53,9 @@ R2: [10]
 R3: [10]
 ~~~
 
-四个数是同一逻辑结果的局部贡献，求和后为 10。SUM AllReduce 将这个和交给每位参与者，原来的四个位置不会单独保留。
+这四个数是同一逻辑结果的局部贡献，合起来为 10。SUM AllReduce 把和交给每个参与者，不再分别保留输入的四个位置。
 
-所以输入各为 [M,H] 时，输出通常仍为 [M,H]，但数值已经从本地贡献变成组内贡献之和。
+输入各是 [M,H]，输出通常仍是 [M,H]，数值却变成了组内贡献之和。
 
 ### AllGather：不同 Rank 手里是不同 shard，只需要拼完整
 
@@ -77,7 +77,7 @@ R2: [A B C D]
 R3: [A B C D]
 ~~~
 
-A、B、C、D 代表不同区间，AllGather 按组内顺序收齐，不将数值相加。例如输出特征的前后两半，需要拼成完整向量。
+A、B、C、D 表示不同区间，AllGather 按组内顺序收齐，数值不相加。比如一段输出特征的前后两半，需要拼起来才是完整向量。
 
 ### ReduceScatter：既要求和，但最终每个 Rank 只需要一块
 
@@ -108,7 +108,7 @@ R2: [C]
 R3: [D]
 ~~~
 
-ReduceScatter 同样合并局部贡献，但每位参与者只拿自己负责的结果区间。若下一步仍按 shard 计算，就不必在各 Rank 保留完整输出。
+ReduceScatter 也合并局部贡献，但每个 Rank 只拿自己负责的结果区间。下一步继续按 shard 计算，就不必处处保留完整输出。
 
 ### All-to-All：将数据发送到各自的目标 Rank
 
@@ -130,7 +130,7 @@ R2: [C0 C1 C2 C3]
 R3: [D0 D1 D2 D3]
 ~~~
 
-All-to-All 改变数据目的地，不对 A/B/C/D 分块求和。MoE 要把 Token 交给目标专家所在 Rank，就有这种交换关系。例子使用等长块，实际专家接收数量可以不同，还需保留计数和重排信息。
+All-to-All 把各块送到各自目标，不对 A/B/C/D 求和。MoE 将 Token 送到专家所在 Rank，正有这类交换关系。算例块等长，实际专家收多少可以不同，还需要计数与重排信息。
 
 | Collective | 输入关系 | 输出关系 | 是否 Reduce | 所有 Rank 都拿完整结果 |
 | --- | --- | --- | --- | --- |
@@ -141,7 +141,7 @@ All-to-All 改变数据目的地，不对 A/B/C/D 分块求和。MoE 要把 Toke
 
 ## 二、TP Linear 需要什么通信
 
-将这些关系放进矩阵乘 Y = XW。
+矩阵乘 Y = XW 的两种切法，分别需要拼接和求和。
 
 假设：
 
@@ -165,9 +165,9 @@ R0: Y0 = XW0 → [M,4]
 R1: Y1 = XW1 → [M,4]
 ~~~
 
-完整输出是 concat(Y0,Y1)。若下游要求各 Rank 都得到 [M,8]，需要收齐两份特征。
+完整输出是 concat(Y0,Y1)。下游如果要求各 Rank 都持有 [M,8]，就要把两份特征收齐。
 
-固定 `ColumnParallelLinear` 在 `gather_output=True` 时调用 `tensor_model_parallel_all_gather`。下游能消费 shard 时可继续分片，需要完整结果时再 gather。
+固定 `ColumnParallelLinear` 在 `gather_output=True` 时调用 `tensor_model_parallel_all_gather`。下游能接 shard，就继续分片；需要完整结果，再 gather。
 
 Row Parallel 沿输入维分开：
 
@@ -183,28 +183,26 @@ R0: P0 = X0W0 → [M,H]
 R1: P1 = X1W1 → [M,H]
 ~~~
 
-P0、P1 虽同为 [M,H]，却只包含部分输入特征贡献，需按 P0+P1 归约。`RowParallelLinear` 在需要时调用 `tensor_model_parallel_all_reduce`，也可将归约留给后续融合或分支。看到 `reduce_results=False`，还要找谁继续合并。
+P0、P1 虽都为 [M,H]，各只算了部分输入特征的贡献，完整结果是 P0+P1。`RowParallelLinear` 按需要调用 `tensor_model_parallel_all_reduce`，也可留给后续融合或分支归约。`reduce_results=False` 时，贡献仍待下游合并。
 
-可以先写出各 Rank 的输出关系：`[Y0 | Y1]` 表示拼不同位置，`P0 + P1` 表示求和；再看下游需要完整还是分片结果。
+`[Y0 | Y1]` 拼不同位置，`P0 + P1` 加同一输出的贡献。下游要完整结果还是分片结果，再决定是否立即收齐。
 
 ## 三、Attention 输出在哪个 Group 内归约
 
-DeepSeek-V4 的 `wo_b` 产生 RowParallel 局部贡献，还要确认由哪个 Group 求和。下文采用普通非弹性主线，DPA→MoE 的讨论也不进入 Prefill CP 专用分支。
+DeepSeek-V4 的 `wo_b` 产生 RowParallel 局部贡献，归约还必须落在正确的 Group。下面按普通非弹性路径讨论，DPA→MoE 也不进入 Prefill CP 专用分支。
 
-构造 `wo_b` 时，权重按 `attn_tp_rank`、`attn_tp_size` 切分，而默认 `reduce_results=True` 需满足：
+`wo_b` 的权重按 `attn_tp_rank`、`attn_tp_size` 切分，默认 `reduce_results=True` 有下面这些条件。
 
 ~~~text
 attn_tp_size == global tp_size
 并且 attn_tp_size > 1
 ~~~
 
-
-
 ### 情况一：ATTN_TP 等于整个 TP Group
 
 当 `attn_tp_size == tp_size > 1` 时：
 
-各 Rank 共同形成同一 Attention 输出，`RowParallelLinear` 内部直接在全局 TP Group 归约。
+各 Rank 协作形成同一个 Attention 输出，`RowParallelLinear` 直接在完整 TP Group 中归约。
 
 ~~~text
 wo_b rank 0 partial ─┐
@@ -223,13 +221,13 @@ DP = 8
 ATTN_TP = 2
 ~~~
 
-此时满足 `1 < attn_tp_size < global tp_size`。
+此时宽度是 `1 < attn_tp_size < global tp_size`。
 
-八个 Attention-DP 组可能处理不同请求，每组只有两个 Rank 协作。全局 TP AllReduce 会把不同组的请求结果混加，因此归约必须限制在各自 Attention TP 子组内。
+八个 Attention-DP 组可能各处理不同请求，每组两个 Rank 协作。全局 TP AllReduce 会把不同请求混加，求和只能在各自 Attention TP 子组中完成。
 
-固定代码先设置 `wo_b.reduce_results=False`，留下局部贡献，再显式调用 `attn_tp_all_reduce(o)`。它使用 `attn_tp_group`，归约范围因此与当前 Attention 请求组一致。
+所以固定代码令 `wo_b.reduce_results=False`，先留下局部贡献，再显式调用 `attn_tp_all_reduce(o)`，使用 `attn_tp_group` 完成子组归约。
 
-对应执行路径为：
+这条分支的交接如下。
 
 ~~~text
 Attention kernel
@@ -247,11 +245,11 @@ ATTN_TP Group AllReduce
 
 ### 情况三：ATTN_TP=1
 
-若 TP=DP，例如 TP8/DP8，得到 `attn_tp_size = 1`。
+TP=DP，例如 TP8/DP8，便得到 `attn_tp_size = 1`。
 
-Attention-DP 组中只有一个 Rank，不存在待跨 Rank 合并的 Attention TP 贡献。
+每个 Attention-DP 组只有一个 Rank，已经没有待跨 Rank 合并的 Attention TP 贡献。
 
-三种布局可对照为：
+三种布局放在一起如下。
 
 | Attention layout | wo_b 后怎样归约 |
 | --- | --- |
@@ -259,15 +257,15 @@ Attention-DP 组中只有一个 Rank，不存在待跨 Rank 合并的 Attention 
 | ATTN_TP=global TP>1 | RowParallelLinear 内部 global TP AllReduce |
 | `1 < ATTN_TP < global TP` | wo_b 不归约，随后显式 ATTN_TP Group AllReduce |
 
-mHC AllReduce fusion 同样受范围约束：要求 global TP 等于 ATTN_TP、宽度为 4，且 `wo_b.reduce_results=True`。它融合的是 full-TP 归约，不能当作 DPA 子组后的另一轮求和。
+mHC AllReduce fusion 也受范围限制，要求 global TP 等于 ATTN_TP、宽度为 4，且 `wo_b.reduce_results=True`。它融合 full-TP 归约，不是 DPA 子组归约后的另一次求和。
 
 ## 四、DP Attention 怎样恢复完整 Token 行
 
-DeepSeek-V4 从 DPA Attention 进入 no-A2A MoE 时，会通过 `dp_gather_replicate` 准备输入。
+DPA Attention 接 no-A2A MoE 时，DeepSeek-V4 通过 `dp_gather_replicate` 准备输入。
 
-replicate 指出同一 Attention-DP 组内已持有完整的重复结果。例如元素都已经为 7，再加一次便成 14。因此收集各 DP 行时，还要避免组内副本重复贡献。
+replicate 表示同一 Attention-DP 组内已经有多份完整结果。元素都为 7，再加一次就成 14，因此收集各 DP 行前，还要让组内副本只贡献一次。
 
-`_dp_gather` 根据布局选择下列实现：
+`_dp_gather` 根据布局选择下面的实现。
 
 ~~~text
 AllGatherV
@@ -275,7 +273,7 @@ AllGather
 zero-fill + AllReduce
 ~~~
 
-它们共同要求全局 buffer 的每个逻辑 Token 只贡献一次，并保持正确行序。SUM_LEN 按各 DP 行数之和组织空间；MAX_LEN 先把每组补到相同长度再收集，这会影响接口和切分方式。
+这些实现都要保留正确行序，让每个逻辑 Token 在全局 buffer 中只贡献一次。SUM_LEN 按各 DP 的真实行数之和组织空间，MAX_LEN 则先补到共同长度，两种安排使用不同接口和切分方式。
 
 ### AllGatherV：ATTN_TP=1 时最直接
 
@@ -289,15 +287,15 @@ SUM_LEN
 非 elastic WORLD gather
 ~~~
 
-ATTN_TP=1 时，每 DP shard 只有一份贡献，可以按真实行数变长收集：`[M0,H] + [M1,H] + ... → [M_global,H]`。
+ATTN_TP=1，每个 DP shard 只有一份贡献，直接按真实行数变长收集即可，`[M0,H] + [M1,H] + ... → [M_global,H]`。
 
 ### SUM_LEN + AllReduce：互不重叠的非零区间
 
-这条 SUM_LEN 路径虽然调用 AllReduce，目的仍是收集不同 DP 的行。它先安排互不重叠的非零区间，再借求和保留各段。
+SUM_LEN 这一分支用 AllReduce 收集不同 DP 的行。先让非零区间互不重叠，SUM 就能在各位置留下唯一那份数据。
 
-每个 Rank 先清零 global buffer，只在自己 DP 对应的行区间写入 local hidden。
+每个 Rank 清零 global buffer，只往本 DP 的行区间写 local hidden。
 
-`dp_gather_replicate` 遇到 ATTN_TP>1 时，仅让 `attn_tp_rank=0` 写真实值，其余副本保持零。
+ATTN_TP>1 时，`dp_gather_replicate` 只让 `attn_tp_rank=0` 写真实值，其余副本维持零。
 
 例如：
 
@@ -312,17 +310,17 @@ DP2/ATP0: [0 0 0 0 E F]
 DP2/ATP1: [0 0 0 0 0 0]
 ~~~
 
-全 TP Group 再执行 SUM AllReduce，得到 `[A B C D E F]`。
+完整 TP Group 做 SUM AllReduce，得到 `[A B C D E F]`。
 
-例如 A 的位置只有 DP0/ATP0 非零，求和仍为 A。各段凭借唯一贡献者和零区间进入正确位置，没有让不同 Token 彼此相加。
+A 的位置只有 DP0/ATP0 非零，求和后仍是 A。不同 Token 没互相相加，各自靠唯一贡献者进入相应区间。
 
 ### MAX_LEN + AllGather：先在 ATTN_TP 内消重，再 full TP Gather
 
-MAX_LEN 在 ATTN_TP=1 时可以直接 AllGather。
+MAX_LEN 在 ATTN_TP=1 时直接 AllGather。
 
-宽度更大时，要先处理同组的重复行，否则全 TP AllGather 会把副本也收入，导致行数及请求映射重复。
+组内宽度更大，完整副本若原样参与全 TP AllGather，会把重复行也收进去，请求映射跟着重复。
 
-固定 `dp_gather_replicate` 先将非 `attn_tp_rank=0` 的 local tensor 清零，再沿 Token 维分为 ATTN_TP 份，组内 ReduceScatter。
+固定 `dp_gather_replicate` 先将非 `attn_tp_rank=0` 的 local tensor 清零，再把 Token 维分成 ATTN_TP 份，做组内 ReduceScatter。
 
 例如：
 
@@ -339,9 +337,9 @@ ATP0: [A B]
 ATP1: [C D]
 ~~~
 
-ReduceScatter 中另一份输入为零，因此数值不变，同时把四行分给两个 Rank，形成 `[A B]`、`[C D]`。后面的全 TP AllGather 就能各收一次不同片段。
+ReduceScatter 的另一份输入为零，求和不改数值，同时将四行分给两个 Rank，分别得到 `[A B]`、`[C D]`。后续完整 TP AllGather 各收一次，便没有重复。
 
-这三条实现各自保证唯一贡献：
+三条实现保证唯一贡献的方式如下。
 
 | 路径 | 怎样保证每个 Token 只贡献一次 |
 | --- | --- |
@@ -349,15 +347,15 @@ ReduceScatter 中另一份输入为零，因此数值不变，同时把四行分
 | AllReduce | 只有 ATP0 写真实值，其余副本为 0 |
 | AllGather | 先去掉 replicated duplicate，再用 ATTN_TP ReduceScatter 形成唯一 row shards |
 
-上面普通非 elastic 路径主要使用 TP Group；Elastic EP 某些 gather 会改用 expanded WORLD Group。
+这里的普通非 elastic 路径主要用 TP Group，Elastic EP 的某些 gather 会换成 expanded WORLD Group。
 
 ## 五、ReduceScatter 怎样合并归约与分发
 
-no-A2A 的专家输出还可以按以下方式返回。
+no-A2A MoE 结束以后，专家贡献还需要归约、返回本地请求行。
 
 ### Baseline：post-expert AllReduce + dp_scatter
 
-基线路径先做：
+Baseline 将这两件事分开完成。
 
 ~~~text
 DP gather
@@ -373,11 +371,11 @@ dp_scatter
 local token rows
 ~~~
 
-各 Rank 先获得归约后的全局结果，再取回本地请求行。如果后续只需本地部分，可以尝试把归约与分发合并。
+各 Rank 先拿到归约后的全局结果，再切回本地请求行。下游只需本地部分时，就有机会合并归约与分发。
 
 ### SUM_LEN 优化：ReduceScatterV 吸收 post-expert Reduce
 
-ReduceScatterV 允许各 DP 按真实 Token 数接收不同长度的分块。固定 DeepSeek-V4 在相应条件下设置 `_use_reduce_scatterv`：
+ReduceScatterV 支持按各 DP 的真实 Token 数返回不同长度分块。DeepSeek-V4 在下面的条件下设置 `_use_reduce_scatterv`。
 
 ~~~text
 DPA local→global MoE gather path
@@ -386,11 +384,11 @@ is_dp_gatherv_active() = true
 dp_padding_mode = SUM_LEN
 ~~~
 
-其中 `is_dp_gatherv_active` 又要求 ATTN_TP=1、`tp_size=attn_dp_size` 并启用环境开关。
+其中 `is_dp_gatherv_active` 还要求 ATTN_TP=1、`tp_size=attn_dp_size`，并开启相应环境开关。
 
-Decoder 发布 `mlp_reduce_scatter=True` 后，MoE 跳过内部 post-expert AllReduce，改由后面的 `tp_group.reduce_scatterv(...)` 接管。
+Decoder 发布 `mlp_reduce_scatter=True`，MoE 便跳过内部 post-expert AllReduce，由后续 `tp_group.reduce_scatterv(...)` 接管归约。
 
-它一次完成贡献求和与本地行返回：
+贡献求和和本地行返回，在这一次调用里完成。
 
 ~~~text
 partial expert output SUM
@@ -400,7 +398,7 @@ partial expert output SUM
 
 ### MAX_LEN 优化：等长 ReduceScatter
 
-MAX_LEN 的等长路径由 `SGLANG_DP_USE_REDUCE_SCATTER` 控制，并要求：
+MAX_LEN 的等长分支由 `SGLANG_DP_USE_REDUCE_SCATTER` 控制，条件如下。
 
 ~~~text
 no-A2A DPA→MoE gather path
@@ -409,11 +407,11 @@ dp_padding_mode = MAX_LEN
 tp_size == attn_dp_size
 ~~~
 
-满足后也发布 `mlp_reduce_scatter=True`，跳过原内部归约，最后让 `dp_reduce_scatter_tensor` 执行 SUM 并返回等长 shard。
+满足后，同样发布 `mlp_reduce_scatter=True`、跳过旧内部归约，最后由 `dp_reduce_scatter_tensor` 做 SUM，返回等长 shard。
 
 ### should_use_dp_reduce_scatterv 是另一条独立 skip 条件
 
-另外，`moe/utils.py` 的 `should_use_dp_reduce_scatterv` 还检查：
+`moe/utils.py` 中另有 `should_use_dp_reduce_scatterv`，检查下面这些条件。
 
 ~~~text
 A2A backend = none
@@ -424,9 +422,9 @@ moe_ep_size == attn_dp_size
 并排除特定 FP4 allgather 路径
 ~~~
 
-这是标准 Dispatcher EP combine 的另一判断，会参与 `should_skip_post_experts_all_reduce`。它和 Decoder 的 `mlp_reduce_scatter` 都能使旧 AllReduce 跳过，但判断位置、后续接管组件不同。
+它是标准 Dispatcher EP combine 的独立判断，参与 `should_skip_post_experts_all_reduce`。它和 Decoder 的 `mlp_reduce_scatter` 都能跳过旧 AllReduce，但判断位置和后面的接管组件不同。
 
-因此，需要分别追踪这些控制点：
+这几个控制点各自对应的后续操作如下。
 
 ~~~text
 mlp_reduce_scatter
@@ -434,7 +432,7 @@ should_use_dp_reduce_scatterv
 should_skip_post_experts_all_reduce
 ~~~
 
-沿输出往下看，可将归约安排写为：
+从输出看，归约安排可以写成下面几条路径。
 
 ~~~text
 MoE output
@@ -446,11 +444,11 @@ B. skip post-expert reduce → ReduceScatterV
 C. skip post-expert reduce → ReduceScatter
 ~~~
 
-B/C 把求和交给后续 ReduceScatter，因此必须跳过旧 post-expert AllReduce，否则同一贡献会重复求和。验证时既要找到新归约，也要确认旧位置在对应分支确实没有执行。
+B/C 把求和交给后面的 ReduceScatter，所以旧 post-expert AllReduce 必须跳过，否则同一贡献会加两次。新归约与旧位置的 skip 要在同一分支里对应。
 
 ## 六、Ascend DeepEP 与 FuseEP 的执行路径
 
-MoE All-to-All 将输入从请求所在 Rank 交给专家所在 Rank，计算后再恢复输出。这里 owner 随阶段变化：
+MoE All-to-All 把输入从请求所在 Rank 送往专家所在 Rank，算完再恢复输出，owner 随阶段变化。
 
 ~~~text
 Request/DP owner
@@ -460,13 +458,13 @@ Expert owner
 Request/DP owner
 ~~~
 
-Ascend 上至少还要区分 DeepEP 与 ascend_fuseep 的实现。
+Ascend 的 DeepEP、ascend_fuseep 使用不同入口。
 
 ### Ascend DeepEP：MOE_EP Group + Dispatcher 的 Dispatch/Combine
 
-固定 NPU DeepEP dispatcher 从 `get_parallel().moe_ep_group.device_group` 取得 MOE_EP device process group，交给 Buffer 创建通信资源。底层传输仍由 Buffer 组织，不能仅凭组名推断具体通信原语。
+固定 NPU DeepEP dispatcher 从 `get_parallel().moe_ep_group.device_group` 取 MOE_EP device process group，交给 Buffer 创建资源。传输由 Buffer 继续组织，Group 名字本身没有规定使用哪种通信原语。
 
-随后进入 `DeepEPDispatcher` / `DeepEPBuffer`，NPU 上又有两种来源：
+进入 `DeepEPDispatcher` / `DeepEPBuffer` 后，NPU 有下面两种实现来源。
 
 ~~~text
 SGLANG_ZBAL_LOCAL_MEM_SIZE > 0
@@ -476,7 +474,7 @@ SGLANG_ZBAL_LOCAL_MEM_SIZE > 0
 → deep_ep.Buffer
 ~~~
 
-Normal Dispatch 路径可沿下面的布局和调用追踪：
+Normal Dispatch 的布局与调用如下。
 
 ~~~text
 Router TopK
@@ -499,17 +497,17 @@ buffer.combine(...)
 恢复 source Token owner
 ~~~
 
-Routing Layout、各目标 Token 数、异步事件与 Dispatch/Combine 由 DeepEP 或 ZBAL Buffer 承接，构成实际的数据交换。
+DeepEP 或 ZBAL Buffer 处理 Routing Layout、各目标 Token 数、异步事件和 Dispatch/Combine，实际交换从这些参数与事件继续往下。
 
 ### Ascend FuseEP：同一个 MOE_EP Group，但绕过普通 Dispatcher
 
-`ascend_fuseep` 则从模型层进入融合路径。
+`ascend_fuseep` 从模型层直接走融合路径。
 
-`create_moe_dispatcher` 虽返回 StandardDispatcher，但注释指出它不会执行；`FusedMoE.forward` 直接转到 `forward_fuseep(...)`，对应文件为 `hardware_backend/npu/moe/fuseep.py`。
+`create_moe_dispatcher` 返回的 StandardDispatcher 不实际执行，这点注释已有说明。`FusedMoE.forward` 转到 `hardware_backend/npu/moe/fuseep.py` 的 `forward_fuseep(...)`。
 
-FuseEP 同样通过 `get_parallel().moe_ep_group.device_group` 取得通信组，之后创建低时延 DeepEPBuffer。
+FuseEP 也取 `get_parallel().moe_ep_group.device_group`，随后创建低时延 DeepEPBuffer。
 
-普通路径分别执行 dispatch、expert runner、combine，而 FuseEP 将它们交给同一个入口：
+普通路径分开调 dispatch、expert runner、combine，FuseEP 把几件事交到同一入口。
 
 ~~~python
 buf.fused_deep_moe(
@@ -522,9 +520,9 @@ buf.fused_deep_moe(
 )
 ~~~
 
-输入行、路由结果、专家权重同时交给融合入口，Python 层不再逐个暴露 Dispatch、Expert GEMM、Combine，融合边界可以从这些参数看出来。
+输入行、路由结果和专家权重一起传入，Python 不再分开呈现 Dispatch、Expert GEMM、Combine，参数也显示了这个融合范围。
 
-在 SGLang Python 层能追到的主线为：
+SGLang Python 层的调用主线如下。
 
 ~~~text
 Router / TopK
@@ -536,9 +534,9 @@ fused_deep_moe(hidden, routing, expert weights, ...)
 final hidden
 ~~~
 
-这一段同时包含计算和交换，不能将全部耗时计为纯通信，也不能因为上层只有一次调用就判断底层仅有一个 Kernel。
+这个区间同时有计算和交换，不能全部计成纯通信；一次上层调用也可能启动多个 Kernel。
 
-内部 Kernel、传输、同步由对应 Runtime 安排。继续定位时需沿 DeepEP/ZBAL/Ascend Runtime 追踪，并与 Profiler 事件对应。
+内部 Kernel、传输和同步由相应 Runtime 安排，需要与 DeepEP、ZBAL、Ascend Runtime 以及 Profiler 事件对应。
 
 | 项目 | Ascend DeepEP | Ascend FuseEP |
 | --- | --- | --- |
@@ -552,7 +550,7 @@ final hidden
 
 ## 七、沿一层模型追踪数据归属
 
-将 Rank/Group 的坐标与本篇的数据关系连接，可以沿这一层确认通信范围和输出归属：
+把 Rank/Group 坐标代入一层计算，数据归属会经历这些变化。
 
 ~~~mermaid
 flowchart TD
@@ -587,6 +585,6 @@ flowchart TD
     H -->|"Ascend FuseEP"| R["fused_deep_moe"]
 ~~~
 
-图中 DeepEP 的拆行与恢复对应 `attn_tp_size>1` 的 bridge，宽度为 1 时不需要。no-A2A、FuseEP 是另选的 backend 路径，应按实际配置进入。
+图里的 DeepEP 拆行与恢复对应 `attn_tp_size>1` 的 bridge，宽度为 1 时省去。no-A2A、FuseEP 则是另外选择的 backend 路径，分别按配置进入。
 
-读到一次通信，先记录各 Rank 手里的数据是 shard、局部贡献还是完整行，再确认下游需要什么形状，最后核对 Group 与 backend。这样才能判断调用是在求和、拼接还是重新分发，而不只是在时间线上数函数名。
+数据同为 `[M,H]`，局部贡献、分片和完整行需要的操作仍然不同。下游所需形状、当前 Group 与 backend 一起决定这次通信做什么，时间线上的函数名只是其中一部分信息。

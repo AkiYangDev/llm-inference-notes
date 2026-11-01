@@ -1,13 +1,13 @@
 # DeepSeek-V4 W8A8 执行链：从量化权重到 Ascend INT8 算子
 
-`--quantization modelslim` 根据模型的量化描述选择各层实现。DeepSeek-V4-Flash 的 W8A8 动态 Linear 可将 BF16 hidden states 量化为 INT8，再与 INT8 权重计算，并结合 scale 得到输出。Attention、路由和激活函数等仍按各自实现运行。
+`--quantization modelslim` 让加载器按模型目录里的量化描述，为各层选择实现。DeepSeek-V4-Flash 的动态 W8A8 Linear 把 BF16 hidden states 量成 INT8，与 INT8 权重计算，再结合 scale 得到输出。周围的 Attention、路由、激活函数各走自己的实现。
 
-Dense 和 MoE 的输入准备又有所不同：Dense 可以在算子前量化，MoE 的 DeepEP Dispatch 则可能已提供 INT8 payload 与 per-token scale。下面从 checkpoint 开始，沿两条通路追到 SGLang、ACLNN、CANN。
+同样的激活，在 Dense 和 MoE 进入矩阵乘以前，准备方式还有差别。Dense 可以当场动态量化，MoE 的 DeepEP Dispatch 却可能已经交来 INT8 payload 和 per-token scale，这时 W13 能复用它们。下面从 Checkpoint 的 Scheme 一直接到 SGLang、ACLNN 与 CANN。
 
 <details markdown="1">
 <summary>版本与源码入口</summary>
 
-使用以下固定源码：
+本篇使用以下固定源码。
 
 | 组件 | 版本 / 快照 |
 | --- | --- |
@@ -16,15 +16,15 @@ Dense 和 MoE 的输入准备又有所不同：Dense 可以在算子前量化，
 | Ascend op-plugin | `e89cc608309341298193f957fa87c964ee561781` |
 | CANN ops-nn | 公开 `8.5.0` / master 代码，核对日期 2026-09-21 |
 
-本文统一称 Ascend 910C，上游资料、CI 中的 Atlas A3 名称只在对应分支条件时保留。
+对外统一称 Ascend 910C，上游资料和 CI 的 Atlas A3 名字，只在解释对应分支时保留。
 
 </details>
 
 ## 一、从量化描述确认哪些层使用 W8A8
 
-ModelSlim 按模块描述为 Linear、MoE 分别选择量化实现。加载时，`ModelConfig._find_quant_modelslim_config()` 查找模型目录的 `quant_model_description.json` 并解析 `modelslim`，再由 `ModelSlimConfig` 根据模块权重描述选择 Scheme。
+加载时，`ModelConfig._find_quant_modelslim_config()` 找到模型目录的 `quant_model_description.json`，解析 `modelslim`。`ModelSlimConfig` 再按模块权重描述，分别为 Linear、MoE 选 Scheme。
 
-固定版本的 Linear 映射如下：
+固定版本的 Linear 对应这些实现。
 
 | 量化描述 | Scheme | 执行 Method |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ ModelSlim 按模块描述为 Linear、MoE 分别选择量化实现。加载时�
 
 ### W8A8 配方覆盖的模型层
 
-固定 `deepseek_v4_flash_w8a8.yaml` 的主配方为：
+`deepseek_v4_flash_w8a8.yaml` 的主配方如下。
 
 ```yaml
 act:
@@ -48,26 +48,26 @@ weight:
   symmetric: true
 ```
 
-它选择 `W8A8_DYNAMIC`：激活采用 per-token INT8，权重采用 per-channel INT8，二者均为对称量化。配方再用 include / exclude 决定哪些模块进入这条路径：
+配方选 `W8A8_DYNAMIC`，激活为 per-token INT8，权重为 per-channel INT8，都是对称量化。哪些模块采用它，再由 include / exclude 决定。
 
 - Attention 匹配 `*attn*`，排除 `*wo_a`、`*wo_b`、`*compressor.wgate`、`*compressor.wkv`、`*indexer.weights_proj`、`*indexer.compressor.wgate`、`*indexer.compressor.wkv`。
 - FFN 匹配 `*ffn*`，其中排除 `*gate`。
 
-因此，W8A8 描述的是命中模块的计算方式，不能据此将整个模型画成 INT8。公开 Flash-0731 W8A8 部署资料也标为 `W8A8_DYNAMIC`；实际部署仍应读取 checkpoint 自带的描述文件，不同导出流程可能改变逐层 Scheme。
+W8A8 因而作用于命中模块，其他部分没有全部变为 INT8。公开 Flash-0731 W8A8 部署资料同样标注 `W8A8_DYNAMIC`，实际逐层 Scheme 仍由 Checkpoint 的描述文件确定，不同导出流程可能不同。
 
 <a id="expert"></a>
 
 ### MoE 怎样选择 W13 与 W2 的 Scheme
 
-普通 Linear 调用 `ModelSlimConfig.get_linear_scheme()`，MoE 调用 `ModelSlimConfig.get_moe_scheme()`。MoE 表中的 `W8A8_DYNAMIC` 对应 `ModelSlimW8A8Int8MoE`，进一步接到 `NPUW8A8Int8MoEMethod`。
+普通 Linear 调 `ModelSlimConfig.get_linear_scheme()`，MoE 调 `ModelSlimConfig.get_moe_scheme()`。MoE 的 `W8A8_DYNAMIC` 对应 `ModelSlimW8A8Int8MoE`，再接到 `NPUW8A8Int8MoEMethod`。
 
-W13 合并 `gate_proj + up_proj`，W2 对应 `down_proj`，分别构造自己的 Scheme。命中 W8A8 的 Expert 进入 NPU MoE Runner 的 Grouped MatMul，Dense 则走普通 Linear。二者采用同一量化方向，但工作组织和输入形状不同。
+W13 合并 `gate_proj + up_proj`，W2 对应 `down_proj`，两部分各建 Scheme。命中 W8A8 的 Expert 进入 NPU MoE Runner Grouped MatMul，Dense 则进入普通 Linear，同为量化计算，输入形状和组织方式不同。
 
 ## 二、Dense：激活量化、INT8 MatMul 与输出还原
 
-先看普通 Linear `Y = XW`。
+从普通 Linear 的 `Y = XW` 开始。
 
-设输入、权重为：
+输入和权重形状如下。
 
 ```text
 X:
@@ -81,7 +81,7 @@ INT8 checkpoint weight
 
 ### Weight 在加载阶段已经是 INT8
 
-W8A8 Scheme 创建参数时直接分配：
+W8A8 Scheme 创建参数时，已经按下面的类型分配。
 
 ```python
 weight = torch.empty(
@@ -91,11 +91,9 @@ weight = torch.empty(
 )
 ```
 
-权重已在离线 ModelSlim 阶段量化，运行时无需每轮将 BF16 权重重新量化。
+权重在离线 ModelSlim 阶段就量好了。运行时每轮直接使用 INT8 权重，不再从 BF16 重量化一遍。
 
-
-
-加载后主要完成以下准备：
+加载以后再做这些准备。
 
 ```text
 [N,K] INT8
@@ -109,17 +107,13 @@ weight = torch.empty(
 FRACTAL_NZ weight
 ```
 
-`npu_format_cast()` 默认目标为 `ACL_FORMAT_FRACTAL_NZ`，形状不满足 alignment 时回退 ND 并警告。
+`npu_format_cast()` 默认转到 `ACL_FORMAT_FRACTAL_NZ`，形状不满足 alignment 就回退 ND、发出警告。
 
-
-
-转置、format cast 都属于加载准备。后续多次 Forward 复用这份离线 INT8 权重，无需在每次 Decode 重做转换。
-
----
+转置和 format cast 随加载完成，后面多轮 Forward 复用准备好的权重，Decode 无需逐轮重做。
 
 ### Activation 是在 Forward 时动态量化的
 
-动态激活在 `W8A8_DYNAMIC` 的 `NPUW8A8Int8DynamicLinearMethod.apply()` 中处理，普通 Tensor 路径如下：
+动态激活则在 `W8A8_DYNAMIC` 的 `NPUW8A8Int8DynamicLinearMethod.apply()` 中产生，普通 Tensor 路径如下。
 
 ```python
 quant_out, dynamic_scale =
@@ -136,7 +130,7 @@ output =
     )
 ```
 
-普通 Tensor 的 dtype 变化为：
+沿这条路径，dtype 经历下面的变化。
 
 ```text
 BF16 X
@@ -164,11 +158,7 @@ BF16 Y
 [M,N]
 ```
 
-这里设置 `output_dtype = original_dtype`。BF16 hidden 输入时，Quant MatMul 可直接输出 BF16。所以后续层未必一直消费 INT8，量化与浮点计算会按模块交替：
-
-
-
-
+`output_dtype = original_dtype` 保留原输入类型。输入 hidden 是 BF16，Quant MatMul 就可直接给出 BF16 输出，后续模块在量化与浮点计算间衔接。
 
 ```text
 BF16
@@ -184,19 +174,17 @@ INT8 GEMM Island
 BF16
 ```
 
-官方 W8A8 配置仍可另外指定 `--kv-cache-dtype bfloat16`。Weight / Activation 位宽与 KV Cache dtype 是不同设计维度。
+官方 W8A8 配置仍能另设 `--kv-cache-dtype bfloat16`。权重、激活位宽与 KV Cache dtype 分别配置。
 
----
-
-下面沿动态主线进入 MoE，静态路径的 `deq_scale`、`quant_bias` 留到文末对照。
+MoE 动态路径还要接上 Dispatch 的输入。静态 `deq_scale`、`quant_bias` 的推导放在文末作对照。
 
 ## 三、MoE：DeepEP 的 INT8 数据与 Scale 复用
 
-MoE 同一层的各个 Expert 分别持有权重。
+MoE 一层里，各 Expert 分别持有权重。
 
-Router 决定本轮各 Token 交给哪些 Expert。
+Router 决定这批 Token 要去哪些 Expert。
 
-例如路由后形成以下任务：
+例如路由以后形成下面这些任务。
 
 ```text
 Expert 0: 12 tokens
@@ -206,13 +194,11 @@ Expert 3: 19 tokens
 ...
 ```
 
-逐专家在 Python 层反复启动小 GEMM 会增加 launch 成本，固定 NPU MoE Runner 用 `torch.ops.npu.npu_grouped_matmul(...)` 统一组织，每专家行数经 `expert_tokens / group_list` 交给 Kernel。
-
-
+固定 NPU Runner 用 `torch.ops.npu.npu_grouped_matmul(...)` 组织多专家计算，通过 `expert_tokens / group_list` 给 Kernel 各专家的行数，避免在 Python 逐专家反复启动小 GEMM。
 
 ### W13 与 W2 是两次不同的 Grouped GEMM
 
-ModelSlim W8A8 MoE 分别创建：
+ModelSlim 为 W13、W2 分别创建下面的量化实现。
 
 ```text
 W13:
@@ -224,9 +210,9 @@ W2:
 INT8
 ```
 
-权重在加载后同样进行转置和 NPU 布局准备。
+专家权重加载后同样转置，准备 NPU 布局。
 
-Ascend Runner 按以下主线计算：
+Ascend Runner 的执行主线如下。
 
 ```text
 Routed Hidden
@@ -242,9 +228,9 @@ W2 Grouped MatMul
 BF16 Hidden
 ```
 
-INT8 Expert 使用 `NPUW8A8Int8MoEMethod`。
+其中 INT8 Expert 使用 `NPUW8A8Int8MoEMethod`。
 
-内部持有以下组件：
+这个 Method 持有下面的组件。
 
 ```python
 GroupedMatmul()
@@ -253,7 +239,7 @@ HiddenStatesDynamicQuant(
 )
 ```
 
-普通 GroupedMatmul 最终调用：
+普通 GroupedMatmul 最后进入下面的调用。
 
 ```python
 torch.ops.npu.npu_grouped_matmul(
@@ -266,7 +252,7 @@ torch.ops.npu.npu_grouped_matmul(
 )
 ```
 
-因此 Dense、MoE 分别对应：
+Dense、MoE 因而分别对应这两类矩阵乘。
 
 ```text
 Dense Linear
@@ -278,36 +264,34 @@ MoE Expert
 npu_grouped_matmul
 ```
 
-二者都可执行 INT8×INT8，但专家分组带来不同的负载形状与调度。
-
----
+二者都能做 INT8×INT8，专家分组却带来不同的负载形状与调度方式。
 
 ### DeepEP INT8 Dispatch 到 W13：什么时候避免二次量化
 
-`NPUW8A8Int8MoEMethod` 虽然持有 `HiddenStatesDynamicQuant(quant_dtype=torch.int8)`，也不代表每次都调用它。要判断 W13 是否重复量化，需将 Dispatcher 的输出和 Method 的输入接起来。
+Method 持有 `HiddenStatesDynamicQuant(quant_dtype=torch.int8)`，但 W13 不一定每次都调用它。Dispatch 交来的 hidden 与 scale，决定这次还需不需要量化。
 
 <a id="w8a8-expert-deepep-int8"></a>
 
-W13 权重后处理先将 Dispatcher output dtype 设为 `int8`，要求 DeepEP 使用 INT8 数据面。较新的 Python API 显式接收 `quant_mode="int8"`；Ascend 910C / A3 legacy pybind 若未暴露该参数，则由 vendor runtime 根据环境选择 BF16/INT8。固定 W8A8 CI 为此保留 `DEEP_NORMAL_MODE_USE_INT8_QUANT=1`。
+W13 权重后处理把 Dispatcher output dtype 设为 `int8`，要求 DeepEP 走 INT8 数据面。较新 Python API 显式收 `quant_mode="int8"`；Ascend 910C / A3 legacy pybind 若没暴露该参数，则由 vendor runtime 按环境选择 BF16/INT8，固定 W8A8 CI 保留 `DEEP_NORMAL_MODE_USE_INT8_QUANT=1`。
 
-条件满足后，Dispatch 将 BF16 local hidden 转成 INT8 recv hidden 与 per-token scale，再跨 EP Group 传输。
+条件满足，Dispatch 将 BF16 local hidden 变成 INT8 recv hidden 与 per-token scale，跨 EP Group 传输。
 
 <a id="deepep-scale-payload-ascend-runner"></a>
 
-`DeepEPNormalDispatchOutput` 可携带 `hidden_states`、`hidden_states_scale`、`topk_ids`、`topk_weights` 和 `num_recv_tokens_per_expert`。Buffer 若返回 `(hidden_states, hidden_states_scale)`，SGLang 就拆开二者，交给 Runner；`pre_permute_deepep_normal_to_ascend()` 再将 hidden、scale、`expert_tokens` 放入 `AscendRunnerInput`。
+`DeepEPNormalDispatchOutput` 可带 `hidden_states`、`hidden_states_scale`、`topk_ids`、`topk_weights`、`num_recv_tokens_per_expert`。Buffer 返回 `(hidden_states, hidden_states_scale)` 时，SGLang 拆开传给 Runner，`pre_permute_deepep_normal_to_ascend()` 再把 hidden、scale、`expert_tokens` 放到 `AscendRunnerInput`。
 
 <a id="w13-scale"></a>
 
-W13 Method 最后检查 `pertoken_scale`。只有缺少 scale 时，才调用自己的量化器，判断可简写为：
+到 W13 Method，它检查 `pertoken_scale`，缺少时才调用自己的量化器。判断简写如下。
 
 ```python
 if pertoken_scale is None:
     hidden_states, pertoken_scale = self.hidden_states_quantizer(hidden_states)
 ```
 
-因此，只有 DeepEP 实际输出 INT8 payload，并提供匹配的 `hidden_states_scale`，W13 才跳过第二次 activation quant。若配置、Runtime 或 fallback 使输入退回 BF16，且 `hidden_states_scale=None`，W13 仍会补做动态量化。
+DeepEP 实际提供 INT8 payload 和匹配的 `hidden_states_scale`，W13 才能跳过第二次 activation quant。配置、Runtime 或 fallback 若退回 BF16，且 `hidden_states_scale=None`，这里仍会补做动态量化。
 
-这次复用只解释 W13 的输入。W13 计算和 SwiGLU 之后，W2 仍有自己的 requant，完整路径如下：
+复用只发生在 W13 输入处。W13、SwiGLU 之后，W2 还要做自己的 requant，完整路径如下。
 
 ```mermaid
 flowchart TD
@@ -324,13 +308,11 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G --> H --> I
 ```
 
-分析性能时，应分别记录模型 GEMM 的量化格式与 Dispatcher dtype：前者说明专家怎样计算，后者说明当前通信实际搬运什么，以及 W13 能否复用上游量化结果。
+模型 GEMM 的量化格式描述计算，Dispatcher dtype 描述通信实际搬什么。两者都记录，才能确定 W13 是否用上了 Dispatch 的量化结果。
 
 ## 四、从 PyTorch 接口进入 ACLNN 与 CANN
 
-再沿 Dense 动态路径向下，SGLang 调用：
-
-
+Dense 动态主线从 SGLang 进入下面的 PyTorch NPU 接口。
 
 ```python
 torch.ops.npu.npu_quant_matmul(
@@ -342,9 +324,7 @@ torch.ops.npu.npu_quant_matmul(
 )
 ```
 
-这只是 PyTorch NPU 入口，继续往下还有：
-
-
+接口之下还会经过这些层。
 
 ```text
 SGLang
@@ -366,20 +346,20 @@ AI Core Device Kernel
 
 ### 权重格式决定 ACLNN 入口
 
-加载时，SGLang 对权重转置，再调用 `npu_format_cast()`，默认目标为 `ACL_FORMAT_FRACTAL_NZ`。形状不满足 alignment 时保留 ND。这个选择会继续影响 op-plugin，而不只改变存储布局。
+加载时转置后的权重，默认经 `npu_format_cast()` 转 `ACL_FORMAT_FRACTAL_NZ`，alignment 不满足则留 ND。这个格式不仅影响存储，还决定 op-plugin 的入口选择。
 
-固定 `QuantMatmulKernelNpuOpApi.cpp` 通过 `is_nz_format(x2)` 判断权重，将 `ACL_FORMAT_FRACTAL_NZ`、`ACL_FORMAT_FRACTAL_NZ_C0_4`、`ACL_FORMAT_FRACTAL_NZ_C0_16` 视为 NZ：
+固定 `QuantMatmulKernelNpuOpApi.cpp` 用 `is_nz_format(x2)` 判断，将 `ACL_FORMAT_FRACTAL_NZ`、`ACL_FORMAT_FRACTAL_NZ_C0_4`、`ACL_FORMAT_FRACTAL_NZ_C0_16` 都归入 NZ。
 
 | 权重格式 | op-plugin 选择并检查的接口 |
 | --- | --- |
 | NZ | `aclnnQuantMatmulWeightNz` |
 | ND | `aclnnQuantMatmulV5` |
 
-所以仅记录 `npu_quant_matmul` 还不够。要确定设备入口，需同时保存加载后的 Weight 格式和实际 ACLNN 分支。
+同为 `npu_quant_matmul`，加载后的 Weight 格式不同，实际 ACLNN 入口也可能不同，这两项要一起对应。
 
 ### WeightNz 在当前 CANN 里落到 QuantBatchMatmulV3
 
-公开 CANN `ops-nn` 中有以下算子族：
+公开 CANN `ops-nn` 包含下面的算子族。
 
 ```text
 matmul/
@@ -390,7 +370,7 @@ matmul/
     └── tests
 ```
 
-8.5.0 的 `quant_batch_matmul_v3` README 列出 `aclnnQuantMatmulWeightNz`，API 头也位于该目录；源码树另有承接 `aclnnQuantMatmulV5` 的 `quant_batch_matmul_v4`。因此这里能确认的是下面这条固定关系：
+8.5.0 的 `quant_batch_matmul_v3` README 列有 `aclnnQuantMatmulWeightNz`，API 头也在该目录。源码另有承接 `aclnnQuantMatmulV5` 的 `quant_batch_matmul_v4`，因此这里确认的是下面这条固定关系。
 
 ```text
 FRACTAL_NZ W8A8
@@ -398,9 +378,9 @@ FRACTAL_NZ W8A8
 → QuantBatchMatmulV3
 ```
 
-ND 的 V5 由哪个目录或版本实现，还需看实际安装包，不能将它与 V3 永久绑定。
+ND 的 V5 要由实际安装包确定目录与版本，不能永久绑定到 V3。
 
-公开说明中，Ascend 910C 对应 Atlas A3 分支支持：
+公开说明里，Ascend 910C 对应 Atlas A3 分支支持下面的组合。
 
 ```text
 INT8 x1
@@ -409,9 +389,9 @@ FLOAT32 per-token scale
 BF16 output
 ```
 
-与这里的 W8A8_DYNAMIC Dense 路径相符。
+它与这里的 W8A8_DYNAMIC Dense 条件相符。
 
-将上面的入口接起来：
+API 到算子族的关系接起来如下。
 
 ```text
 DeepSeek-V4 Linear
@@ -447,14 +427,14 @@ Weight = FRACTAL_NZ ?
 
 ### 再往下就是 Host Tiling → AI Core Kernel
 
-`quant_batch_matmul_v3` 公开目录继续分为：
+`quant_batch_matmul_v3` 的公开目录分为下面几部分。
 
 ```text
 op_host/
 op_kernel/
 ```
 
-ACLNN 进入算子后，由 Host 选择工作划分，再交设备执行：
+ACLNN 进入算子后，Host 划分工作，再交设备执行。
 
 ```text
 Host-side shape / dtype / format check
@@ -468,23 +448,15 @@ Tiling data
 AI Core device kernel launch
 ```
 
-固定列表将该算子标为 `AI Core`，不是 AICPU。至此可以把 `Python Linear` 接到 `Ascend 910C AI Core Quantized MatMul`。
-
-
-
-
-
-
-
----
+固定列表将它标为 `AI Core`，并非 AICPU。`Python Linear` 到 `Ascend 910C AI Core Quantized MatMul` 的链路到这里接上。
 
 ### Tiling Key 与 Kernel Variant 的选择条件
 
-但一次请求具体采用哪个 Tiling Key、Kernel Variant，还由当前输入与环境共同决定。
+具体 Tiling Key、Kernel Variant，则还随本次输入与执行环境选择。
 
-需要记录 `M`（当前 Token / Batch 行数）、`N`（投影输出维）、`K`（hidden / 输入宽度），以及权重的 FRACTAL_NZ / ND 格式、INT8 输入、per-token / per-channel Scale、BF16 输出、Ascend 910C 型号和容器中的 CANN build/version。
+其中包括 `M`（Token / Batch 行数）、`N`（投影输出维）、`K`（hidden / 输入宽度）、FRACTAL_NZ / ND 权重格式、INT8 输入、per-token / per-channel Scale、BF16 输出、Ascend 910C 型号，以及容器的 CANN build/version。
 
-Prefill、Decode 的 M 也可能相差很大：
+Prefill、Decode 的 M 可以差很多。
 
 ```text
 Prefill:
@@ -494,15 +466,13 @@ Decode:
 M 往往很小
 ```
 
-同属 `QuantBatchMatmulV3`，内部仍可能选不同 Tiling strategy / Kernel specialization。
+都属于 `QuantBatchMatmulV3`，内部 Tiling strategy、Kernel specialization 仍可能不同。
 
-
-
-因此源码可以确认 API 到算子族的链路，实际选择还需用目标 Ascend 910C 的 Profiler、operator dump 和 tiling metadata 核对。将 `M/N/K`、算子名、Kernel 名、耗时接回 Host Tiling，才能解释本次 Prefill、Decode 的差异。
+源码确认了 API 到算子族，实际选中的 Kernel 还要对应目标设备的 Profiler、operator dump 与 tiling metadata。把 `M/N/K`、算子名、Kernel 名和耗时接到 Host Tiling，才能解释该次 Prefill、Decode 的差别。
 
 ## 五、串起 Dense 与 MoE 的执行路径
 
-量化描述、激活数据和两条算子通路可合在一起看：
+量化描述、激活准备与两条算子通路，可合在下面的数据流里。
 
 ```mermaid
 flowchart TD
@@ -541,19 +511,17 @@ flowchart TD
     O --> Y["Residual / Norm / Attention / KV boundary"]
 ```
 
-因此，W8A8 Profile 里仍会出现 BF16、RMSNorm、Attention、HCCL / DeepEP、KV Cache 等工作；它们没有因为部分 GEMM 量化就消失。
-
-只有 ModelSlim 选中的层用相应 INT8 Weight、Activation 完成 GEMM，周围 Norm、Attention、缓存和状态交换仍使用各自的数据类型。
+W8A8 Profile 里仍可能看到 BF16、RMSNorm、Attention、HCCL / DeepEP、KV Cache。ModelSlim 选中的层以相应 INT8 Weight、Activation 做 GEMM，周围 Norm、Attention、缓存与交换继续使用各自的数据类型。
 
 ### 将源码路径对应到实际部署
 
-核对部署可沿数据流记录逐层 Scheme、加载后 Weight 格式、Dispatcher dtype、实际算子与 Tiling，分别确定量化范围、存储布局、通信 payload 和设备执行。
+一份部署对应到这里，需要逐层 Scheme、加载后 Weight 格式、Dispatcher dtype、实际算子和 Tiling。这些分别确定量化范围、存储、通信 payload 和设备执行。
 
-特殊形状可能退回 ND，通信配置决定是否走 INT8 wire，CANN 与输入再共同决定 Kernel。把这些选择放回请求时间线，才能继续分析各段成本。
+特殊形状可能留在 ND，通信配置决定 INT8 wire 是否实际生效，CANN 与输入共同决定 Kernel。不同段落的成本，也由这些选择进入请求时间线。
 
 ## 六、源码入口与版本
 
-自行核对时，可以按下面几条入口追到前文的数据流。完整仓库版本和文件列表放在表后。
+下列入口对应本文的数据流，表后列出固定仓库版本与文件。
 
 <a id="checkpoint-scheme"></a>
 <a id="deepseek-v4-flash-w8a8"></a>
@@ -587,18 +555,18 @@ flowchart TD
 - [CANN ops-nn / `quant_batch_matmul_v3`](https://gitcode.com/cann/ops-nn/tree/8.5.0/matmul/quant_batch_matmul_v3)
 - [CANN ops-nn / `quant_batch_matmul_v4`](https://gitcode.com/cann/ops-nn/tree/8.5.0/matmul/quant_batch_matmul_v4)
 
-更换版本后，尤其要重新核对 Dispatcher dtype、ACLNN 分流和 Tiling，避免沿旧名字推断新实现。
+版本改变后，Dispatcher dtype、ACLNN 分流、Tiling 也可能变化，入口名称相同不保证内部实现相同。
 
 <details markdown="1">
 <summary>补充：静态 W8A8 的 Scale 与 Bias 推导</summary>
 
 ### 静态 W8A8 的 Scale 与 Bias
 
-下面补充静态 W8A8 的 ModelSlim 导出公式，用于解释 `deq_scale`、`quant_bias`。它与前文动态配方的激活量化不同，应各自对应参数和算子入口。
+静态 W8A8 的导出公式解释另一套 `deq_scale`、`quant_bias`。它和前面的动态激活量化，使用不同参数与算子入口。
 
 ### ModelSlim 的导出公式
 
-固定 AscendV1 saver 将激活、权重 scale 相乘，得到 `deq_scale`。若原浮点 Bias 为 `fp_bias`、量化权重为 `Qw`、激活 offset 为 `input_offset`，核心计算如下，省略了参数的维度整形。原模型无 Bias 时，`fp_bias` 使用零向量。[`AscendV1Saver.on_w8a8_static()`](https://github.com/Ascend/msmodelslim/blob/85d6c6f0266fd1fd77aa19ac26086670ca92d1db/msmodelslim/core/quant_service/modelslim_v1/save/ascendv1.py#L289-L312)
+固定 AscendV1 saver 将激活、权重 scale 相乘得到 `deq_scale`。设原浮点 Bias 为 `fp_bias`，量化权重为 `Qw`，激活 offset 为 `input_offset`，省去维度整形后，核心计算如下。原模型没有 Bias，就用零向量作为 `fp_bias`。[`AscendV1Saver.on_w8a8_static()`](https://github.com/Ascend/msmodelslim/blob/85d6c6f0266fd1fd77aa19ac26086670ca92d1db/msmodelslim/core/quant_service/modelslim_v1/save/ascendv1.py#L289-L312)
 
 ```python
 deq_scale = input_scale * weight_scale
@@ -606,11 +574,11 @@ correction = Qw.to(torch.float32).sum(dim=1) * input_offset.to(torch.float32)
 quant_bias = torch.round(fp_bias / deq_scale - correction).to(torch.int32)
 ```
 
-`quant_bias` 同时包含原浮点 Bias 的缩放和 offset 校正。非零激活 offset 会改变 MatMul 累加值，所以先将量化权重的求和校正折入 quantized bias；参与求和前，`Qw` 与 `input_offset` 都转成浮点。
+`quant_bias` 同时放进浮点 Bias 的缩放结果和 offset 校正。非零激活 offset 会改变 MatMul 累加值，因而将量化权重求和对应的校正折入 quantized bias；`Qw`、`input_offset` 参与求和前都转浮点。
 
 ### 静态 W8A8 在 SGLang 中怎么使用这些量
 
-对应 SGLang 静态执行链为：
+SGLang 的对应静态执行链如下。
 
 ```text
 BF16 X
@@ -632,7 +600,7 @@ npu_quant_matmul
 BF16 Y
 ```
 
-随后调用：
+接着调用下面的接口。
 
 ```python
 torch.ops.npu.npu_quant_matmul(
@@ -644,12 +612,12 @@ torch.ops.npu.npu_quant_matmul(
 )
 ```
 
-BF16 原模型的综合 dequant scale 按对应 BF16 输出路径所需格式导出，SGLang 直接将 checkpoint 的 `deq_scale` 传给 QuantMatmul。
+BF16 原模型的综合 dequant scale，按 BF16 输出路径需要的格式导出，SGLang 将 Checkpoint 的 `deq_scale` 直接交给 QuantMatmul。
 
 ### 动态配方与这组公式的对应范围
 
-本篇官方配方选择 `W8A8_DYNAMIC`，Dense 主线不使用这套静态的 `input_scale`、`input_offset`、`deq_scale`、`quant_bias`。动态 QuantMatmul 使用 `weight_scale`、运行时 per-token scale，以及可选的浮点 Bias。
+本文主配方是 `W8A8_DYNAMIC`，Dense 不使用静态的 `input_scale`、`input_offset`、`deq_scale`、`quant_bias`，而用 `weight_scale`、运行时 per-token scale 和可选浮点 Bias。
 
-因此，前文仍沿 `npu_dynamic_quant → INT8 + per-token scale → npu_quant_matmul` 运行。静态公式用于解释其他 ModelSlim checkpoint 的 `deq_scale/quant_bias`，不能混入动态路径推断输出还原。
+动态主线仍是 `npu_dynamic_quant → INT8 + per-token scale → npu_quant_matmul`。静态公式用于解释其他 ModelSlim Checkpoint 的 `deq_scale/quant_bias`，两套输出还原方式分别对应各自的路径。
 
 </details>

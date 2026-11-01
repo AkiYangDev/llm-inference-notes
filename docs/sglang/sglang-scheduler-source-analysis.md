@@ -1,8 +1,8 @@
 # SGLang Scheduler：请求怎样组批、执行和持续生成
 
-两条请求到达服务端后，能否在同一轮计算，还得由 Scheduler 决定。它检查未计算的输入、可复用前缀、本轮预算和缓存空间，再选出能执行的工作。生成持续多轮，后面每轮的请求集合也可能不同。
+两条请求的输入都长六个 token，一条没有命中缓存，另一条复用了前三个位置的 KV。这一轮如果能放在一起，模型实际要计算的是九行输入。下一轮开始生成时，同样两条请求又只需要两行输入。
 
-前一篇已经走过请求接入到返回的全程，这里停在调度器，跟着两条请求进入队列、完成 Prefill、继续 Decode，观察本轮计划如何形成，又怎样接回请求状态。模型内部的输入与输出形状留给 ModelRunner 篇。全程可对照 [请求生命周期](sglang-ascend-request-lifecycle.md)。
+Scheduler 要选出这一轮执行哪些请求、各计算哪一段，再把结果接回请求，留到下一轮。下面跟着这两条请求，从等待队列走到持续 Decode。完整的接入和返回过程见 [请求生命周期](sglang-ascend-request-lifecycle.md)。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
@@ -11,9 +11,11 @@
 
 </details>
 
-## 一、请求状态与本轮执行计划
+<a id="_1"></a>
 
-先看普通 `event_loop_normal()`：接收请求，选择 batch，执行，再处理结果。省略空闲、暂停等分支后，循环主干如下：
+## 谁留在队列，谁进入本轮 batch
+
+普通 `event_loop_normal()` 不断接收请求、选批、执行、处理结果。省去空闲、暂停等分支，循环主干如下。
 
 ```text
 ingest_requests()
@@ -31,7 +33,7 @@ process_batch_result(batch, result)
 下一轮
 ```
 
-`get_next_batch_to_run()` 返回的 `NextBatchPlan` 包含 `batch_to_run`，描述这一轮实际做的工作；`running_batch` 则保存仍在生成的请求。每轮结束后，调度器会重新检查执行集合，一条请求不必一直独占设备直到结束。[`Scheduler.event_loop_normal()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1932-L1963)
+`get_next_batch_to_run()` 返回一个 `NextBatchPlan`，其中 `batch_to_run` 是本轮要执行的工作。`running_batch` 留着仍在生成的请求，每轮再选执行集合，一条请求不必独占设备直到生成结束。[`Scheduler.event_loop_normal()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1932-L1963)
 
 ```mermaid
 flowchart TD
@@ -48,21 +50,21 @@ flowchart TD
     Z --> O[输出 / 完成]
 ```
 
-后面还会频繁遇到三个状态：`waiting_queue`、`running_batch`、`last_batch`，它们描述的时间范围不同。
+新请求先在 `waiting_queue` 等接纳。`running_batch` 主要放持续生成、还需 Decode 的请求，`last_batch` 则记住上一轮实际执行过的 batch。上一轮如果是 Prefill / Extend，下一次选批可以把它并入 `running_batch`，继续生成。[`get_next_batch_to_run()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3648-L3794)
 
-`waiting_queue` 等待接纳；`running_batch` 主要保留持续生成、还需 Decode 的请求；`last_batch` 记录上一轮实际执行的 batch。若上一轮是 Prefill / Extend，下一次选批可把它并入 `running_batch`，继续生成。[`get_next_batch_to_run()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3648-L3794)
+不过，请求还没生成完，不保证本轮就能执行。新请求、已有请求的状态、KV 空间和 Token 预算，都影响本轮选择。
 
-请求仍需生成是一种跨轮状态，能否在当前轮执行则是另一个判断。KV 空间、Token 预算、新请求和已有请求的状态都会参与这次选择。
+`event_loop_overlap()` 会交错安排上一轮 CPU 结果处理和下一轮设备工作。两轮工作有了重叠，输入与结果的交接也就多了依赖；每份结果仍得对应回原请求。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1966-L2021)
 
-普通循环便于理解先后关系，`event_loop_overlap()` 则交错安排上一轮 CPU 结果处理与下一轮设备工作。重叠增加了交接依赖，但仍需明确本轮执行谁、输入来自哪里、结果属于哪条请求。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1966-L2021)
+<a id="_2"></a>
 
-## 二、请求进入等待队列
+## 接入时创建的 Req 会一直保留
 
-TokenizerManager 完成准备后，将 `TokenizedGenerateReqInput` 交给 Scheduler。分发器调用 `handle_generate_request()`，创建后续可持续更新的 `Req`。[源码：dispatcher](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1752-L1764)
+TokenizerManager 准备好 `TokenizedGenerateReqInput` 后，把它发给 Scheduler。分发器进入 `handle_generate_request()`，创建这条请求的 `Req`。[源码：dispatcher](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L1752-L1764)
 
-`Req` 保存原输入、已生成输出、采样要求、缓存进度和停止条件。LoRA、会话、reasoning、logprob 等可选信息也会在此绑定，以下先跟踪普通生成的状态。[源码：创建 Req](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L2776-L2845)
+原输入、已生成输出、采样要求、缓存进度和停止条件都存在 `Req` 里。启用 LoRA、会话、reasoning、logprob 时，相应的可选信息也在这里绑定。[源码：创建 Req](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L2776-L2845)
 
-关键字段如下：[`Req` 定义](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L977-L1060)
+[`Req` 定义](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L977-L1060) 中，与这条生成过程直接相关的字段如下。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -74,11 +76,11 @@ TokenizerManager 完成准备后，将 `TokenizedGenerateReqInput` 交给 Schedu
 | `kv` | 这条请求自己的 KV 相关状态 |
 | `finished_reason` | 请求是否以及为什么结束 |
 
-后续 Prefill 和 Decode 的输出都追加到同一个 `Req.output_ids`，直到 EOS、长度上限或中止等条件结束请求。临时 batch 可以变化，请求进度需要连续。
+Prefill 产生的首个输出、后续 Decode 的输出，都会追加到同一个 `Req.output_ids`。换了一批同行的请求，自己的进度还在，直到 EOS、长度上限或中止等条件让请求结束。
 
-通过校验后，普通请求调用 `_add_request_to_queue(req)`。非 PD 模式将它放入 `waiting_queue`，同时记录等待队列的进入时间。[源码：入队](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3277-L3292)
+校验通过后调用 `_add_request_to_queue(req)`。这条非 PD 普通请求进入 `waiting_queue`，同时记下入队时间。[源码：入队](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3277-L3292)
 
-此时可简化为下面的队列状态：
+这时请求刚走到等待队列。
 
 ```text
 TokenizedGenerateReqInput
@@ -90,23 +92,25 @@ TokenizedGenerateReqInput
     waiting_queue
 ```
 
-入队之后还要 admission，也就是接纳进入本轮计算。这个步骤同时检查计算预算和缓存能否容纳新工作。
+入队还没拿到本轮的计算与缓存空间。接下来的 admission 检查决定接纳多少输入。
 
-## 三、根据缓存、预算和空间组批
+<a id="_3"></a>
 
-`get_new_batch_prefill()` / `_get_new_batch_prefill_raw()` 为新 Prefill 选候选、检查可接纳的输入范围，再构成 batch。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3816-L3901)
+## Prefill 怎样选出这九行输入
 
-首先，`SchedulePolicy.calc_priority()` 调整 `waiting_queue` 的候选顺序。固定实现支持 FCFS，也有 LPM、HRRN、shortest-prefill-first 等 cache-aware 策略，必要时在这里准备 Prefix Cache 匹配信息。[源码：调度策略](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L259-L341)
+`get_new_batch_prefill()` / `_get_new_batch_prefill_raw()` 为新的 Prefill 选择候选，确定每条能接纳的输入范围，组成 batch。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3816-L3901)
 
-`PrefillAdder` 管理接纳预算，输入包括 page size、前缀缓存、KV 分配器、运行中的请求，以及 Prefill Token、分块和请求数限制。每接纳一条，就更新剩余预算。[源码：PrefillAdder](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L620-L664)
+候选顺序先由 `SchedulePolicy.calc_priority()` 调整。这份实现支持 FCFS，也有 LPM、HRRN、shortest-prefill-first 等 cache-aware 策略，需要时会在这里准备 Prefix Cache 匹配信息。[源码：调度策略](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L259-L341)
 
-前缀命中减少未缓存的输入计算，但请求仍有历史状态和后续输出。因此预算不能只根据客户端 Prompt 的总 Token 数判断。
+接纳预算交给 `PrefillAdder`。它读取 page size、前缀缓存、KV 分配器和正在运行的请求，并受 Prefill Token、chunk 和请求数限制约束；放进一条，就扣掉相应预算。[源码：PrefillAdder](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L620-L664)
 
-`req.init_next_round_input(self.tree_cache)` 刷新完整输入，查询可复用前缀，将命中位置写入 `prefix_indices` 等字段，再确定本轮还要计算的区间。[源码：Prefix Cache 匹配](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L1556-L1657)
+命中前缀能省掉一部分输入计算，请求的历史状态和后续输出仍得占空间。所以 Prompt 总长度还不足以说明这条请求需要多少预算。
 
-`PrefillAdder.add_one_req()` 结合未缓存输入、潜在后续输出和分页开销，调用 `_select_prefill_admission()`。长 Prompt 可以只接纳一个 chunk，尚未计算的部分留待后续轮次。[源码：admission](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L1232-L1430)
+`req.init_next_round_input(self.tree_cache)` 刷新完整输入，查找可复用前缀，把命中的位置记到 `prefix_indices` 等字段，再确定剩余待计算区间。[源码：Prefix Cache 匹配](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L1556-L1657)
 
-接纳成功后，`_commit_prefill_admission()` 把当前区间写回请求：
+`PrefillAdder.add_one_req()` 结合未缓存输入、潜在后续输出和分页开销，调用 `_select_prefill_admission()`。Prompt 太长时可以只接纳一个 chunk，其余输入留给后面的轮次。[源码：admission](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L1232-L1430)
+
+接纳结果由 `_commit_prefill_admission()` 写回请求，区间起点是已复用前缀的长度，终点再加上本轮新输入的长度。
 
 ```python
 req.set_extend_range(
@@ -115,31 +119,29 @@ req.set_extend_range(
 )
 ```
 
-再将请求加入 `can_run_list`，扣减本轮预算。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L1432-L1452)
+请求随后进入 `can_run_list`，剩余预算扣减。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_policy.py#L1432-L1452)
 
-到这里，才得到这一轮真正可执行的请求和输入范围。
-
-用下面两条请求代入。整数只是 Token ID 代号，假设 R2 命中前三个位置的 KV；这是长度示例，不表示 DeepSeek-V4 专用缓存支持三个 Token 粒度的匹配。
+把开头的两条请求代入，整数只作 Token ID 代号。假设 R2 命中前三个位置的 KV，这里演示长度关系，不代表 DeepSeek-V4 专用缓存支持三个 Token 粒度的匹配。
 
 | 请求 | 当前完整序列 | 已命中的 Prefix Cache | 本轮 `extend_range` | 本轮要计算 |
 | --- | --- | ---: | --- | ---: |
 | R1 | `[11,12,13,14,15,16]` | 0 token | `[0,6)` | 6 token |
 | R2 | `[21,22,23,24,25,26]` | 3 token | `[3,6)` | 3 token |
 
-如果预算足够，R1 计算六行、R2 计算后三行，得到 `can_run_list = [R1, R2]`。二者总序列长度都是六，新输入合计却为九行。
+预算允许时，R1 送六行，R2 送后三行，形成 `can_run_list = [R1, R2]`。两条序列总长都是六，本轮要算的新增输入合起来是九。
 
-Scheduler 据此创建并准备 batch：
+这份接纳结果用来创建并准备 `ScheduleBatch`。
 
 ```python
 new_batch = ScheduleBatch.init_new(can_run_list, ...)
 new_batch.prepare_for_extend()
 ```
 
-对应源码在 [`Scheduler._get_new_batch_prefill_raw()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4063-L4111)。
+创建过程在 [`Scheduler._get_new_batch_prefill_raw()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4063-L4111)。
 
-接纳结果进入 `ScheduleBatch` 后，`prepare_for_extend()` 将请求区间整理为本轮字段。这时仍有部分输入处于暂存状态，尚不是 NPU 最终读取的 Tensor。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2686-L2753) [`ScheduleBatch` 定义](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2305-L2393)
+`prepare_for_extend()` 把各请求的区间整理成本轮字段。此时部分输入还在暂存，没有全部变成 NPU 最后读取的 Tensor。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2686-L2753) [`ScheduleBatch` 定义](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2305-L2393)
 
-本例的关键状态为：
+本例整理后的字段如下。
 
 | Batch 字段 | 示例 |
 | --- | --- |
@@ -151,9 +153,7 @@ new_batch.prepare_for_extend()
 | Prefill 输入 | R1 的 6 个 token + R2 未命中的 3 个 token |
 | `out_cache_loc` | 为这 9 个新增 KV token 分配的写入位置 |
 
-固定版本在 `prepare_for_extend()` 中先把扁平输入放入 pinned CPU staging，保存为 `prefill_input_ids_cpu`，暂将 `self.input_ids` 留为 `None`。设备 Tensor 会在后面的执行边界准备。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2686-L2728) [字段写入](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2870-L2915)
-
-因此，调度计划已经知道各请求计算哪段、九个位置写在哪里，即使 input IDs 尚在 CPU，计划仍然完整。
+固定版本在 `prepare_for_extend()` 里先把扁平输入放入 pinned CPU staging，存成 `prefill_input_ids_cpu`，`self.input_ids` 暂留 `None`。设备 Tensor 到后面的执行入口再准备。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2686-L2728) [字段写入](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L2870-L2915)
 
 ```mermaid
 flowchart TD
@@ -167,28 +167,30 @@ flowchart TD
     E --> T[CPU pinned input staging · seq_lens / prefix_lens / out_cache_loc]
 ```
 
-对照原请求时，可以分别核对 `seq_lens` 的总序列长度、`extend_lens` 的新增长度和 `out_cache_loc` 的写入位置。Prefix Cache 改变的是当前重算范围。
+这时 `seq_lens` 已经记下两条完整序列的长度，`extend_lens` 记下各自新增多少，`out_cache_loc` 也有了九个新增 KV 的写入位置。调度已经选好计算范围，只是 input IDs 还在 CPU。
 
-## 四、Prefill 结束后继续 Decode
+<a id="prefill-decode"></a>
 
-假设 Prefill 的九行已计算完成，两条请求分别得到 `T1`、`T2` 且都继续生成。下一轮普通 Decode 会消费这两枚输出，无需再提交整段 Prompt。
+## T1 和 T2 成为下一轮 Decode 的输入
 
-不过下一轮是否立刻运行它们，还要经过调度。普通 `get_next_batch_to_run()` 先尝试准备新的 Prefill：
+假设这九行 Prefill 已经算完，两条请求各采样出 `T1`、`T2`，还没满足停止条件。下一次普通 Decode 消费的就是这两枚输出，整段 Prompt 不用再送一遍。
+
+它们也可能先等一轮。普通 `get_next_batch_to_run()` 会先尝试准备新的 Prefill。
 
 ```python
 prefill_plan = self.get_new_batch_prefill(running_batch)
 new_batch = prefill_plan.batch_to_run
 ```
 
-若拿到 `new_batch`，主路径优先执行新 Prefill；没有新的 Prefill 工作且 `running_batch` 非空时，才进入 `update_running_batch()` 继续 Decode。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3736-L3794)
+拿到 `new_batch`，主路径优先执行它；没有新 Prefill、`running_batch` 又非空，才调用 `update_running_batch()` 继续 Decode。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L3736-L3794)
 
-Continuous Batching 允许请求逐轮加入、完成、退出，并重新选择执行集合。是否把新 Prefill 与 Decode 直接放入同一物理 batch，还受其他条件控制。
+Continuous Batching 让请求逐轮加入、完成或退出，执行集合不断变化。新 Prefill 是否和 Decode 混成同一个物理 batch，还取决于下面的 Mixed 分支条件。
 
-`update_running_batch()` 先过滤完成请求，再检查 Decode 所需 KV。空间不足时可以 retract 部分请求、释放空间并重新入队；还能继续时，调用 `batch.prepare_for_decode()`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4193-L4275)
+`update_running_batch()` 滤掉已完成请求，再查 Decode 所需 KV。空间够就走 `batch.prepare_for_decode()`；不够时可以 retract 一部分请求，释放空间、重新入队。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4193-L4275)
 
-例如 R1、R2 都未完成，但空间不够，可能有一条被 retract。它只是退出当前运行集合，尚未以成功结果结束，后面仍需结合入队与缓存策略恢复。这个例子不指定具体回退哪条。
+例如 R1、R2 都没结束，空间却不够继续，两条中的一条可能被 retract。它从当前运行集合退出，之后还要结合入队和缓存策略恢复，不能当作已经成功完成。
 
-允许继续时，`prepare_for_decode()` 分配新增位置的缓存，推进执行长度：
+还能继续的请求由 `prepare_for_decode()` 分配新位置的缓存，推进执行长度。
 
 | 动作 | 为什么 |
 | --- | --- |
@@ -199,7 +201,7 @@ Continuous Batching 允许请求逐轮加入、完成、退出，并重新选择
 
 [源码：`prepare_for_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L3504-L3566)
 
-结果处理先把 `T1`、`T2` 放入各自 `req.output_ids`。下一轮普通 Decode 的 batch size 仍为二，输入却变成两行：它们各位于本序列的位置六，执行后再预测后续输出。
+结果处理已经将 `T1`、`T2` 写进各自的 `req.output_ids`。这次 Decode 的 batch size 仍是二，新输入却只有两行，它们各在本序列的位置六，计算后再预测后续输出。
 
 ```mermaid
 sequenceDiagram
@@ -220,19 +222,17 @@ sequenceDiagram
     Note over S,R: 未结束则继续下一轮 Decode
 ```
 
-若满足 mixed-style Chunked Prefill 条件，还可以在同一轮处理新输入与 Decode tail。代码先对 `running_batch` 调用 `prepare_for_decode()`，再用 `new_batch.mix_with_running(running_batch)` 将 tail 作为 1-token extend 合入，并设置 `forward_mode=MIXED`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4130-L4163) [`mix_with_running()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L3096-L3167)
+满足 mixed-style Chunked Prefill 条件时，新输入和 Decode tail 可以同轮执行。代码先为 `running_batch` 做 `prepare_for_decode()`，再用 `new_batch.mix_with_running(running_batch)`，把 tail 作为 1-token extend 加入，设置 `forward_mode=MIXED`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4130-L4163) [`mix_with_running()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/schedule_batch.py#L3096-L3167)
 
-因此，请求集合动态变化与本轮采用 MIXED 是两个判断，不能仅凭 continuous batching 推导执行形状。
+<a id="schedulebatch-forwardbatch"></a>
 
-先按本例独立的 Prefill、Decode 两轮走通，再遇到 Mixed 分支时核对 tail 如何加入。
+## input_ids 到执行入口才变成设备输入
 
-## 五、从 ScheduleBatch 到 ForwardBatch
+轮到 `run_batch()`，Scheduler 与 Worker 开始把选好的计划交给模型，暂存的输入也在这里逐步准备好。
 
-执行前，`run_batch()` 与 Worker 继续把调度计划整理为模型输入。`ScheduleBatch` 中的暂存字段到这里才逐步物化。
+`Scheduler.run_batch()` 调用 `resolve_forward_inputs()`，按本轮模式取得输入。[源码：run_batch 主路径](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4337-L4598)
 
-`Scheduler.run_batch()` 首先调用 `resolve_forward_inputs()`。[源码：run_batch 主路径](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/scheduler.py#L4337-L4598)
-
-它根据模式处理不同输入来源：
+三种模式的来源不同。
 
 | 模式 | `input_ids` 从哪里来 |
 | --- | --- |
@@ -240,9 +240,9 @@ sequenceDiagram
 | Decode | 从 `FutureMap.output_tokens_buf` 取上一轮采样 token |
 | Mixed | Prefill staging 与正在 Decode 的 tail token 拼起来 |
 
-所以查 `input_ids` 时，要先确认当前模式：Prefill 来自 CPU staging，普通 Decode 可以直接取上一轮设备结果缓冲，Mixed 还需拼接 tail。[ `resolve_forward_inputs()` ](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/overlap_utils.py#L82-L119)
+Prefill 走 pinned CPU staging 的 H2D，普通 Decode 可直接读上一轮设备结果缓冲，Mixed 再拼上 tail；对应分支在 [ `resolve_forward_inputs()` ](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/overlap_utils.py#L82-L119)。
 
-这份固定实现将准备拆成了两步：
+因此调度结束和 forward 入口看到的 `input_ids` 会不一样。
 
 ```text
 调度阶段：
@@ -254,9 +254,9 @@ forward 入口：
 ScheduleBatch.input_ids 已物化为本轮设备输入
 ```
 
-把输入解析放在 forward 附近，有利于沿执行流安排 Prefill H2D、上轮采样交接和当前计算。是否需要等待、怎样保证依赖，要沿该路径继续看；调度阶段的 `input_ids=None` 本身并不表示输入丢失。
+把解析留到 forward 附近，可以沿执行流安排 Prefill H2D、上一轮采样交接和当前计算。调度时看到 `input_ids=None`，要结合这个准备时机理解，不能据此认定输入丢失。
 
-随后 `Scheduler.run_batch()` 调用 `forward_batch_generation(batch)`。普通 Tensor Parallel Worker 在这里构造 `ForwardBatch`：
+接着 `Scheduler.run_batch()` 调用 `forward_batch_generation(batch)`，普通 Tensor Parallel Worker 构造本轮的 `ForwardBatch`。
 
 ```python
 forward_batch = ForwardBatch.init_new(
@@ -270,7 +270,7 @@ out = self.model_runner.forward(forward_batch)
 
 [源码：`TpModelWorker.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/managers/tp_worker.py#L631-L678)
 
-它按单次执行组织输入，并向模型传递位置、长度和缓存信息。[`ForwardBatch` 定义](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L468-L605)
+模型拿到的是按这一次执行组织的输入，以及相应位置、长度和缓存信息。[`ForwardBatch` 定义](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L468-L605)
 
 | 字段 | 执行层关心什么 |
 | --- | --- |
@@ -283,9 +283,9 @@ out = self.model_runner.forward(forward_batch)
 | `sampling_info` | 采样阶段需要的 batch 信息 |
 | `spec_info` | 若启用投机推理，本轮需要的额外状态 |
 
-`ForwardBatch.init_new()` 借用或整理 `ScheduleBatch` 字段，再补齐执行派生信息。Decode positions 沿当前 `seq_lens` 路径计算，Extend 则使用 `extend_prefix_lens`、`extend_seq_lens`、`extend_num_tokens`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L847-L1073)
+`ForwardBatch.init_new()` 借用或整理 `ScheduleBatch` 字段，补出执行所需的派生信息。Decode positions 根据当前 `seq_lens` 计算，Extend 则使用 `extend_prefix_lens`、`extend_seq_lens` 和 `extend_num_tokens`。[源码](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/forward_batch_info.py#L847-L1073)
 
-三个对象各有职责：`Req` 保存跨轮进度，`ScheduleBatch` 描述本轮计划，`ForwardBatch` 承接模型输入。它们的关系如下：
+跨轮进度保存在 `Req`，本轮计划在 `ScheduleBatch`，交到模型的是 `ForwardBatch`。结果最终还会回到原请求。
 
 ```mermaid
 flowchart TD
@@ -303,15 +303,15 @@ flowchart TD
     O -->|process_batch_result| R
 ```
 
-`ModelRunner.forward()` 收到这份输入后，由 `_forward_raw()` 按模式、能力判断 Graph Replay、Prefill Graph 或 Eager Runner。[源码：`ModelRunner.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1703-L1799) [执行分派](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1849-L1947)
+`ModelRunner.forward()` 收到输入，`_forward_raw()` 再按模式和能力分派到 Graph Replay、Prefill Graph 或 Eager Runner。[源码：`ModelRunner.forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1703-L1799) [执行分派](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/model_executor/model_runner.py#L1849-L1947)
 
-模型内部的 Attention、MoE 计算将在下一篇展开。这里先回到 Scheduler，把本轮输出接回原来的两条请求。
+<a id="_4"></a>
 
-## 六、把执行结果写回请求
+## 采样结果回到同一个 Req
 
-模型返回后，结果处理器将输出追加到原请求的 `req.output_ids`，更新完成状态，再决定继续或结束。Prefill 采样出的首 Token 由此接入后续 Decode，临时 batch 的结果也成为了请求的持续进度。
+模型返回后，结果处理器追加 `req.output_ids`，更新完成状态。Prefill 的首 Token 到这里成为后续 Decode 的输入，执行 batch 可以重建，这条请求的进度接着往前走。
 
-未结束的请求下一轮仍要检查空间与预算；EOS、停止条件、长度上限或中止则让它退出。资源释放和可复用前缀保留，继续由各自缓存策略处理。
+EOS、停止条件、长度上限或中止让请求退出，其余请求下一轮还要过空间与预算检查。释放资源、留下可复用前缀，各自遵循相应缓存策略。
 
 ```mermaid
 stateDiagram-v2
@@ -325,9 +325,11 @@ stateDiagram-v2
     Finished --> [*]
 ```
 
-本例到这里形成一条完整链：入队，接纳六行和三行，共计算九行 Prefill，各追加一枚输出，下一轮再消费这两枚。接着读 [ModelRunner 的九 Token 示例](sglang-modelrunner-source-analysis.md)，可以继续看九行输入怎样只留下两行待采样 Logits。
+九行 Prefill 最后怎样得到两行待采样 Logits，可以接着看 [ModelRunner 的九 Token 示例](sglang-modelrunner-source-analysis.md)。这里的 Scheduler 已经把两条请求的执行区间、缓存位置和下一轮输入衔接起来。
 
-### 源码阅读入口
+<a id="_5"></a>
+
+### Scheduler 源码入口
 
 | 目标 | 固定版本入口 |
 | --- | --- |

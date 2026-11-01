@@ -1,19 +1,19 @@
 # DeepSeek-V4 DSpark：一轮 Draft、Verify、Accept 与 Commit
 
-当前边界 Token 是 R，Draft 提出 A、B、C。Target 连续接受 A、B，接着给出 X，于是本轮输出为 A、B、X，能够提交的输入状态却是 R、A、B。C 即使已经计算、写入过临时缓存，也不能进入下一轮的正式历史。
+当前边界 Token 是 R，Draft 提出 A、B、C。Target 接受 A、B，随后给出 X。本轮输出是 A、B、X，能提交的输入状态却是 R、A、B：X 还没有自己的 KV，C 虽然算过，也不能留下来当正式历史。
 
-下面沿这条链走过 Draft、Verify Planning、Target Verify、Accept、Commit：先看 Draft 怎样一次计算候选块，再看旧 R 为什么仍要进入验证，以及哪些 Target hidden 最后写回 Draft。树式候选和并行布局留到专题展开。
+DSpark 的一轮就围绕这个错位展开。Draft 一次提出候选块，Planner 安排验证长度，Target 带着旧 R 验证候选。Accept 找出分歧位置，Commit 再把有效输入的状态接回下一轮。先把普通候选链走通，树结构和并行布局另有专题。
 
 <details markdown="1">
 <summary>源码版本与阅读范围</summary>
 
-> 源码固定到 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。主线采用 DSpark V2、DeepSeek-V4 target / draft 和普通候选链，分别说明 greedy、sampling、static、compact/ragged 与 folded proposal / verify epilogue。性能仍需结合接受长度、Draft / Verify 周期、Batch、Graph 和通信判断。
+源码固定为 `sgl-project/sglang @ 5c69e32abe013fa1b913022682a3104c79105f37`，核对日期为 2026-09-20。本文跟踪 DSpark V2、DeepSeek-V4 target / draft，涉及 greedy、sampling、static、compact/ragged，以及 folded proposal / verify epilogue。
 
 </details>
 
 ## 一、一轮多枚输出怎样减少 Target 轮数
 
-普通自回归先运行 Target，再把本次采样结果作为下一轮输入：
+普通自回归中，Target 这一轮的采样结果，要到下一轮才作为输入：
 
 ~~~text
 Token t
@@ -25,11 +25,11 @@ sample Token t+1
 下一轮 Target Forward
 ~~~
 
-生成 100 枚 Token 需要反复推进这条链，但首枚若来自 Prefill，Decode 调用数就不等于总输出数。每轮虽只有少量新 Query，仍需跑过层栈、读历史并完成相关通信。
+这条链生成 100 枚 Token，就要反复运行层栈、读取历史、完成通信。首枚若在 Prefill 产生，后面的 Decode 调用数会比总输出数少。每轮新 Query 很少，旧历史和权重仍需处理。
 
-投机路径先由较轻 Draft 提候选，再统一交 Target。Greedy 按 Target 的逐步预测匹配前缀，概率采样另需接受与分布校正。是否保持输出分布，要看具体算法和配置，不能单凭启用投机解码判断。
+投机解码让较轻的 Draft 先提一段候选，再交 Target 统一验证。Greedy 接受与 Target 逐步预测相同的前缀；Sampling 还需要接受判定和分布校正，具体算法、配置决定输出分布是否保持。
 
-两种生成方式可以先对照为：
+对照两种生成过程：
 
 ~~~text
 普通 Decode:
@@ -46,11 +46,11 @@ Target Verify(A B C D)
 一次提交多个正确 Token
 ~~~
 
-准确的候选能让一次 Verify 推进多于 1 个 Token，减少后续 Target 轮次。不过验证窗口有多行，又新增 Draft、Accept 和状态整理，单轮可能更贵。因此接受长度还需和同负载的耗时、有效产出一起看。
+候选准确，一次 Verify 就能推进多枚 Token，后续 Target 调用也随之减少。代价是验证窗口变宽，还多了 Draft、Accept、状态整理。接受长度说明一轮走多远，周期耗时和有效产出才说明这段路是否划算。
 
-入口按模式分流：Prefill / Extend 先走 Target，`_forward_decode()` 承接后续投机循环。[`DSparkWorkerV2.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L555-L578)
+`forward_batch_generation()` 将 Prefill / Extend 交给 Target，后续 Decode 则进入 `_forward_decode()`。[`DSparkWorkerV2.forward_batch_generation()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L555-L578)
 
-Decode 内部顺序如下：
+Decode 的调用顺序为：
 
 ~~~mermaid
 flowchart TD
@@ -65,17 +65,15 @@ flowchart TD
     N --> R[GenerationBatchResult]
 ~~~
 
-对应调用实现见 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L729-L979)。
+这几步都在 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L729-L979) 中串接。
 
 ## 二、Draft 怎样构造候选块
 
-Draft 从以下调用开始，具体实现见 [`DraftBlockProposer.propose()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L242-L344)。
+[`DraftBlockProposer.propose()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L242-L344) 返回本轮候选和提议信息，Worker 的调用为：
 
-`proposal = self._proposer.propose(...)` 返回本轮候选及相关提议信息。
+`proposal = self._proposer.propose(...)`。
 
-
-
-`DraftBlockProposer` 中先区分两个宽度：
+`DraftBlockProposer` 同时处理候选数与 Query 行数：
 
 ~~~python
 self.gamma = gamma
@@ -86,18 +84,17 @@ self.query_token_num = (
 )
 ~~~
 
-- `gamma` 是计划提出的候选 Token 数；
-- Draft forward 的 Query 行数由 `sample_from_anchor` 决定，可为 `gamma` 或 `gamma + 1`。
+`gamma` 数计划提出的候选 Token；`sample_from_anchor` 决定 Draft forward 输入 `gamma` 行还是 `gamma + 1` 行。
 
-例如提 3 枚候选，Draft 可输入 3 或 4 行，完整 Target Verify 却仍需旧 anchor 加 3 枚候选，共 4 行。`sample_from_anchor=False` 让 Draft 跳过 anchor hidden、取后 gamma 行提议，不会取消 Target 对旧 anchor 的验证。
+提 3 枚候选，Draft 可以算 3 行或 4 行，完整 Target Verify 则始终需要旧 anchor 加 3 枚候选，共 4 行。`sample_from_anchor=False` 跳过 Draft 的 anchor hidden，取后 gamma 行提议，Target 仍然要验证旧 anchor。
 
 ### Draft Block 的第一列来自上一轮 bonus token
 
-`_run_forward()` 准备下面的块，入口见 [`DraftBlockProposer._run_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L369-L473)。
+候选块在 [`DraftBlockProposer._run_forward()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L369-L473) 中准备。
 
-块的形状为 `draft_block_ids.shape = [bs, query_token_num]`。
+`draft_block_ids.shape = [bs, query_token_num]`，一条请求占一行。
 
-buffer 先填 mask token，每轮更新第一列：
+buffer 初始填 mask token，每轮把第一列改为当前 bonus：
 
 ~~~python
 draft_block_ids[:, 0].copy_(
@@ -105,17 +102,17 @@ draft_block_ids[:, 0].copy_(
 )
 ~~~
 
+于是单条输入近似 `[bonus, MASK, MASK, MASK, ...]`。
 
+Verify Window 同时提供 positions 和 cache locations，这些数据一起组成 Draft ForwardBatch。
 
-一条请求的输入因此近似 `[bonus, MASK, MASK, MASK, ...]`。
+这里设置了 `ForwardMode.TARGET_VERIFY`，以投机窗口的形态执行。实际调用对象仍是 Draft runner；Target 还没有验收候选。
 
-再结合 Verify Window 预备的 positions、cache locations，共同构成 Draft ForwardBatch。
+<a id="draft-model-forward-hidden-markov-head-sampler-gamma"></a>
 
-本次 Draft ForwardBatch 设置 `ForwardMode.TARGET_VERIFY`，描述预留投机位置的执行形态。此处调用的仍是 Draft runner，不能将这个模式名理解为已经完成 Target 验收。
+### Draft Block 的 hidden 与 Markov 采样
 
-### Draft Model Forward 先产生 hidden，再由 Markov Head / Sampler 形成 gamma 个候选
-
-Draft model 先执行：
+Draft model 先计算整块 hidden：
 
 ~~~python
 draft_out = self.draft_model_runner.forward(
@@ -123,7 +120,7 @@ draft_out = self.draft_model_runner.forward(
 )
 ~~~
 
-得到 `raw_hidden` 后，非 folded proposal 继续准备：
+非 folded proposal 将 `raw_hidden` 整理为：
 
 ~~~python
 base_logits, confidence_tap = (
@@ -133,7 +130,7 @@ base_logits, confidence_tap = (
 base_logits = base_logits.view(bs, gamma, -1)
 ~~~
 
-再交给：
+接着调用采样器：
 
 ~~~python
 sample_draft_block(
@@ -145,7 +142,7 @@ sample_draft_block(
 )
 ~~~
 
-Markov head / sampler 生成以下结果，实现见 [`sample_draft_block()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L130-L200)。
+[`sample_draft_block()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_draft.py#L130-L200) 返回：
 
 ~~~text
 draft_tokens       [B, gamma]
@@ -154,15 +151,15 @@ greedy_mask        [B]
 temperatures       [B]
 ~~~
 
+Draft 主 forward 一次算完整块，Markov head 再逐位置修正 logits、采样，并使用上一位置 Token 作为条件。这样省掉了逐候选重复完整 Draft forward 的开销，采样之间仍有先后依赖。NextN 则会逐步调用 Draft decoder。[Markov block sampling](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/dspark.py#L52-L83)
 
+部分 Graph 把 proposal sampling 一起捕获，返回 `proposal.folded=True`。采样、Markov 修正仍在执行，只是 Python 后处理少了；后续照样要取得候选和提议分布。
 
-Draft 主 forward 一次算整块 hidden，之后 Markov head 按位置修正 logits、采样，并以上一位置 Token 作为条件。省去的是逐候选重复完整 Draft forward，采样本身仍有顺序依赖。这与 NextN 逐步调用 Draft decoder 不同。[Markov block sampling](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/dspark.py#L52-L83)
+<a id="draft-sampling-tp-rank"></a>
 
-部分 Graph 将 proposal sampling 折入 captured path，返回 `proposal.folded=True`。Python 后处理变少，采样和 Markov 修正仍会执行，后续也仍需候选及提议分布。
+### TP Rank 之间的 Draft sampling 同步
 
-### Draft sampling 也必须在 TP Rank 之间一致
-
-Greedy 在显式同步 site 处理：
+Greedy 经过显式同步 site：
 
 ~~~python
 tp_sync.sync(
@@ -171,13 +168,13 @@ tp_sync.sync(
 )
 ~~~
 
-Sampling 同样有对应 site。
+Sampling 也有相应 site。
 
-候选需在同一请求的相关 TP Rank 保持一致，否则后面的 Verify 就不再处理同一序列。site 是否真的通信，还受同步开关与组宽影响。
+同一请求的相关 TP Rank 必须提出同一串候选，后面的 Verify 才有共同输入。site 是否发起通信，还取决于同步开关和组宽。
 
 ## 三、Planner 决定本轮验证范围
 
-提议完成后，Worker 先解析 confidence：
+Worker 从提议中解析 confidence：
 
 ~~~python
 confidence = proposal.confidence
@@ -185,7 +182,7 @@ if confidence is None:
     confidence = self._verify_planner.compute_confidence_tensor(...)
 ~~~
 
-再决定预算与布局：
+然后决定预算、布局：
 
 ~~~python
 verify_token_budget = (
@@ -195,22 +192,22 @@ verify_token_budget = (
 layout = self._verify_planner.schedule_layout(...)
 ~~~
 
-因此提了多少候选，不等于本轮一定验证多少。Planner 根据模式处理 Confidence、预算和布局，执行器据此组 Target 输入。Confidence 估计收益，尚不是 Target 接受结果。
+候选提出以后，Planner 才按模式决定验证多少、怎样排列，执行器据此组 Target 输入。Confidence 在这里用于估计收益，真正的接受结果要等 Target 验证完成。
 
 ### Static Verify：每请求使用固定 verify width
 
-先看固定宽度。开头用 3 枚候选讲状态边界，下面另以 4 枚说明配置计数：
+先看固定宽度。本节将候选数设为 4，演示配置计数：
 
 ~~~text
 gamma = 4
 verify_num_draft_tokens = 5
 ~~~
 
-每请求窗口为 `[anchor, draft1, draft2, draft3, draft4]`。
+每条请求输入 `[anchor, draft1, draft2, draft3, draft4]`。
 
-anchor 取自 `draft_block_ids[:, :1]`。
+anchor 来自 `draft_block_ids[:, :1]`。
 
-Worker 按下列方式构造 Verify IDs，源码见 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L818-L820)。
+[`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L818-L820) 将它与候选拼成 Verify IDs：
 
 ~~~python
 verify_ids_2d = torch.cat(
@@ -219,11 +216,9 @@ verify_ids_2d = torch.cat(
 ).contiguous()
 ~~~
 
-
-
 ### Compact / Ragged Verify：不同请求可以验证不同长度
 
-compact ragged 则可按置信度、预算给各请求不同窗口：
+compact ragged 可按置信度和预算，给每条请求不同长度：
 
 ~~~text
 R1 verify_len = 2
@@ -231,23 +226,23 @@ R2 verify_len = 5
 R3 verify_len = 3
 ~~~
 
-长度含 anchor，2、5、3 共 10 行；若都按 stride 5 执行则有 15 行。紧凑打包减少有效 Query 行，Graph tier 仍可能 padding，不能把 10/15 直接当作耗时比例。
+长度包含 anchor，2、5、3 合计 10 行。按固定 stride 5 则有 15 行。紧凑打包减少逻辑 Query，Graph tier 却可能再 padding，因此 10/15 只比较行数。
 
-`schedule_layout()` 形成 `RaggedVerifyLayout`，再经 `BuildRaggedVerifyWindow` / `compact_verify_ids()` 打包各请求的 anchor 与所选候选前缀。
+`schedule_layout()` 生成 `RaggedVerifyLayout`，`BuildRaggedVerifyWindow` / `compact_verify_ids()` 随后打包各请求的 anchor 和候选前缀。
 
-Target 完成后，`ScatterCompactToStrided` 将 logits、hidden 恢复到 `[bs × stride]` 逻辑布局，供 Accept 寻址。
+Target 算完，`ScatterCompactToStrided` 把 logits、hidden 整理回 `[bs × stride]` 逻辑布局，供 Accept 按原位置寻址。
 
-恢复形状不会补算跳过的 Query，`verify_lens` 仍决定哪些结果有效。
+恢复布局并未补算跳过的 Query，有效范围仍由 `verify_lens` 指定。
 
-cap-accept 只限制接受长度，Target 依然执行固定窗口，不能据此宣称省了 Verify 行。通用 compact 支持也不代表全部设备可用：固定 Ascend 910C DSV4 仍受定宽 metadata、Graph 准入限制。
+cap-accept 则保留完整 Target 窗口，仅限制接受长度，所以没有省掉 Verify 行。设备支持也有区别：本文固定的 Ascend 910C DSV4 路径仍受定宽 metadata 和 Graph 准入限制，不能直接套用通用 compact。
 
-部分 DP-tier / graph-tier 分支还检查额外拓扑条件，应分别追踪计数和 Graph tier 的实际选择。
+DP-tier / graph-tier 分支还带有拓扑条件；这些分支的计数、Graph tier 选择，需要沿各自路径追踪。
 
 ## 四、Target 一次验证候选链
 
-`verify_window = alloc_verify_window(...)` 实际发生在 Draft 之前，保存候选位置和 staged 缓存目标。Draft 与 Target Verify 共用其中的投机位置和 cache locations。
+`alloc_verify_window(...)` 早在 Draft 之前就已执行。它预留候选位置和 staged 缓存目标，Draft、Target Verify 共用这些投机位置和 cache locations。
 
-非 compact 模式准备：
+非 compact 模式先准备：
 
 ~~~python
 DFlashVerifyInput(
@@ -258,7 +253,7 @@ DFlashVerifyInput(
 )
 ~~~
 
-构造 ForwardBatch 后交给 Target：
+再构造 ForwardBatch，交给 Target：
 
 ~~~python
 self.target_worker.forward_batch_generation(
@@ -268,17 +263,17 @@ self.target_worker.forward_batch_generation(
 )
 ~~~
 
-执行入口见 [`TargetVerifyExecutor.run_non_compact()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L277-L352)。
+调用位于 [`TargetVerifyExecutor.run_non_compact()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L277-L352)。
 
-gamma=4 时，Target 一次处理 anchor 加候选的 5 行，无需对四枚 Draft 分别再跑普通 Decode。各行仍依链式因果访问 Prefix 和祖先，统一 forward 并未消除上下文依赖。
+gamma=4 时，anchor 和四枚候选共 5 行进入同一次 Target forward。每行依旧按链式因果关系读取 Prefix、祖先，但不必再为四枚候选分别跑普通 Decode。
 
-在开头的例子里，R 行预测 A，A 行预测 B，B 行预测 X；候选 C 与 X 分歧，于是接受在此停止。C 行即使已产生 logits 和 hidden，也不能越过这处分歧提交。
+回到 R、A、B、C：R 行预测 A，A 行预测 B，B 行预测 X。第三枚候选 C 与 X 不同，接受在这里停止。后面 C 行即使算出了 logits、hidden，也不能跨过分歧提交。
 
 ### Verify 输出为什么还要求 hidden states
 
-Logits 用于接受决策，hidden 则用于后续状态注入，所以 Verify 必须保留两者。
+接受判定要 logits，后续状态注入要 hidden，Verify 因此同时保留两者。
 
-`commit_hidden()` 会检查：
+`commit_hidden()` 检查输出是否带有 hidden：
 
 ~~~python
 if hidden is None:
@@ -287,21 +282,19 @@ if hidden is None:
     )
 ~~~
 
-接受后，R、A、B 等有效输入行的 Target hidden 用于更新 Draft。若只把输出改成 A、B、X，却保留 C 对应的 Draft 状态，下轮历史仍会出错。
+接受 R、A、B 对应的输入行后，它们的 Target hidden 会更新 Draft。如果只把输出改成 A、B、X，却留下 C 对应的 Draft 状态，下轮就会接上错误历史。
 
 ## 五、Greedy 与 Sampling 怎样接受候选
 
-Verify 后进入接受与整理，实现见 [`accept_and_finalize()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L138-L206)。
+接受与长度整理位于 [`accept_and_finalize()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L138-L206)。
 
-Worker 调用 `accept = self._verify_executor.accept_and_finalize(...)` 取得本轮接受结果。
+Worker 通过 `accept = self._verify_executor.accept_and_finalize(...)` 取得结果。
 
-
-
-Greedy 比较连续 Token 匹配，Sampling 比较提议和 Target 概率并执行相应接受规则。它们共享输出、长度契约，判定方法不同。
+Greedy 逐项匹配 Token，Sampling 使用提议和 Target 概率执行接受规则。两条路径最后都需要给出输出与长度，判定过程各不相同。
 
 ### Greedy：检查 Draft 是否与 Target 的链式 argmax 前缀一致
 
-Greedy 先取 `target_predict = argmax(target_logits)`，再与候选链逐步对照：
+Greedy 取 `target_predict = argmax(target_logits)`，与候选逐步比较：
 
 ~~~text
 Draft candidates:
@@ -311,45 +304,47 @@ Target chain predictions:
 A B X ...
 ~~~
 
-前两枚匹配，第三枚分歧：
+前两枚匹配，第三枚分歧，结果为：
 
 ~~~text
 correct_len = 2
 bonus = X
 ~~~
 
-`correct_len=2` 只数已接受 Draft，`bonus=X` 是最后有效输入 B 的预测，用来接替 C。若全部 Draft 匹配，bonus 则来自最后一行，因此它随接受终点移动，不能固定读窗口末行。
+`correct_len=2` 数接受的 Draft；`bonus=X` 是最后有效输入 B 的预测，用来接替 C。若 Draft 全部匹配，bonus 就取最后一行的预测。接受在哪里结束，bonus 就从哪里取得。
 
-对应实现见 [`AcceptGreedy`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L560-L718)。
+实现位于 [`AcceptGreedy`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L560-L718)。
 
-### Sampling：不是 token equality，而是 speculative sampling acceptance
+<a id="sampling-token-equality-speculative-sampling-acceptance"></a>
 
-Sampling 需用 Draft 实际提议分布与 Target probabilities。Markov 修正会改变 logits，所以应保留 `corrected_logits` / probabilities，不能以修正前 `base_logits` 代替。
+### Sampling 使用提议概率与 Target 概率
 
-`chain_speculative_sampling_triton(...)` 根据这些分布产生 `correct_len`、`bonus`、`cap_trim_lens`，交给后续长度整理与状态提交。
+Sampling 要保留 Draft 实际使用的提议分布。Markov 修正改变了 logits，因此接受时使用 `corrected_logits` / probabilities，修正前的 `base_logits` 不能代替它。
 
-概率路径按 Draft / Target 概率接受或拒绝；Greedy 按预测匹配前缀，两者各自产生接受长度与新 bonus。
+`chain_speculative_sampling_triton(...)` 用这些分布算出 `correct_len`、`bonus`、`cap_trim_lens`，再交给长度整理和状态提交。
 
-固定源码：[`AcceptSampling`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py)。
+Sampling 的分布判定和 Greedy 的前缀匹配，到这里收敛为相同的结果接口。
+
+概率路径见 [`AcceptSampling`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py)。
 
 ### `correct_len`、`bonus`、`commit_lens` 是三个不同概念
 
-`correct_len` 数 Draft，`bonus` 是 Token ID，`commit_lens` 表示推进长度。把 ID 当位置、或把接受数直接当提交数，都会让下轮缓存边界错位。
+`correct_len` 是接受的 Draft 数，`bonus` 是 Token ID，`commit_lens` 是推进长度。后续的序列边界计算用长度，生成下轮 anchor 才用 Token ID。
 
-`FinalizeAcceptLens` 的关系为：
+`FinalizeAcceptLens` 按下面的关系整理：
 
 ~~~python
 commit_lens = correct_len + 1
 new_seq_lens = prefix_lens + commit_lens
 ~~~
 
-固定函数见 [`finalize_accept_lens()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L720-L780)。
+函数入口为 [`finalize_accept_lens()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/kernels/ops/speculative/dspark/dspark_accept.py#L720-L780)。
 
-同一个计数会推进输出和 KV-ready frontier，但两组 Token 相差一位。本例输出 `[A, B, X]`，已计算输入 KV 则是 `[R, A, B]`；`commit_lens=3` 不意味着 X 的 KV 已形成。
+输出与 KV-ready frontier 推进同样多的位置，两组 Token 却相差一位：本例输出 `[A, B, X]`，算过输入 KV 的是 `[R, A, B]`。所以 `commit_lens=3` 时，X 的 KV 仍未形成。
 
-这个 `+1` 包含新的 Target bonus。即使未接受任何 Draft，root 预测仍可给一枚输出；EOS、stop、长度截断还需上层按各自规则处理。
+这个 `+1` 对应 Target 给出的 fallback / bonus。Draft 一枚都没通过，root 也能预测一枚输出；上层还会按 EOS、stop、长度限制裁剪。
 
-代入可得：
+将本例代入：
 
 ~~~text
 Draft:
@@ -363,9 +358,9 @@ bonus       = X
 commit_lens = 3
 ~~~
 
-有效输出为 `A B X`。
+输出有效前缀为 `A B X`。
 
-`BuildOutTokens` 先复制候选，再在 `correct_len` 位置放入 bonus：
+`BuildOutTokens` 复制候选，并在 `correct_len` 位置放入 bonus：
 
 ~~~python
 out_tokens[:, :gamma].copy_(draft_tokens)
@@ -376,32 +371,32 @@ out_tokens.scatter_(
 )
 ~~~
 
-只有前 `commit_lens` 个位置用于本轮输出推进。
+其中前 `commit_lens` 个位置用于本轮输出。
 
-四枚候选全部通过时：
+如果四枚候选全部通过：
 
 ~~~text
 correct_len = 4
 commit_lens = 5
 ~~~
 
-最多可推进 5 个 Token，即 4 个 Draft 加 1 个 Target bonus。
+这一轮最多推进 5 个 Token：4 个 Draft 加 1 个 Target bonus。
 
-这是全部接受时的上限。记录 AL 应说明是否含 bonus；严格 Draft 接受率需用同窗口的实际接受与提议计数，不能以最大窗口宽度冒充实测分母。
+这是窗口的推进上限。统计 AL 时要说明是否含 bonus；统计严格 Draft 接受率，则要有同窗口实际提出、接受的候选数，最大窗口宽度不能代替实测分母。
 
 ### Accept 结果也必须在 TP group 中达成一致
 
-Eager 路径将 `correct_len`、`bonus`、`cap_trim_lens` 交给 `SpecTpSync` 的相应 site。相关 Rank 若接受数、末尾 ID 或裁剪范围不一致，后续 `new_seq_lens`、positions、cache state、bonus token 都可能分叉。
+Eager 将 `correct_len`、`bonus`、`cap_trim_lens` 交给 `SpecTpSync` 的对应 site。相关 Rank 的接受数、末尾 ID、裁剪范围只要有一项不同，后续 `new_seq_lens`、positions、cache state 就可能分叉。
 
-因此核对时既要对齐长度，也要对齐末尾 ID 和有效裁剪。
+因此同一次接受同步携带的不只是长度，还有末尾 ID 与有效裁剪。
 
 ## 六、提交有效状态并开始下一轮
 
-Accept 先确定 `correct_len`、`bonus`，整理出 `commit_lens`、`new_seq_lens` 和 `out_tokens`，随后才按有效范围提交状态。
+Accept 整理出 `correct_len`、`bonus`、`commit_lens`、`new_seq_lens`、`out_tokens`，Commit 再根据有效范围更新状态。
 
 ### Target Verify hidden 会按 `commit_lens` 注入 Draft 持久状态
 
-非 folded commit 调用：
+非 folded commit 的调用为：
 
 ~~~python
 self._verify_executor.commit_hidden(
@@ -410,9 +405,9 @@ self._verify_executor.commit_hidden(
 )
 ~~~
 
-调用处见 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L919-L938)。
+位置见 [`DSparkWorkerV2._forward_decode()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py#L919-L938)。
 
-普通 strided Verify 下，`commit_hidden()` 执行：
+普通 strided Verify 进入 `commit_hidden()`：
 
 ~~~python
 self.kv_injector.inject_target_hidden(
@@ -424,24 +419,24 @@ self.kv_injector.inject_target_hidden(
 )
 ~~~
 
-实现见 [`commit_hidden()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L354-L396)。
+函数实现见 [`commit_hidden()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/speculative/dspark_components/dspark_verify.py#L354-L396)。
 
-这一步由 Target hidden 更新 Draft 持久状态，并非原样复制 Target KV。V4 DSpark 先投影、归一化 hidden，再用 Draft 各 stage 的 KV 投影写缓存，`commit_lens` 限定可提交输入行。[`write_target_hidden_kv()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_dspark.py#L932-L968)
+Draft 使用 Target hidden 更新自己的持久状态：先投影、归一化，再经 Draft 各 stage 的 KV 投影写缓存。`commit_lens` 指定提交哪些输入行，并没有原样复制 Target KV。[`write_target_hidden_kv()`](https://github.com/sgl-project/sglang/blob/5c69e32abe013fa1b913022682a3104c79105f37/python/sglang/srt/models/deepseek_v4_dspark.py#L932-L968)
 
-若原已缓存前缀为 10，本例新增 R、A、B 三个输入，KV-ready 边界到 13。X 成为下轮 anchor，尚无自己的 Target KV；C 即使仍占预留空间，也不属于已提交历史。
+假设原缓存前缀为 10，新增 R、A、B 三个输入以后，KV-ready 边界到 13。X 成为下轮 anchor，等待计算自己的 Target KV；C 的预留空间即使还在，也不属于正式历史。
 
-部分 Graph 支持将 Accept、hidden injection 折入 Verify epilogue，但固定路径还要求 proposal folded、Greedy、无生效 logits adjustment、无 Grammar，并实际能 replay。不能只见 Draft folded 就认定 Sampling 或 Grammar 的接受提交也已折叠；有效边界和注入范围仍须相同。
+部分 Graph 能将 Accept、hidden injection 放进 Verify epilogue。固定路径同时要求 proposal folded、Greedy、没有生效 logits adjustment、无 Grammar，且本轮确实能够 replay。Draft folded 只是其中一项；折叠执行之后，接受边界和注入范围仍须与原过程一致。
 
 <details markdown="1">
 <summary>补充：通用 Worker 中的 recurrent state 提交</summary>
 
-通用 `_forward_decode()` 另调用 `_commit_target_mamba_states_after_verify(...)`，按 `commit_lens` 选择验证步，服务于具有 recurrent / state-space 状态的模型。
+通用 `_forward_decode()` 还会调用 `_commit_target_mamba_states_after_verify(...)`，按 `commit_lens` 选择验证步，为带 recurrent / state-space 状态的模型提交状态。
 
 </details>
 
 ### 下一轮从新的 bonus token 和 new_seq_lens 开始
 
-最后准备下一轮输入：
+最后更新下轮输入：
 
 ~~~python
 next_draft_input = make_next_draft_input(
@@ -450,7 +445,7 @@ next_draft_input = make_next_draft_input(
 )
 ~~~
 
-随结果返回：
+并返回：
 
 ~~~text
 next_token_ids = accept.out_tokens
@@ -459,9 +454,9 @@ new_seq_lens  = accept.new_seq_lens
 next_draft_input
 ~~~
 
-下一轮使用 X、`new_seq_lens` 和刚更新的 Draft 状态。只改 Token 不改状态，会把 X 接到错误候选历史；只改长度却保留 C，也会使 Target 从错误 anchor 开始。
+下一轮接收 X、新的 `new_seq_lens` 和已更新的 Draft 状态。Token、长度、状态三者要对应同一段历史，才不会把 X 接到 C 的投机分支上。
 
-完整关系可画成：
+这一轮的状态关系如下：
 
 ~~~mermaid
 flowchart TD
@@ -479,7 +474,7 @@ flowchart TD
     N --> S2[Next speculative round]
 ~~~
 
-调试这条链时，将 `correct_len`、`commit_lens`、新长度和选中 Verify 行并排记录，便能核对提议、接受、注入是否对应同一段序列。
+在这张图里，`correct_len` 决定分歧位置，`commit_lens` 决定推进范围，选中的 Verify 行决定注入内容。三者共同把本轮提议接到下一轮。
 
 ### 补充源码入口
 

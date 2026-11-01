@@ -1,27 +1,27 @@
 # Prefill chunk 应该怎么选：从 DP 折算、页对齐到通信轮次与尾块合批
 
-调优 DeepSeek-V4-Flash、Ascend 910C 时，我们试过用更大 chunk 消除短尾块。实际输入 16388 token，在有效 chunk8192 下分三次 Prefill；改为 8320 后只需两次，吞吐却略降。后来保留 8192，将 Prefill 请求上限从 1 调为 2，同负载 native 吞吐提高了 32.27%。
+16388 个输入 Token，chunk 8192 要做三次 Prefill，chunk 8320 只做两次。后者吞吐却略降。DeepSeek-V4-Flash、Ascend 910C 这轮最后保留 8192，把请求接纳上限 1 改 2，同负载 native 提高 32.27%。
 
-分块次数只是其中一项成本。Scheduler 先按页和预算接纳，模型再按 DP/CP 布局执行，MoE 通信还有每轮容量。减少一次 Prefill 可能同时增加通信分轮，也未必减少整个队列的完成时间。
+少一次模型调用，没有同时少掉其他成本。页计费、DP/CP 行数、MoE 通信容量都在解释这个 chunk，跨过其中一个边界，省下的尾块就可能换成第二轮通信。
 
-下面按配置到执行的顺序，解释 chunk 在哪一级生效、增大时会跨哪些边界，以及何时更适合增加请求槽。[此前文章](decode-fast-throughput-limited-by-prefill.md)展开了 Pcap 收益，这里主要讨论候选怎样选择与排除。
+这里沿参数到执行展开候选选择。[此前文章](decode-fast-throughput-limited-by-prefill.md)详讲Pcap收益，本篇追chunk改变了哪些具体形状。
 
-本文使用 2026 年 10 月 20—21 日冻结的 SGLang/Ascend 适配和原始实验。文件 SHA、形状与结果见[配套材料](../../assets/deepseek-v4-prefill-chunk-selection/evidence.json)。参数折算与通信实现的每轮容量均按该版本解释，不代表其他版本的默认行为。
+数据、适配为2026年10月20—21日冻结快照，SHA、形状、结果见[配套材料](../../assets/deepseek-v4-prefill-chunk-selection/evidence.json)。折算和通信每轮容量按该版本说明。
 
 ## 1. chunk 参数至少要经过三次解释
 
-当时 P 使用全局 `--chunked-prefill-size 131072`，启用 DP Attention、`--dp-size 16`，未开启 Prefill CP。这个 131072 还需要折算，不能直接用作单个 DP 实例的批次预算。
+P 设置全局`--chunked-prefill-size 131072`、DPA、`--dp-size 16`，无 Prefill CP。单 DP 实例用的预算还需折算。
 
-该版 `arg_groups/parallel_hook.py` 的 `_handle_data_parallelism` 执行：
+`arg_groups/parallel_hook.py` 的 `_handle_data_parallelism` 执行：
 
 ```python
 # 摘录关键折算，省略配置解析与日志。
 chunked_prefill_size = chunked_prefill_size // dp_size
 ```
 
-有效预算因此为 `131072 / 16 = 8192`。全局和派生值都需记录，因为后续接纳实际使用折算值，调整 DP 后有效 chunk 也会随之改变。
+因此有效值为`131072 / 16 = 8192`。调整 DP 会改变它，记录要同时保留全局、派生值。
 
-接着由 `PrefillAdder` 检查新 token、请求槽、KV 资源和页计费，预算有余也不表示批次一定装满。模型与通信最终看到的行数还要经过 CP 分片和可能的 padding，DeepEP 再按自己的容量分轮。
+`PrefillAdder`再核新 Token、请求槽、KV 和页预算；模型、通信还会看到 CP 分片、padding 后的行数，DeepEP 按自身容量分轮。
 
 | 层次 | 本次要核对的对象 | 8192 配置中的例子 |
 | --- | --- | --- |
@@ -30,27 +30,27 @@ chunked_prefill_size = chunked_prefill_size // dp_size
 | 执行形状 | 实际新 Token、CP 分片及 padding | noCP 下本例最多 8192 行 |
 | 通信分轮 | 每轮容量、可用轮数、实际轮数 | 每轮 8192、单轮配置 |
 
-这些值有时相等、有时差别很大，必须按最终生效配置核对。本次就出现过基础脚本写 DP16，外层追加参数覆盖成 DP4/CP4 的情况，仅看基础文件会解释错实验。
+本轮曾出现基础 DP16 被外层末尾覆盖成 DP4/CP4，只有最终生效值才能解释实际几何。
 
-混部与独立 P 的分块目的也不同。混部用它交错长 Prefill 和 Decode，本次 PD 分离则主要调整 P 的形状、内存和交付粒度。[SGLang Ascend 指南](https://github.com/sgl-project/sglang/blob/main/docs/docs/hardware-platforms/ascend-npus/optimization/parameter_tuning.mdx#prefill-optimizations)以 DeepSeek-V3.2 为参考，建议某些独立长上下文 P 关闭分块；对本次 Flash/DeepEP 组合，这只能作为待测候选。
+混部用chunk交错Prefill、Decode，独立P则调输入形状、内存、交付粒度。[SGLang Ascend 指南](https://github.com/sgl-project/sglang/blob/main/docs/docs/hardware-platforms/ascend-npus/optimization/parameter_tuning.mdx#prefill-optimizations)以V3.2建议部分长上下文P关闭分块，对这次Flash/DeepEP仍需验证。
 
-`--chunked-prefill-size -1` 关闭 Scheduler 分块后，native 容量检查仍在。noCP 一次处理完整 16388 行，按本版每轮 8192 上限仍需三轮通信，还要重算中间张量和 workspace。不能由关掉分块直接推导执行成本全部消失。
+`--chunked-prefill-size -1`只关闭 Scheduler 分块。noCP 完整 16388 行，按本版 8192/轮仍需三轮通信，中间 Tensor、workspace 也要重新评估。
 
 ## 2. 16384 和 16388 的差别，足以多出一轮
 
-本例正文“16K”为 16384 token，聊天编码后输入为 16388，输出固定 1024。多出的 4 token 属于实际请求，删去它们会改变场景。
+16K 正文 16384，经 Chat 为 16388，输出固定 1024。多出的 4 个也是原请求内容。
 
-当有效 chunk8192 且批次只接一条请求时，分块如下：
+chunk 8192、只接一条时：
 
 ```text
 16388 = 8192 + 8192 + 4
 ```
 
-最后 4 token 仍需经过各层 Attention、MoE 和分布式执行，调用、元数据与协调成本不会随新行数同比趋近零。因此可以提出一个候选：略增 chunk，减少这次很短的 forward。
+尾部 4 行照样走 Attention、MoE、分布式协调，所以提出略增 chunk、少一次短 Forward。
 
-提出候选前，需先经过页计费。本版 `PrefillAdder` 使用 page128、关闭 exact-chunk-fill，新请求按页向上计费，截断路径通常向页边界取整；已有分块请求由 `add_chunked_req` 继续。初次接纳和 continuation 的分支不能合成一条简单除法。
+候选先过页计费。page128、exact-chunk-fill 关闭，新请求向上计页，截断通常向页边界取整，continuation 走`add_chunked_req`。两个分支不能合成一次简单除法。
 
-实际接纳方法的 CPU 检查保存了三种预算结果：
+实际接纳方法的 CPU 结果为：
 
 | 有效 chunk | DP16 对应全局 CLI | 该单请求的实际分块 | 关键观察 |
 | --- | ---: | --- | --- |
@@ -58,15 +58,15 @@ chunked_prefill_size = chunked_prefill_size // dp_size
 | 8256 | 132096 | 8192 + 8196 | 尾批按页计费 8320，记录中剩余预算为 -64 |
 | 8320 | 133120 | 8320 + 8068 | 两次 Prefill，最大页计费 8320 |
 
-8256 在 CPU fixture 中虽分为两块，尾批页计费却超过预算，因此没有作为合法候选进入实机。它属于主机接纳边界，未发生对应 NPU 故障，也没有性能成绩。
+8256 fixture 虽能拆两块，尾批页计费却超预算，没进入实机。它在 Host 接纳阶段不合法，没有对应 NPU 故障或性能结果。
 
-8320 则通过页对齐检查，并改变了预期分块。到这里仅说明接纳和形状符合候选目标，速度仍需后续测量。
+8320 通过页对齐，达到了预期分块形状，下一步才是性能。
 
 ## 3. 多出的 128 行，为什么可能多付整轮通信
 
-DeepEP normal 的冻结 native 实现每轮最多 8192 token。`DEEPEP_NORMAL_LONG_SEQ_PER_ROUND_TOKENS` 和 `DEEPEP_NORMAL_LONG_SEQ_ROUND` 管理这层容量，与 Scheduler 有效 chunk 是不同限制。
+冻结的 DeepEP normal native 每轮最多 8192 Token，`DEEPEP_NORMAL_LONG_SEQ_PER_ROUND_TOKENS`、`DEEPEP_NORMAL_LONG_SEQ_ROUND`控制这层容量。
 
-noCP 从 8192 行增加到 8320 行，就会跨过单轮上限。同一次 Forward 的通信改为 `8192 + 128` 两轮，于是 Prefill 与通信出现不同的分轮：
+noCP 的 8320 行跨过上限，Forward 内通信变成`8192 + 128`两轮：
 
 ```mermaid
 flowchart TD
@@ -78,19 +78,19 @@ flowchart TD
     F --> G[第二轮虽短，仍有轮次同步与状态交接]
 ```
 
-round 循环包含共享区写入、状态交接、等待和读取，每轮都有协调成本。尾部 128 行不等于再做完整 8192 行计算，但仍需走完第二轮通信。这个候选减少了模型 Forward 次数，却让其中 8320 行的那次 Forward 需要两轮通信；两种次数应分别核算。
+round 要共享区写入、状态交接、等待、读取。128 行没有重复 8192 行的全部计算，却要再承担一次协调。这里减少模型 Forward 次数，同时增加了 8320 行那次 Forward 内的通信轮数。
 
-CP 会再次改变实际行数。原 CP4/DP4、有效 chunk32768、Pcap1 将完整 16388-token 输入分为每 rank 4097 逻辑行，补齐为 4104。CP2 则为 8194 逻辑行，按 zigzag `2×CP` 的 4 行规则补至 8196。即使去掉 padding，仍超出单轮 8192。
+CP 还会分片。CP4/DP4、有效 chunk 32768、Pcap1 完整接纳后，每 Rank 4097 个逻辑行、补齐为 4104；CP2 是 8194 行，按 zigzag 的`2×CP`即 4 行对齐，成为 8196。未填充也已超 8192。
 
-2026 年 10 月 24 日的源码复核还修正了旧算术：此前误将 CP2 按 8 行对齐写成 8200，执行原方法后应为 8196。没有重跑历史压测，仍需两轮的判断不变，详见[CP2/CP4 同负载专题](ascend-910c-cp2-vs-cp4-prefill-throughput.md)。
+2026年10月24日复核原方法，将旧文误写的CP2按8行对齐8200修成8196。没有重跑历史压测，两轮通信判断不变，见[CP2/CP4 同负载专题](ascend-910c-cp2-vs-cp4-prefill-throughput.md)。
 
-CP2/DP8 为完整接纳，还将有效 chunk 设为 16512，对应全局 CLI132096，因为 page128 计费恰为 16512。DP 请求分布、CP 分片和 normal 轮数一并改变，不能将结果归于单个 chunk 参数，也不能由 DP 翻倍预测吞吐翻倍。
+CP2/DP8 为完整接纳，设有效 chunk 16512、全局 CLI132096，page128 计费正好 16512。请求分布、CP 行数、通信轮数一起变，评价的是联合配置。
 
-通过通信容量检查，只说明这个形状可以进入相应路径。临时张量、接收路由分布和 workspace 的实际峰值仍要测量；在主机接纳阶段就被拒绝的非法配置，则没有进入模型性能测试。
+通过容量检查，说明形状能进这条路径。临时 Tensor、接收路由、workspace 实际峰值仍要量，Host 阶段已拒绝的则没有模型性能结果。
 
 ## 4. 两组负例：分块更少，TPOT 更低，吞吐仍没升
 
-8192→8320 对照使用相同高 AL 复制任务，N320/C128/6 req/s、Chat16388、输出 1024、零前缀命中，P 布局、D8be 静态布局、G5/verify6、IndexCache freq2 均相同，Pcap 均为 1。改变的是 chunk8192/round1→chunk8320/round2，尚未加入后来 Compact/P7804 配置。
+8192→8320 固定高 AL 复制集、N320/C128/r6、Chat 16388、输出 1024、cache 0，P 布局、D8be、G5/Verify 6、IndexCache freq2、Pcap1 一致，只改 chunk 8192/round1→8320/round2，尚未加入后来的 Compact/P7804。
 
 | 指标 | 8192 / round1 | 8320 / round2 |
 | --- | ---: | ---: |
@@ -104,17 +104,17 @@ CP2/DP8 为完整接纳，还将有效 chunk 设为 16512，对应全局 CLI1320
 | whole AL：输出数 / Verify 次数 | 5.7711 | 5.7737 |
 | whole 严格 Draft 接受率 | 95.7266% | 95.7702% |
 
-whole 的严格接受计数分别为 `271763/283895`、`271767/283770`，AL 分母为 56779、56754 次 Verify，不能移到 native 一行。native 两轮均达到当时至少 128 请求、60 秒的筛选要求，但只有一次配对，没有重复实验置信区间。
+whole 严格接受数`271763/283895`、`271767/283770`，AL 分母 56779、56754 次 Verify。两 native 都满足 128 请求、60 秒，但仅一组配对，whole 接受数不移给 native。
 
-8320 native 吞吐约降 0.97%，whole 约降 0.66%。这个幅度不足以推导稳定退化，却没有提供继续长测的收益依据。TPOT 降到 7.0ms 后，首 token 前的等待仍未补回；AL 与严格接受率接近，也不支持草稿接受率下降的解释。
+8320 native 约−0.97%、whole 约−0.66%，未提供继续长测的正向依据，也不足以证明稳定退化。TPOT 到 7.0ms，首 Token 前等待仍未补回，AL、严格接受率接近。
 
-另一组普通原基准比较 CP4/DP4 与 CP2/DP8/round2，保持 N480/C88/4 req/s、16K/1K、cache0 和 D 配置。native 由 181.2029 降至 179.5582 tok/s/PD16 卡，whole 由 164.6732 降至 161.9804；native TPOT 从 19.3ms 降至 17.2ms，TTFT 则由 10.570s 升至 12.828s。
+普通原基准另测 CP4/DP4→CP2/DP8/round2，固定 N480/C88/r4、16K/1K、cache 0、D。native 181.2029→179.5582、whole 164.6732→161.9804 tok/s/PD16 卡；native TPOT 19.3→17.2ms，TTFT 10.570→12.828s。
 
-两项结果都未将减少分块或降低 TPOT 转为更高系统吞吐。它们与通信边界、并行形状成本相容，但缺少完整设备阶段计时，无法逐毫秒拆给第二轮。两组负载及状态也不同，绝对吞吐不能直接横向排名。
+两组都没把少分块、低 TPOT 变成吞吐增益。结果与通信、并行形状成本相容，缺完整设备计时，还不能将差值逐毫秒分给第二轮。负载不同，两组绝对值也不横排。
 
 ## 5. 保留 8192，为什么增加请求槽反而有效
 
-还可以保留短尾块，再与队列后续请求合批。Pcap1 时，A 的 4-token 尾块占满唯一请求槽，剩余 token 预算无法接纳 B；Pcap2 配合原 chunk8192，可以形成如下序列：
+保留 chunk 后还可以合批。Pcap1 时 A 尾部 4 Token 占唯一名额；Pcap2 让剩余预算接 B：
 
 ```text
 一批：A 尾块 4 + B 新输入 8064
@@ -122,11 +122,11 @@ whole 的严格接受计数分别为 `271763/283895`、`271767/283770`，AL 分�
 再下一批：B 尾块 132 + C 新输入 7936
 ```
 
-其中 8064 来自页预算：A 的 4 token 按一页收费，B 可用 `8192-128=8064`；B 剩余 132-token 尾块收费两页，给 C 留下 `8192-256=7936`。只增加请求槽，token 上限与单轮通信容量都没有翻倍。
+A 按一页收费，B 可用`8192-128=8064`；B 再剩 132 行、收两页，给 C 留`8192-256=7936`。加请求槽，没有加倍 Token 预算、通信容量。
 
-在相同 320 请求的实际 `PrefillAdder` CPU 检查中，总输入均为 5244160 token，批次数由 960 降至 645。短批次减少，输入没有少算。不过这只是接纳方法验证，真实多 DP 队列还需日志和实测，不能假定每批都按示例排列。
+实际 PrefillAdder CPU 同 320 请求，总输入 5244160，batch 960→645。接纳路径验证成立，多 DP 真实队列仍需日志、压测，未保证各批恰好按例排列。
 
-随后在固定 P7804/D8be 静态布局、Compact6/自动 SPS/G5、IndexCache freq2 上做 N640/C128/6 req/s 配对，仅改变 Pcap1→2：
+固定 P7804/D8be、Compact6/自动 SPS/G5、IndexCache freq2，N640/C128/r6 只改 Pcap1→2：
 
 | 指标 | Pcap1 | Pcap2 |
 | --- | ---: | ---: |
@@ -137,39 +137,39 @@ whole 的严格接受计数分别为 `271763/283895`、`271767/283770`，AL 分�
 | whole TPOT 平均（ms） | 8.7 | 9.4 |
 | whole AL | 5.7483 | 5.7494 |
 
-两轮均为 640 成功、0 失败、cache0，native 提高 32.27%，whole 提高 30.26%。这阶段未采全 Compact 实际 proposal 分母，严格接受率保留 `NOT_OBSERVED`。完整时延、ITL 和接受口径见[配对专题](decode-fast-throughput-limited-by-prefill.md)。
+两轮640成功、0失败、cache0，native+32.27%、whole+30.26%。这阶段实际proposal分母缺，严格接受率`NOT_OBSERVED`，详细时延、ITL见[配对专题](decode-fast-throughput-limited-by-prefill.md)。
 
-当 chunk 已接近单轮容量，队列又能提供后继请求时，先检查尾块合批往往更有针对性。这不表示所有场景都用 Pcap2：更早普通负载和另一套 CP 布局也有负向记录，效果来自当前预算与负载组合。
+接近单轮容量、队列又有后继请求时，合尾块比继续放大 chunk 更有针对性。早期普通负载、别的 CP 布局也有 Pcap2 负向，仍按当前组合决定。
 
 ## 6. 换成 128K、90% Prefix Cache，chunk 应该按什么算
 
-输入改为 128K 后，要重新区分总上下文与本轮新增 Prefill。总长度变大，不意味着 chunk 也应直接改为 128K，原来 16K 输入的尾块规律也需要重新计算。
+128K 先区分总上下文、本轮新输入，再算 chunk 形状。
 
-后来的另一组实测为正文 131072 token、Chat131076、输出 1024，逐请求命中 118784，比例约 90.6222%。名义未命中长度为：
+后来的实测正文 131072、Chat 131076、输出 1024，每条命中 118784、约 90.6222%，名义未命中为：
 
 ```text
 131076 - 118784 = 12292
 ```
 
-若只看单请求、chunk8192 且无其他截断，warm 新输入可分为 `8192+4100`，冷 seed 完整输入则为 `16×8192+4`。这是根据实测长度推导的形状，未另采完整批次日志，不能当作两种状态的设备计时。
+只看单请求、chunk 8192、没有其他截断，warm 新输入为`8192+4100`，冷 seed 为`16×8192+4`。这是从长度推导，未另采完整 batch 日志或设备阶段时间。
 
-命中前缀后，Attention 仍使用长历史，逻辑上下文没有缩成 12292。新 Query、缓存状态和历史读取仍受并行与容量影响，不能按命中比例同比缩减全部计算和内存。
+Prefix 命中后，Attention 还读长历史，上下文并未缩成 12292。Query、缓存、历史的成本不能统一乘非命中比例。
 
-所以换场景时先保存总长度、实际 cached_tokens 和未命中分布，再查每批填充与通信边界。seed 成本另列，正式命中逐条核验；16K 零缓存下的配置只能作为起点。
+因此先记录总长、实际 cached_tokens、未命中分布，再看批次、通信。seed 成本单列，正式命中逐条验，旧 16K 配置只作起点。
 
 ## 7. 选择 chunk 时，先问下一轮能证伪什么
 
-决定试一个新 chunk 前，先确认它将改变的批次形状、跨过的页或通信边界，以及这些变化是否针对当前瓶颈。仅凭调用次数减少，还不值得直接付出重启成本。
+新 chunk 具体改变哪个 shape、越过哪条页/通信边界，应在重启前算清。减少调用只是候选动机。
 
-日志里若有大量短尾块且队列非空，先查 Pcap 与剩余预算；批次接近满载仍供给不足，再评估更大 chunk 是否增加通信轮次和 workspace。客户端 C、`max-running-requests`、Pcap、chunk 各限制不同对象，提高 C 不会自动增加本批槽位和 token 预算。
+短尾多、队列非空，先查 Pcap、剩余预算；batch 接近满载仍缺供给，再评估更大 chunk 的轮数、workspace。C、max-running、Pcap、chunk 分别限制不同对象。
 
-有候选后，复用实际接纳方法核对本次变化：输入守恒、页计费、分块和行数。CPU 可以确认预期路径，吞吐仍由同负载压测决定。8320 与 CP2 都合法完成，无收益就停止，无须继续扫档寻找正向结果。
+复用实际接纳方法，核输入守恒、页计费、分块、行数，CPU 确认路径，再用匹配压测判断。8320、CP2 都合法完成但未提速，本轮因此停止。
 
-这些历史试验也有成本。8320 的加载、两轮 MF、路由及配套约 764.81s，正式约 141.48s；CP2 全程约 1329.43s。它们不是所有测试的固定流程，已经支持的热 N/C/r 变更应直接复用服务。
+8320 加载、两轮 MF、路由、配套约 764.81s，正式 141.48s；CP2 全程 1329.43s。准备不是所有候选固定成本，热 N/C/r 继续复用服务。
 
-最终一起比较 TTFT、TPOT、E2E、吞吐、失败、缓存与接受计数，区分 whole/native 和短筛/长窗。若同时改 chunk 与通信轮数，就按联合候选报告。当前保留的是 8192 配合相应尾块合批，没有证据将 8192 定为所有长度、缓存和拓扑的最优值。
+结果一起保留 TTFT、TPOT、E2E、吞吐、失败、缓存、接受计数，按 whole/native、短筛/长窗填写。chunk 与 round 同改就报联合候选，本轮 8192 有效也未证明它普遍最优。
 
-选择 chunk 时，最有用的信息是每次前向实际处理哪些 token，以及相应执行和协调成本。下一轮据此选择要验证的形状，通常比按 8K、16K、32K 整数档位继续扫描更容易解释结果。
+最终选择依据是每次 Forward 实际处理了哪些 Token、花了多少执行和协调时间。下一轮据此选择要验证的形状。
 
 ## 配套材料与延伸阅读
 
