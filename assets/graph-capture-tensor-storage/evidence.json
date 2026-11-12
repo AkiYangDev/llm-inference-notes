@@ -1,0 +1,73 @@
+{
+  "article": "docs/performance/graph-capture-tensor-storage.md",
+  "date": "2026-11-12",
+  "versions": {
+    "pytorch": "2.10.0",
+    "sglang_commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+    "ascend_pytorch_branch": "v2.10.0",
+    "ascend_pytorch_commit": "e945b7088a865036fbd06bc02c3097005526469a"
+  },
+  "version_scope": "Fixed source references, not a claim about every installed torch_npu binary.",
+  "sources": [
+    {
+      "claim": "Ordinary CUDA replay reuses task parameters and pointer addresses; data at those addresses can change.",
+      "url": "https://github.com/pytorch/pytorch/blob/v2.10.0/docs/source/notes/cuda.rst#L1297-L1309"
+    },
+    {
+      "claim": "NPU replay delegates to the captured graph execution entry.",
+      "url": "https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/torch_npu/npu/graphs.py#L638-L641"
+    },
+    {
+      "claim": "NPU C++ replay submits AclmdlRIExecuteAsync on the current stream.",
+      "url": "https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/torch_npu/csrc/core/npu/NPUGraph.cpp#L265-L283"
+    },
+    {
+      "claim": "copy_ copies source data into the destination tensor.",
+      "url": "https://docs.pytorch.org/docs/2.10/generated/torch.Tensor.copy_.html"
+    },
+    {
+      "claim": "set_ can replace the underlying storage, size and strides.",
+      "url": "https://docs.pytorch.org/docs/2.10/generated/torch.Tensor.set_.html"
+    },
+    {
+      "claim": "record_stream concerns allocation reuse after already queued work, not automatic future replay ownership.",
+      "url": "https://docs.pytorch.org/docs/2.10/generated/torch.Tensor.record_stream.html"
+    },
+    {
+      "claim": "NPU graph update requires auto_dispatch_capture and uses registered update handlers.",
+      "url": "https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/torch_npu/npu/graphs.py#L669-L677"
+    },
+    {
+      "claim": "Official source test demonstrates actual_seq_lengths update; this upstream test was read, not executed here.",
+      "url": "https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/test/npu/test_aclgraph_update.py#L77-L109"
+    },
+    {
+      "claim": "SGLang retains captured graphs and output objects; replay preparation writes static inputs.",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py"
+    },
+    {
+      "claim": "NPU EPLB constructs writable aliases of existing expert storage.",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L334-L365"
+    }
+  ],
+  "examples": {
+    "../../examples/graph-capture-tensor-storage/graph_storage_demo.py": {
+      "device_execution_performed": false,
+      "meaning": "Runnable small device examples with expected-value assertions; no fabricated device log.",
+      "checks_completed": [
+        "Python syntax",
+        "CLI --help before torch import"
+      ]
+    }
+  },
+  "diagram": {
+    "path": "assets/graph-capture-tensor-storage/rebind-versus-graph.svg",
+    "kind": "Original explanatory diagram, not profiler output."
+  },
+  "performance_results": "No new benchmark or performance claim in this article.",
+  "publication_checks": [
+    "Python syntax and CLI --help",
+    "Markdown text hygiene and local file links",
+    "Browser rendering review"
+  ]
+}

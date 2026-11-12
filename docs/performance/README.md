@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [图捕获以后，为什么还能改权重，却不能随便换张量？](graph-capture-tensor-storage.md)：从三种改权重的操作，解释图读取的地址、输入输出缓冲和显式更新接口。
+
 - [搬专家权重，还需要 NZ→ND 吗？一次 Ascend EPLB 存储路径重构](ascend-eplb-physical-storage-migration.md)：从完整专家字节块、padding 与共享存储视图，解释省去整层格式转换与写回的实现和实测结果。
 
 - [动态 EPLB 的 decode 收益怎么测：从一次 forward 到稳态吞吐](dynamic-eplb-decode-benefit-measurement.md)：用固定计算、周期策略和原生稳态三层对照，解释 batch、I/W、DSpark 与净收益的测量方法。

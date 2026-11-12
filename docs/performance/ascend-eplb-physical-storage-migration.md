@@ -380,3 +380,5 @@ DSpark 计数的来源也保留：两次结束时，D 端各 rank 最新原生�
 ---
 
 代码与数值来源集中列在[本文配套证据索引](../../assets/ascend-eplb-physical-storage-migration/evidence.json)。相关前置阅读：[动态专家怎样安全迁移](../distributed/ascend-dynamic-eplb-weight-migration.md)、[逐层迁移的临时显存](ascend-eplb-memory-bounded-staging.md)、[如何测 decode 的布局收益](dynamic-eplb-decode-benefit-measurement.md)。
+
+关于原位更新如何与图回放配合，见[图捕获以后，为什么还能改权重，却不能随便换张量？](graph-capture-tensor-storage.md)。

@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [图捕获以后，为什么还能改权重，却不能随便换张量？](docs/performance/graph-capture-tensor-storage.md)：用原地复制、变量赋值和存储替换，解释静态输入输出、NPU 参数更新与 EPLB 权重迁移。
+
 - [搬专家权重，还需要 NZ→ND 吗？一次 Ascend EPLB 存储路径重构](docs/performance/ascend-eplb-physical-storage-migration.md)：对照 NZ↔ND 中转与物理字节视图，讲清 padding、scratch、地址与生命周期，以及显存和 update 耗时的变化。
 
 文章按主要阅读角色组织；专题、标签与系列阅读仍在网站中并行保留。

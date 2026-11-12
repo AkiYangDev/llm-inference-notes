@@ -1,4 +1,16 @@
 {
+  "docs/performance/graph-capture-tensor-storage.md": {
+    "summary": "用 copy_、重新赋值和 set_ 三个小例子，讲清图地址、静态缓冲、输出复用，以及 NPU 显式参数更新与 EPLB 原位迁移。",
+    "category": "性能分析",
+    "tags": [
+      "Graph",
+      "PyTorch",
+      "Ascend",
+      "EPLB"
+    ],
+    "topic": "performance",
+    "role": "advanced"
+  },
   "docs/sglang/sglang-ascend-request-lifecycle.md": {
     "summary": "从聊天消息进入服务开始，跟随一条请求走过分词、缓存、组批、模型计算与文本返回。",
     "category": "源码解析",

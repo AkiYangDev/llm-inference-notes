@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560" role="img" aria-labelledby="title desc">
+<title id="title">重新绑定变量不会自动更新图中的地址</title>
+<desc id="desc">weight 变量从旧 Tensor 改为指向新 Tensor，新对象的数据在 W1、值为5。图中已捕获的乘法仍然读取 W0、值为3。输入为2时，重新 eager 计算得10，旧图回放得6。旧存储由另一个引用保活。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#53647b"/></marker></defs>
+<rect width="1000" height="560" rx="16" fill="#f5f7fb"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#182a40">
+<text x="36" y="48" font-size="25" font-weight="700">重新赋值以后，Python 名字和图走向了不同地址</text>
+<rect x="36" y="90" width="246" height="84" rx="10" fill="#e9f0ff" stroke="#8eafe1"/>
+<text x="56" y="125" font-size="22" font-weight="700">Python 名字 weight</text>
+<text x="56" y="153" font-size="17">赋值后指向新对象</text>
+<rect x="382" y="90" width="242" height="84" rx="10" fill="#e9f0ff" stroke="#8eafe1"/>
+<text x="404" y="126" font-size="22">新 Tensor</text><text x="404" y="154" font-size="18">数据起点 W1</text>
+<rect x="734" y="90" width="226" height="84" rx="10" fill="#dcece5" stroke="#81aa94"/>
+<text x="757" y="127" font-size="22">W1：值为 5</text><text x="757" y="155" font-size="18">新 eager：2 × 5 = 10</text>
+<path d="M284 132H367" stroke="#53647b" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M626 132H719" stroke="#53647b" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="36" y="252" width="246" height="110" rx="10" fill="#fff0dc" stroke="#cfaa71"/>
+<text x="56" y="288" font-size="22" font-weight="700">已捕获的乘法任务</text>
+<text x="56" y="320" font-size="18">输入 X0，权重 W0</text><text x="56" y="347" font-size="18">不重新查 Python 名字</text>
+<rect x="382" y="268" width="242" height="84" rx="10" fill="#fff" stroke="#91a0b4"/>
+<text x="404" y="304" font-size="22">旧存储 W0</text><text x="404" y="332" font-size="18">由旧引用保活，值仍为 3</text>
+<rect x="734" y="268" width="226" height="84" rx="10" fill="#fff0dc" stroke="#cfaa71"/>
+<text x="757" y="304" font-size="22">图回放：2 × 3 = 6</text><text x="757" y="333" font-size="18">没有切换到 W1</text>
+<path d="M284 310H367" stroke="#53647b" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M626 310H719" stroke="#53647b" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M503 176V248" stroke="#a9b3c0" stroke-dasharray="7 7" stroke-width="2"/>
+<path d="M488 204L518 226M518 204L488 226" stroke="#ad5c4c" stroke-width="3"/>
+<text x="547" y="222" font-size="18">没有自动改写图参数</text>
+<rect x="36" y="416" width="924" height="102" rx="10" fill="#e8edf3"/>
+<text x="56" y="454" font-size="20">若要让普通旧图读到 5：把 5 写进 W0，而不只是把名字改指向 W1。</text>
+<text x="56" y="489" font-size="17">示意图；真实程序还必须维持存储有效期、布局与设备读写顺序。</text>
+</g></svg>

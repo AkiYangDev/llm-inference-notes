@@ -193,6 +193,11 @@
         "path": "docs/performance/ascend-eplb-physical-storage-migration.md",
         "label": "EPLB 直接搬物理存储",
         "description": "从 NZ↔ND 中转改为原地址字节视图，解释专家边界、异步生命周期与实测成本"
+      },
+      {
+        "path": "docs/performance/graph-capture-tensor-storage.md",
+        "label": "图捕获与权重地址",
+        "description": "从 Python 名字与设备地址，走到静态输入、输出复用和 EPLB 原位更新"
       }
     ]
   },
