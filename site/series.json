@@ -188,6 +188,11 @@
         "path": "docs/distributed/ascend-dynamic-eplb-weight-migration.md",
         "label": "动态EPLB权重迁移",
         "description": "从NZ暂存与P2P等待走到原位权重和路由映射的一致提交"
+      },
+      {
+        "path": "docs/performance/ascend-eplb-physical-storage-migration.md",
+        "label": "EPLB 直接搬物理存储",
+        "description": "从 NZ↔ND 中转改为原地址字节视图，解释专家边界、异步生命周期与实测成本"
       }
     ]
   },

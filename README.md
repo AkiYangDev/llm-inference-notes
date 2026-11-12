@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [搬专家权重，还需要 NZ→ND 吗？一次 Ascend EPLB 存储路径重构](docs/performance/ascend-eplb-physical-storage-migration.md)：对照 NZ↔ND 中转与物理字节视图，讲清 padding、scratch、地址与生命周期，以及显存和 update 耗时的变化。
+
 文章按主要阅读角色组织；专题、标签与系列阅读仍在网站中并行保留。
 
 - [AISBench 的 whole、native、TPOT 和 ITL，到底在量什么？](docs/performance/aisbench-whole-native-tpot-itl.md)：从单请求时间线、事件间隔到原生稳定段选择，讲清延迟、并发和吞吐的样本与分母。

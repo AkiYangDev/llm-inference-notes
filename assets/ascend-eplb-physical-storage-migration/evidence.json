@@ -1,0 +1,222 @@
+{
+  "article": "ascend-eplb-physical-storage-migration.md",
+  "as_of": "2026-11-12",
+  "source_explained": {
+    "repository": "sgl-project/sglang",
+    "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+    "pr": 49701
+  },
+  "torch_npu_reference": {
+    "repository": "Ascend/pytorch",
+    "branch": "v2.10.0",
+    "commit": "e945b7088a865036fbd06bc02c3097005526469a",
+    "note": "Official source read for metadata/storage constructors; not a claim that the installed post6 binary is byte-identical to this branch."
+  },
+  "full_service_comparison": {
+    "date": "2026-11-11",
+    "old_commit": "ddc2a3ababd82db41cd097470fc51569577a0dff",
+    "new_commit": "4eb587cad0780ef1cb69b0b32563bd2d364a375e",
+    "eplb_enabled_both": true,
+    "kv_tokens": {
+      "P": 911104,
+      "D": 514304
+    },
+    "requests": 256,
+    "concurrency_limit": 32,
+    "output_tokens": 1024,
+    "interval_window": {
+      "P": [
+        50,
+        50
+      ],
+      "D": [
+        4000,
+        1000
+      ]
+    },
+    "redundant_slots_per_ep_group_per_layer": 16,
+    "update_scope": "Complete manager rebalance wall time; slowest rank per round; independently generated plans.",
+    "rounds": [
+      {
+        "version": "old",
+        "role": "P",
+        "ordinal": 1,
+        "slowest_rank_ms": 696.0
+      },
+      {
+        "version": "old",
+        "role": "P",
+        "ordinal": 2,
+        "slowest_rank_ms": 711.0
+      },
+      {
+        "version": "old",
+        "role": "P",
+        "ordinal": 3,
+        "slowest_rank_ms": 689.0
+      },
+      {
+        "version": "old",
+        "role": "D",
+        "ordinal": 1,
+        "slowest_rank_ms": 730.0
+      },
+      {
+        "version": "new",
+        "role": "P",
+        "ordinal": 1,
+        "slowest_rank_ms": 576.0
+      },
+      {
+        "version": "new",
+        "role": "P",
+        "ordinal": 2,
+        "slowest_rank_ms": 621.0
+      },
+      {
+        "version": "new",
+        "role": "P",
+        "ordinal": 3,
+        "slowest_rank_ms": 611.0
+      },
+      {
+        "version": "new",
+        "role": "D",
+        "ordinal": 1,
+        "slowest_rank_ms": 658.0
+      }
+    ],
+    "memory_scope": "Same-chip median of benchmark-window npu-smi samples, then role median of old-minus-new differences; not continuous peak.",
+    "memory": [
+      {
+        "role": "P",
+        "median_saved_MiB": 839.5
+      },
+      {
+        "role": "D",
+        "median_saved_MiB": 1641.5
+      }
+    ],
+    "source_assets": {
+      "update_per_round.csv": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/update_per_round.csv",
+      "update_per_rank.csv": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/update_per_rank.csv",
+      "memory_per_chip.csv": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_per_chip.csv",
+      "memory_selected_samples.csv": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_selected_samples.csv",
+      "PROVENANCE.json": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/PROVENANCE.json",
+      "old_benchmark_top.jpg": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/old_benchmark_top.jpg",
+      "new_benchmark_top.jpg": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/new_benchmark_top.jpg",
+      "old_benchmark_result_excerpt.log": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/old_benchmark_result_excerpt.log",
+      "new_benchmark_result_excerpt.log": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/new_benchmark_result_excerpt.log"
+    },
+    "whole_run": {
+      "old": {
+        "output_tokens_per_second": 1761.24,
+        "ttft_ms": 7678.71,
+        "tpot_ms": 9.61,
+        "e2e_ms": 17505.27,
+        "successful": 256,
+        "failed": 0
+      },
+      "new": {
+        "output_tokens_per_second": 1721.98,
+        "ttft_ms": 7547.08,
+        "tpot_ms": 9.5,
+        "e2e_ms": 17265.96,
+        "successful": 256,
+        "failed": 0
+      }
+    },
+    "acceptance": {
+      "scope": "Latest native rank windows at run end",
+      "AL": 6.0,
+      "acceptance_rate_gauge": 1.0,
+      "whole_run_actual_accepted_proposed": "NOT_OBSERVED"
+    }
+  },
+  "real_npu_storage_example": {
+    "device": "Ascend 910C",
+    "dtype": "bfloat16",
+    "format": 29,
+    "shape": [
+      6,
+      17,
+      64
+    ],
+    "bytes_per_expert_logical": 2176,
+    "bytes_per_expert_physical": 4096,
+    "checks": "Ten per endpoint: ND, packed ND dtype view, reshaped ND, padded NZ, transposed NZ; each full export and prefix.",
+    "source": "https://github.com/sgl-project/sglang/pull/49701",
+    "original_probe_outputs": [
+      {
+        "role": "P",
+        "file": "storage-smoke-P.jsonl",
+        "records": 10,
+        "sha256": "9cf02c42a4194f5ac51641759d837ecb922bdc632f5109d0dffe2c440aeef26c"
+      },
+      {
+        "role": "D",
+        "file": "storage-smoke-D.jsonl",
+        "records": 10,
+        "sha256": "9cf02c42a4194f5ac51641759d837ecb922bdc632f5109d0dffe2c440aeef26c"
+      }
+    ]
+  },
+  "fp4_probe": {
+    "provenance": "Author-supplied Ascend 950PR device probes and format-only service validation, recorded in PR #49701.",
+    "format": 50,
+    "dtype": "uint8",
+    "weight_shape": [
+      80,
+      2048,
+      4096
+    ],
+    "weight_stride": [
+      8388608,
+      1,
+      2048
+    ],
+    "full_shape": [
+      81,
+      4096,
+      2048
+    ],
+    "full_stride": [
+      8388608,
+      2048,
+      1
+    ],
+    "full_storage_bytes": 679477248,
+    "bytes_per_expert": 8388608,
+    "routed_experts": 80,
+    "shared_experts_suffix": 1,
+    "format_only_validation": {
+      "prefill_rebalances": 12,
+      "decode_rebalances": 112,
+      "exceptions": 0,
+      "strict_NZ_checks_relaxed": false
+    },
+    "other_format_variants": "Source and CPU boundary regression; not all variants claimed device-tested."
+  },
+  "gsm8k": {
+    "commit": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+    "questions": 1319,
+    "correct": 1283,
+    "errors": 0,
+    "truncated": 0,
+    "source": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-validation-20261111/gsm8k-final-evidence.zip"
+  },
+  "original_screenshot_copies": [
+    {
+      "file": "old_benchmark_top.jpg",
+      "sha256": "28758347f4ab8bca67d34ad784d4fa7e23a5eb287d6a17d4b36e1c9a4f1ccbd9",
+      "public_original": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/old_benchmark_top.jpg",
+      "modified": false
+    },
+    {
+      "file": "new_benchmark_top.jpg",
+      "sha256": "767273b4d6401bb1914688307074bd16ffa303181fe936df0e0a6392bd767a1d",
+      "public_original": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/new_benchmark_top.jpg",
+      "modified": false
+    }
+  ]
+}

@@ -704,6 +704,19 @@
     "topic": "performance",
     "role": "deep"
   },
+  "docs/performance/ascend-eplb-physical-storage-migration.md": {
+    "summary": "迁移专家时，保留 NZ 和量化打包字节，怎样省去整层转换与写回？从共享存储视图、padding 和 scratch 讲到完整服务的显存与耗时对照。",
+    "category": "性能分析",
+    "tags": [
+      "Ascend",
+      "EPLB",
+      "NZ",
+      "Tensor Storage",
+      "显存"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/ascend-eplb-tp-world-memory.md": {
     "summary": "从小统计触发几个 GiB 占用查起，分开核对 OFF 的 TP 初始化和 WORLD 的额外激活，比较四次 16-rank 实验。",
     "category": "性能分析",

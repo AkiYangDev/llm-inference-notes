@@ -1,0 +1,10 @@
+{"kind": "nd", "export": "data", "shape": [6, 17, 64], "format": 2, "byte_shape": [6, 4352], "passed": true}
+{"kind": "nd", "export": "prefix", "shape": [4, 17, 64], "format": 2, "byte_shape": [4, 4352], "passed": true}
+{"kind": "nd_packed", "export": "data", "shape": [6, 17, 16], "format": 2, "byte_shape": [6, 1088], "passed": true}
+{"kind": "nd_packed", "export": "prefix", "shape": [4, 17, 16], "format": 2, "byte_shape": [4, 1088], "passed": true}
+{"kind": "nd_flat", "export": "data", "shape": [6, 17, 64], "format": 2, "byte_shape": [6, 4352], "passed": true}
+{"kind": "nd_flat", "export": "prefix", "shape": [4, 17, 64], "format": 2, "byte_shape": [4, 4352], "passed": true}
+{"kind": "nz", "export": "data", "shape": [6, 17, 64], "format": 29, "byte_shape": [6, 4096], "passed": true}
+{"kind": "nz", "export": "prefix", "shape": [4, 17, 64], "format": 29, "byte_shape": [4, 4096], "passed": true}
+{"kind": "nz_transposed", "export": "data", "shape": [6, 64, 17], "format": 29, "byte_shape": [6, 4096], "passed": true}
+{"kind": "nz_transposed", "export": "prefix", "shape": [4, 64, 17], "format": 29, "byte_shape": [4, 4096], "passed": true}

@@ -196,3 +196,5 @@ CPU 多等了一下，更新耗时需要实际量到设备完成。这里用 EPL
 这次量的是整次 update，保留依据是迁移峰值、缓存水位下降，后续更新均值仍在原有范围。生成速度有没有改善，还要用同负载 TPOT 和稳态吞吐回答。完成事件后来仍留在 NPU staging 内部，只约束专家迁移的生命周期，普通 forward 不加同步。
 
 数据可从[汇总与来源校验值](../../assets/ascend-eplb-memory-bounded-staging/evidence.json)、[小实验](../../assets/ascend-eplb-memory-bounded-staging/micro-results.json)、[逐 rank 缓存](../../assets/ascend-eplb-memory-bounded-staging/memory-per-rank.csv)、[逐轮更新](../../assets/ascend-eplb-memory-bounded-staging/update-per-rank.csv)和[迁移峰值](../../assets/ascend-eplb-memory-bounded-staging/lifecycle-peaks.csv)复核。专家身份、物理槽位与迁移算法见[动态专家负载均衡怎样安全地迁移权重](../distributed/ascend-dynamic-eplb-weight-migration.md)，那篇固定了更早版本，这里记录其后的临时存储问题。
+
+后续的[物理存储迁移重构](ascend-eplb-physical-storage-migration.md)进一步去掉了整层 NZ↔ND 中转：为原权重建立字节视图，保留迁移算法需要的 scratch。这两次优化分别处理临时张量的排队数量与临时存储本身，实验版本和结果也分别记录。

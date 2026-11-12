@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [搬专家权重，还需要 NZ→ND 吗？一次 Ascend EPLB 存储路径重构](ascend-eplb-physical-storage-migration.md)：从完整专家字节块、padding 与共享存储视图，解释省去整层格式转换与写回的实现和实测结果。
+
 - [动态 EPLB 的 decode 收益怎么测：从一次 forward 到稳态吞吐](dynamic-eplb-decode-benefit-measurement.md)：用固定计算、周期策略和原生稳态三层对照，解释 batch、I/W、DSpark 与净收益的测量方法。
 
 - [给统计窗口加一个零，为什么会改变负载均衡？](eplb-zero-record-rolling-window.md)：沿 recorder 生命周期和环形覆盖规则，解释 draft 零记录如何占用 target 历史，附真实入窗与副本分配数据。

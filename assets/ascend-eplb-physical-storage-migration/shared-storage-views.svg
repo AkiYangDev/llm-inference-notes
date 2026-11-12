@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="460" viewBox="0 0 1000 460" role="img" aria-labelledby="title desc">
+<title id="title">模型与迁移视图指向同一份 NPU 数据</title>
+<desc id="desc">原 NZ 张量和独立 ND 字节视图保留各自元数据，共享原始设备地址。创建视图不转换数据，真正搬运仍需要复制和通信。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#53647b"/></marker></defs>
+<rect width="1000" height="460" rx="16" fill="#f6f8fb"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#182a40">
+<text x="38" y="49" font-size="25" font-weight="700">两份描述，一份原始设备存储</text>
+<rect x="38" y="80" width="370" height="122" rx="12" fill="#e8f0ff" stroke="#8eafe1"/>
+<text x="58" y="113" font-size="21" font-weight="700">模型 weight</text>
+<text x="58" y="147" font-size="17">原 dtype / shape / stride / NZ 描述符</text>
+<text x="58" y="176" font-size="17">forward 继续从这个入口读取</text>
+<rect x="38" y="236" width="370" height="122" rx="12" fill="#fff1df" stroke="#d8ae74"/>
+<text x="58" y="269" font-size="21" font-weight="700">迁移 view</text>
+<text x="58" y="303" font-size="17">uint8 / [E, bytes_per_expert] / ND</text>
+<text x="58" y="332" font-size="17">updater 从这个入口收发、写入</text>
+<path d="M410 143H480V208H557" fill="none" stroke="#53647b" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M410 296H480V251H557" fill="none" stroke="#53647b" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="570" y="133" width="390" height="176" rx="12" fill="#fff" stroke="#8799ad" stroke-width="2"/>
+<text x="591" y="171" font-size="21" font-weight="700">同一块 NPU 数据，原地址不变</text>
+<rect x="591" y="195" width="104" height="64" rx="6" fill="#d9e9e5"/>
+<rect x="702" y="195" width="104" height="64" rx="6" fill="#d9e9e5"/>
+<rect x="813" y="195" width="126" height="64" rx="6" fill="#e7eaf0"/>
+<text x="612" y="235" font-size="17">专家 A</text><text x="723" y="235" font-size="17">专家 B</text><text x="827" y="235" font-size="17">其他专家</text>
+<text x="591" y="286" font-size="16">写入迁移 view，即改写原权重对应的字节</text>
+<text x="38" y="410" font-size="18">示意图：创建视图不复制权重；实际迁移仍然执行 scratch 复制和 P2P 通信。</text>
+</g></svg>
