@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [专家收到的 token 一样多，为什么有的卡还是更慢？](docs/performance/moe-equal-token-counts-unequal-latency.md)：从每专家矩阵分组、尾块到通信到达时间，解释计数均衡与执行耗时之间的差别。
+
 - [多放一份专家，还是多留一点 KV Cache？显存应该花在哪里](docs/performance/eplb-expert-kv-memory-budget.md)：按每层、每 EP 组与每 rank 算清副本成本，再看 KV 容量、实际 batch 和服务吞吐怎样取舍。
 
 - [让 EPLB 在后台搬权重，前台推理就不用等了吗？](docs/performance/async-eplb-foreground-wait.md)：沿后台接收、跨 rank 就绪和前台提交，解释异步迁移怎样隐藏时间、又留下哪些开销。

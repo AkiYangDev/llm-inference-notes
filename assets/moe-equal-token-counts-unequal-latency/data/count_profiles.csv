@@ -1,0 +1,4 @@
+profile,logical_route_rows,active_experts,assumed_tile_m,tile_rows,expert_counts
+four_large,1024,4,64,1024,256;256;256;256;0;0;0;0;0;0;0;0;0;0;0;0
+sixteen_equal,1024,16,64,1024,64;64;64;64;64;64;64;64;64;64;64;64;64;64;64;64
+one_large_fifteen_tails,1024,16,64,1984,1009;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1

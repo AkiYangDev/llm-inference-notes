@@ -153,3 +153,5 @@ python examples/eplb-expert-kv-memory-budget/memory_budget.py --output results
 脚本会生成 [capacity.csv](../../assets/eplb-expert-kv-memory-budget/data/capacity.csv) 和 [budget.json](../../assets/eplb-expert-kv-memory-budget/data/budget.json)，复算 42 MiB、2,436 MiB、三档 KV 容量及 35→33 的教学例子。[示例包直接下载](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/eplb-expert-kv-memory-budget/examples.zip)，参数和来源见[evidence.json](../../assets/eplb-expert-kv-memory-budget/evidence.json)。它计算字节和整数边界，不预测设备吞吐。
 
 下一次看到“更新后 forward 快了几个百分点”，可以继续追问两个具体数：这个工作集还剩多少 KV 余量，稳定运行时实际 batch 保住了多少。把这两个数和更新成本放到一起，才知道那份专家副本有没有花对地方。
+
+计数已经均匀、执行却仍有慢端时，可以接着看[专家收到的 token 一样多，为什么有的卡还是更慢？](moe-equal-token-counts-unequal-latency.md)。

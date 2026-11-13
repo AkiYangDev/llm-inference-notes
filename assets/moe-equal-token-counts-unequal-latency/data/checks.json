@@ -1,0 +1,26 @@
+{
+  "kind": "teaching arithmetic; no device speed measurements",
+  "row_tile_overhead_ratio": 1.9375,
+  "routes_per_step": [
+    [
+      1024,
+      0
+    ],
+    [
+      0,
+      1024
+    ]
+  ],
+  "balance_of_window_totals": 1.0,
+  "average_per_step_balance": 0.5,
+  "communication_interval_ms": {
+    "rank0": 4,
+    "rank1": 1
+  },
+  "expert_gemm_ms": {
+    "rank0": 3,
+    "rank1": 3
+  },
+  "full_dependency_chain_ms": 10,
+  "no_peer_delay_chain_ms": 7
+}

@@ -1,0 +1,10 @@
+rank,phase,start_ms,end_ms
+0,prepare,0,2
+0,wait_for_peer,2,5
+0,transfer,5,6
+0,expert_gemm,6,9
+0,combine,9,10
+1,prepare,0,5
+1,transfer,5,6
+1,expert_gemm,6,9
+1,combine,9,10

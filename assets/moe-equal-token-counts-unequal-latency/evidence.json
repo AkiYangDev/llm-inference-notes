@@ -1,0 +1,117 @@
+{
+  "article": "docs/performance/moe-equal-token-counts-unequal-latency.md",
+  "date": "2026-11-13",
+  "sources": [
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "lines": [
+        1183,
+        1211
+      ],
+      "purpose": "rank route sums and mean/max balancedness",
+      "sha256": "ef7af308e0d3a6e33813b18db1107054cdd46b60418379dd7b7945046a3602d7",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py#L1183-L1211"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "lines": [
+        828,
+        885
+      ],
+      "purpose": "per-record balancedness and history",
+      "sha256": "ef7af308e0d3a6e33813b18db1107054cdd46b60418379dd7b7945046a3602d7",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py#L828-L885"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/hardware_backend/npu/moe/matmul.py",
+      "lines": [
+        24,
+        50
+      ],
+      "purpose": "grouped matmul consumes expert_tokens",
+      "sha256": "dd0c833c394041b10d3fe0af929918f92eedd545a9eb6cc4b00981054ea48e69",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/moe/matmul.py#L24-L50"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/layers/moe/token_dispatcher/deepep.py",
+      "lines": [
+        638,
+        690
+      ],
+      "purpose": "normal backend peer counts and alignment branch",
+      "sha256": "064763dbb56cd31801e426ed625cf6d4fdaefad819e4c5500de7404bd4a9520b",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/layers/moe/token_dispatcher/deepep.py#L638-L690"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/eplb_algorithms/__init__.py",
+      "lines": [
+        18,
+        38
+      ],
+      "purpose": "deepseek sums the time/record axis",
+      "sha256": "02d2fbd2a43eded441ecbe6349257e95116db54d691ba20cb168401a9529d756",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/__init__.py#L18-L38"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/eplb_algorithms/deepseek.py",
+      "lines": [
+        57,
+        83
+      ],
+      "purpose": "replication estimates load divided by replicas",
+      "sha256": "42305cf7394b16ecb8ac25cfe3d698770d8a4ce1d05c2f58097f4415fc8e2cf4",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/deepseek.py#L57-L83"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/eplb_algorithms/deepseek.py",
+      "lines": [
+        140,
+        150
+      ],
+      "purpose": "physical load and balanced packing",
+      "sha256": "42305cf7394b16ecb8ac25cfe3d698770d8a4ce1d05c2f58097f4415fc8e2cf4",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/deepseek.py#L140-L150"
+    }
+  ],
+  "official_grouped_matmul": "https://ascend.github.io/docs/sources/pytorch/api_doc.html#torch_npu.npu_grouped_matmul",
+  "teaching_scope": {
+    "tile_m": 64,
+    "profiles": "three 1024-route vectors; not device execution measurements",
+    "timeline": "both ranks ready before 1 ms transfer; no pipelining modeled",
+    "times_are_assumptions": true
+  },
+  "historical_measurement": {
+    "date": "2026-10-31",
+    "hardware": "Ascend 910C",
+    "ranks": 2,
+    "allocated_rows_per_rank": 8,
+    "valid_rows_per_rank": 4,
+    "topk": 8,
+    "received_per_rank": [
+      64,
+      64
+    ],
+    "valid_routes_per_rank": [
+      64,
+      0
+    ],
+    "scope": "Routing counters and identity combine checks; no real expert-MLP timing",
+    "source": "assets/deepep-received-vs-valid-routes/count-summary.csv",
+    "sha256": "68c5980fb9d71e725f3723bd2a90bce3f97d15a71efbeb81b680c4d09e3a1a8f"
+  },
+  "device_experiments": false
+}

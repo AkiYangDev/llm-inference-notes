@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [专家收到的 token 一样多，为什么有的卡还是更慢？](moe-equal-token-counts-unequal-latency.md)：用相同路由总数的三个分布和两 rank 时间线，讲清分组、padding、通信与慢端。
+
 - [多放一份专家，还是多留一点 KV Cache？显存应该花在哪里](eplb-expert-kv-memory-budget.md)：用 DeepSeek 维度复算专家和 KV 的交换，区分固定容量对照与固定显存预算的上线选择。
 
 - [让 EPLB 在后台搬权重，前台推理就不用等了吗？](async-eplb-foreground-wait.md)：从两卡交换专家到事件交接与理想时间线，讲清传输重叠、布局提交和资源争用。

@@ -218,6 +218,11 @@
         "path": "docs/performance/eplb-expert-kv-memory-budget.md",
         "label": "专家副本与 KV 预算",
         "description": "先算每 rank 常驻字节，再看本地缓存容量、实际 batch 和整服务收益"
+      },
+      {
+        "path": "docs/performance/moe-equal-token-counts-unequal-latency.md",
+        "label": "相同路由数与不同耗时",
+        "description": "从每专家 M 维分组和尾块，走到通信到达时间与阶段慢端"
       }
     ]
   },

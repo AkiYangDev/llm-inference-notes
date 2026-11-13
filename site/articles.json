@@ -1,4 +1,16 @@
 {
+  "docs/performance/moe-equal-token-counts-unequal-latency.md": {
+    "summary": "路由总数相同，专家分组、尾块和通信到达时间仍可不同。沿 NPU GroupedMatmul、EPLB 均衡度与可运行算例，定位真正的慢端。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "MoE",
+      "Grouped GEMM",
+      "执行依赖"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/eplb-expert-kv-memory-budget.md": {
     "summary": "16 个冗余槽位会在每层增加多少常驻权重，又挤掉多少 KV？沿 DeepSeek 维度、可运行算例与真实显存对照，解释 batch、吞吐和运行余量的取舍。",
     "category": "性能分析",
