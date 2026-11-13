@@ -1,4 +1,16 @@
 {
+  "docs/performance/eplb-expert-kv-memory-budget.md": {
+    "summary": "16 个冗余槽位会在每层增加多少常驻权重，又挤掉多少 KV？沿 DeepSeek 维度、可运行算例与真实显存对照，解释 batch、吞吐和运行余量的取舍。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "KV Cache",
+      "显存预算",
+      "MoE"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/async-eplb-foreground-wait.md": {
     "summary": "后台收到新专家后，前台仍要等跨 rank 就绪、原位写入并切换路由。对照 vLLM 与 Ascend 源码，解释消费事件、缓冲复用和真正能隐藏的迁移时间。",
     "category": "性能分析",

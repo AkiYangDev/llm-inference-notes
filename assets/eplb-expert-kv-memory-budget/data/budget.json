@@ -1,0 +1,46 @@
+{
+  "kind": "idealized arithmetic, not device measurements",
+  "one_expert_one_moe_layer_bytes": 44040192,
+  "bf16_mla_bytes_per_local_token": 70272,
+  "context_tokens": 17408,
+  "stat_buffer_61_layers_w1000_r16_bytes": 66368000,
+  "stat_buffer_r0_to_r16_delta_bytes": 3904000,
+  "capacity_limited_example": {
+    "baseline_batch": 35,
+    "baseline_step_ms": 35,
+    "candidate_batch": 33,
+    "candidate_step_ms": 33,
+    "baseline_tokens_s": 999.9999999999999,
+    "candidate_tokens_s": 1000.0,
+    "note": "Teaching assumptions: ordinary decode, one output per request per step; no DSpark or update cost."
+  },
+  "rows": [
+    {
+      "redundant_per_layer_ep_group": 0,
+      "physical_slots_per_layer_ep_group": 256,
+      "added_experts_per_layer_rank": 0,
+      "added_weight_bytes_per_rank": 0,
+      "kv_bytes_per_rank": 42949672960,
+      "ideal_local_kv_tokens": 611191,
+      "full_17k_sequences": 35
+    },
+    {
+      "redundant_per_layer_ep_group": 16,
+      "physical_slots_per_layer_ep_group": 272,
+      "added_experts_per_layer_rank": 1,
+      "added_weight_bytes_per_rank": 2554331136,
+      "kv_bytes_per_rank": 40395341824,
+      "ideal_local_kv_tokens": 574842,
+      "full_17k_sequences": 33
+    },
+    {
+      "redundant_per_layer_ep_group": 32,
+      "physical_slots_per_layer_ep_group": 288,
+      "added_experts_per_layer_rank": 2,
+      "added_weight_bytes_per_rank": 5108662272,
+      "kv_bytes_per_rank": 37841010688,
+      "ideal_local_kv_tokens": 538493,
+      "full_17k_sequences": 30
+    }
+  ]
+}

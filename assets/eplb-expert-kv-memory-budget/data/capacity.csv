@@ -1,0 +1,4 @@
+redundant_per_layer_ep_group,physical_slots_per_layer_ep_group,added_experts_per_layer_rank,added_weight_bytes_per_rank,kv_bytes_per_rank,ideal_local_kv_tokens,full_17k_sequences
+0,256,0,0,42949672960,611191,35
+16,272,1,2554331136,40395341824,574842,33
+32,288,2,5108662272,37841010688,538493,30

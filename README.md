@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [多放一份专家，还是多留一点 KV Cache？显存应该花在哪里](docs/performance/eplb-expert-kv-memory-budget.md)：按每层、每 EP 组与每 rank 算清副本成本，再看 KV 容量、实际 batch 和服务吞吐怎样取舍。
+
 - [让 EPLB 在后台搬权重，前台推理就不用等了吗？](docs/performance/async-eplb-foreground-wait.md)：沿后台接收、跨 rank 就绪和前台提交，解释异步迁移怎样隐藏时间、又留下哪些开销。
 
 - [动态负载均衡会不会追着旧热点跑？](docs/performance/dynamic-eplb-stale-hotspots.md)：用热点切换算例解释 I、W、布局生效延迟，以及如何验证更新能跟上真实业务。

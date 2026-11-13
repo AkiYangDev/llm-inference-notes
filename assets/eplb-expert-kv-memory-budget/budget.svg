@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="455" viewBox="0 0 1100 455" role="img" aria-labelledby="title desc">
+<title id="title">40 GiB 预算中，专家主权重与 KV 的交换</title>
+<desc id="desc">教学算例。R0、R16、R32 每 rank 新增主权重为 0、2436、4872 MiB，KV 分别剩余40、37.621、35.242 GiB。</desc>
+<rect width="1100" height="455" rx="18" fill="#f4f7fb"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#17304b">
+<text x="35" y="45" font-size="25" font-weight="700">多一份副本，会占走多少 KV 预算？</text>
+<text x="35" y="76" font-size="17">DeepSeek-V3 维度 · EP16 · PP1 · 1 字节主权重 · BF16 压缩 MLA</text>
+<text x="35" y="140" font-size="21" font-weight="700">R0</text>
+<rect x="140" y="112" width="800" height="38" rx="6" fill="#caddec"/>
+<text x="960" y="139" font-size="18">40 GiB</text>
+<text x="140" y="176" font-size="18">新增主权重 0.000 GiB；KV 剩余 40.000 GiB</text>
+<text x="35" y="227" font-size="21" font-weight="700">R16</text>
+<rect x="140" y="199" width="800" height="38" rx="6" fill="#caddec"/>
+<rect x="140" y="199" width="47.5781" height="38" fill="#ca783c"/>
+<text x="960" y="226" font-size="18">40 GiB</text>
+<text x="140" y="263" font-size="18">新增主权重 2.379 GiB；KV 剩余 37.621 GiB</text>
+<text x="35" y="314" font-size="21" font-weight="700">R32</text>
+<rect x="140" y="286" width="800" height="38" rx="6" fill="#caddec"/>
+<rect x="140" y="286" width="95.1562" height="38" fill="#ca783c"/>
+<text x="960" y="313" font-size="18">40 GiB</text>
+<text x="140" y="350" font-size="18">新增主权重 4.758 GiB；KV 剩余 35.242 GiB</text>
+<rect x="35" y="391" width="18" height="18" fill="#ca783c"/><text x="65" y="407" font-size="17">新增专家主权重</text>
+<rect x="255" y="391" width="18" height="18" fill="#caddec"/><text x="285" y="407" font-size="17">KV</text>
+<text x="35" y="438" font-size="16">教学容量图：其他固定分配已扣除；未计 scale、padding、页尾与运行期变化。</text></g></svg>

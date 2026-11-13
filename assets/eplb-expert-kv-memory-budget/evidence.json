@@ -1,0 +1,144 @@
+{
+  "article": "docs/performance/eplb-expert-kv-memory-budget.md",
+  "date": "2026-11-13",
+  "scope": "Source explanation and CPU byte arithmetic. No new device or serving experiment.",
+  "model_config": {
+    "repository": "deepseek-ai/DeepSeek-V3",
+    "commit": "e815299b0bcbac849fa540c768ef21845365c9eb",
+    "url": "https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/e815299b0bcbac849fa540c768ef21845365c9eb/config.json",
+    "sha256": "cbf0b95dc614de208a109bb5fd4e7eed11385e9c68411d2c17db5319443035d9"
+  },
+  "assumptions": {
+    "weight_bytes_per_element": 1,
+    "hidden": 7168,
+    "intermediate": 2048,
+    "moe_layers": 58,
+    "attention_layers": 61,
+    "ep_size": 16,
+    "pp_size": 1,
+    "expert_tp_shards": 1,
+    "ordinary_bf16_compressed_mla": true,
+    "sequence_shards": 1,
+    "baseline_kv_budget_gib": 40,
+    "input_tokens": 16384,
+    "output_tokens": 1024,
+    "excluded": [
+      "scales",
+      "zero points",
+      "padding",
+      "allocator rounding",
+      "page tails",
+      "shared prefixes",
+      "speculative slots"
+    ]
+  },
+  "actual_service_result": {
+    "model": "DeepSeek-V4-Flash W8A8",
+    "device": "Ascend 910C",
+    "date": "2026-11-11",
+    "comparison": "old ON vs new ON, identical actual KV capacity and redundant expert count",
+    "p_sampled_hbm_delta_mib_median": 839.5,
+    "d_sampled_hbm_delta_mib_median": 1641.5,
+    "detail_article": "docs/performance/ascend-eplb-physical-storage-migration.md",
+    "data": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_per_chip.csv",
+    "scope": "Device total HBM samples, not continuous peak or extra KV measured after resizing."
+  },
+  "sources": [
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/models/deepseek_v2.py",
+      "lines": [
+        755,
+        765
+      ],
+      "purpose": "redundant slots are included in MoE construction",
+      "sha256": "0ce696c6f8b495c97fbead741026b57906b3d1276dab406781dcb8109a0a04bc",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/models/deepseek_v2.py#L755-L765"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/models/deepseek_v2.py",
+      "lines": [
+        3560,
+        3566
+      ],
+      "purpose": "statistics metadata covers all 61 layers, including dense positions",
+      "sha256": "0ce696c6f8b495c97fbead741026b57906b3d1276dab406781dcb8109a0a04bc",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/models/deepseek_v2.py#L3560-L3566"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_location.py",
+      "lines": [
+        238,
+        275
+      ],
+      "purpose": "physical experts = logical experts + redundant slots",
+      "sha256": "04adcd28793002183f76a811b070dc5be434806962ece013e998b1b2864ce0ac",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location.py#L238-L275"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/mem_cache/memory_pool.py",
+      "lines": [
+        4864,
+        4885
+      ],
+      "purpose": "ordinary MLA latent plus RoPE cache dimension",
+      "sha256": "3707f5ca6de59da9ad79dc447e328e7a77b98496f2d5a07fe839a3e251585975",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/mem_cache/memory_pool.py#L4864-L4885"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "lines": [
+        983,
+        997
+      ],
+      "purpose": "int32 stat buffer layer and physical expert axes",
+      "sha256": "ef7af308e0d3a6e33813b18db1107054cdd46b60418379dd7b7945046a3602d7",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py#L983-L997"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "lines": [
+        1108,
+        1126
+      ],
+      "purpose": "finite circular buffer allocation",
+      "sha256": "ef7af308e0d3a6e33813b18db1107054cdd46b60418379dd7b7945046a3602d7",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py#L1108-L1126"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/hardware_backend/npu/eplb.py",
+      "lines": [
+        369,
+        401
+      ],
+      "purpose": "weight aliases and scratch allocation",
+      "sha256": "da075b45874af86e347c129bc94abcda55129fc79a3eb124e5353a2bb8961462",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L369-L401"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/mem_cache/kv_cache_configurator.py",
+      "lines": [
+        3027,
+        3097
+      ],
+      "purpose": "available memory minus runtime slack",
+      "sha256": "4b691d1d1ee4754e78375c5a6e80d1c54c762ccd69dc5e6ad70d9b0638024d93",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/mem_cache/kv_cache_configurator.py#L3027-L3097"
+    }
+  ]
+}

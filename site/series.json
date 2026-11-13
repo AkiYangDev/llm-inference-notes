@@ -213,6 +213,11 @@
         "path": "docs/performance/async-eplb-foreground-wait.md",
         "label": "异步 EPLB 与前台等待",
         "description": "沿接收缓冲、跨 rank 就绪、原位提交和消费确认，看迁移怎样与推理重叠"
+      },
+      {
+        "path": "docs/performance/eplb-expert-kv-memory-budget.md",
+        "label": "专家副本与 KV 预算",
+        "description": "先算每 rank 常驻字节，再看本地缓存容量、实际 batch 和整服务收益"
       }
     ]
   },
