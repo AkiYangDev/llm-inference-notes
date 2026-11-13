@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="560" viewBox="0 0 1100 560" role="img" aria-labelledby="title desc">
+<title id="title">从迁移数据到实际模型输出的验证关系</title>
+<desc id="desc">数据、映射和真实读取分别检查，再进入固定状态前向对照与完整请求任务评测。每种检查回答不同问题。</desc>
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#607a8f" stroke-width="1.5"/></marker></defs>
+<rect width="1100" height="560" rx="18" fill="#f4f7fb"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#17304b">
+<text x="35" y="43" font-size="25" font-weight="700">把专家搬到新位置，还要让模型读对、算对</text>
+<text x="35" y="77" font-size="18">每项检查都有自己的对象；一种检查通过，不能代替其余检查。</text>
+<g fill="#e0ebf2" stroke="#a6bccd" stroke-width="1.5">
+<rect x="35" y="112" width="325" height="135" rx="10"/>
+<rect x="388" y="112" width="325" height="135" rx="10"/>
+<rect x="741" y="112" width="325" height="135" rx="10"/>
+</g>
+<g font-size="21" font-weight="700"><text x="58" y="148">搬运的数据</text><text x="411" y="148">位置与路由</text><text x="764" y="148">实际读取的存储</text></g>
+<g font-size="18"><text x="58" y="184">主权重＋scale 等辅助参数</text><text x="58" y="217">按逻辑专家核对目标字节</text>
+<text x="411" y="184">旧/新布局＋canary 标签</text><text x="411" y="217">每个槽位装谁、token 找谁</text>
+<text x="764" y="184">地址、描述、生命周期与依赖</text><text x="764" y="217">检查真实 graph replay</text></g>
+<g stroke="#607a8f" stroke-width="2" fill="none"><path d="M198 247 V272 H550 V300" marker-end="url(#arrow)"/><path d="M550 247 V300" marker-end="url(#arrow)"/><path d="M903 247 V272 H550"/></g>
+<rect x="190" y="309" width="720" height="83" rx="10" fill="#d8e9df" stroke="#a4bdac"/>
+<text x="550" y="342" text-anchor="middle" font-size="22" font-weight="700">固定输入与执行状态：A → 更新 B → 恢复 A</text>
+<text x="550" y="374" text-anchor="middle" font-size="18">比较层输出与 logits；控制 KV、位置、batch、图桶与容差</text>
+<path d="M550 392 V422" stroke="#607a8f" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="190" y="431" width="720" height="73" rx="10" fill="#eadfce" stroke="#c9b89e"/>
+<text x="550" y="462" text-anchor="middle" font-size="22" font-weight="700">真实请求跨过更新边界，再做完整任务评测</text>
+<text x="550" y="490" text-anchor="middle" font-size="17">保留更新证据、逐题结果、错误与截断，以及实际测试版本</text>
+<text x="35" y="540" font-size="16">验证关系示意图；不代表新增设备测试，也不把局部通过写成完整质量保证。</text>
+</g></svg>

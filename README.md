@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [权重搬完没报错，怎样证明模型还在算对的东西？](docs/performance/eplb-weight-migration-correctness.md)：从字节与量化参数，到映射、图读取和固定状态前向，讲清迁移正确性如何逐项验证。
+
 - [专家收到的 token 一样多，为什么有的卡还是更慢？](docs/performance/moe-equal-token-counts-unequal-latency.md)：从每专家矩阵分组、尾块到通信到达时间，解释计数均衡与执行耗时之间的差别。
 
 - [多放一份专家，还是多留一点 KV Cache？显存应该花在哪里](docs/performance/eplb-expert-kv-memory-budget.md)：按每层、每 EP 组与每 rank 算清副本成本，再看 KV 容量、实际 batch 和服务吞吐怎样取舍。

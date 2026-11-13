@@ -1,0 +1,28 @@
+{
+  "kind": "CPU teaching cases, not a device regression result",
+  "cyclic_layout": {
+    "old": [
+      "A",
+      "B",
+      "C"
+    ],
+    "new": [
+      "B",
+      "C",
+      "A"
+    ]
+  },
+  "all_faults_return_finite_numbers": true,
+  "roundtrip_restore_A": "PASS",
+  "byte_sum_collision": {
+    "sum_a": 6,
+    "sum_b": 6,
+    "bytes_equal": false,
+    "sha256_equal": false
+  },
+  "same_first_token": {
+    "argmax_reference": 0,
+    "argmax_wrong": 0,
+    "max_logit_error": 50
+  }
+}

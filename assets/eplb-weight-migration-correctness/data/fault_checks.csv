@@ -1,0 +1,7 @@
+case,canary_matches,main_bytes_match,scale_bytes_match,mapping_matches,storage_identity_preserved,eager_output_matches,captured_output_matches
+correct,True,True,True,True,True,True,True
+stale_scale,True,True,False,True,True,False,False
+stale_mapping,True,True,True,False,True,False,False
+corrupt_weight,True,False,True,True,True,False,False
+replace_storage,True,True,True,True,False,True,False
+unsafe_cycle,True,False,False,True,True,False,False

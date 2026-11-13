@@ -223,6 +223,11 @@
         "path": "docs/performance/moe-equal-token-counts-unequal-latency.md",
         "label": "相同路由数与不同耗时",
         "description": "从每专家 M 维分组和尾块，走到通信到达时间与阶段慢端"
+      },
+      {
+        "path": "docs/performance/eplb-weight-migration-correctness.md",
+        "label": "迁移后模型还在算对吗",
+        "description": "把字节、量化参数、映射、图存储与固定状态数值、任务结果连起来验证"
       }
     ]
   },

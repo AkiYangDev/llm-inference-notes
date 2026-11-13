@@ -140,3 +140,5 @@ python examples/moe-equal-token-counts-unequal-latency/count_examples.py --outpu
 输出包含 [count_profiles.csv](../../assets/moe-equal-token-counts-unequal-latency/data/count_profiles.csv)、[dependency_timeline.csv](../../assets/moe-equal-token-counts-unequal-latency/data/dependency_timeline.csv) 和 [checks.json](../../assets/moe-equal-token-counts-unequal-latency/data/checks.json)。[下载示例包](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/moe-equal-token-counts-unequal-latency/examples.zip)，固定源码与证据范围见[evidence.json](../../assets/moe-equal-token-counts-unequal-latency/evidence.json)。这些输出复算文章里的形状和依赖，不生成设备性能预测。
 
 下一次再遇到“专家收到一样多，某张卡却更慢”，先把同一轮的专家向量和阶段结束时间摆在一起。慢在专家计算里，就查分组与执行形状；慢在进入计算以前，就沿数据和依赖往前找。这样才知道下一次迁移到底有没有东西可改善。
+
+修改迁移路径或布局以后，怎样核对数据与真实模型输出，见[权重搬完没报错，怎样证明模型还在算对的东西？](eplb-weight-migration-correctness.md)。

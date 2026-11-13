@@ -1,0 +1,117 @@
+{
+  "article": "docs/performance/eplb-weight-migration-correctness.md",
+  "date": "2026-11-13",
+  "sources": [
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/models/deepseek_v2.py",
+      "lines": [
+        1033,
+        1048
+      ],
+      "purpose": "exported routed expert parameters and shared suffix",
+      "sha256": "0ce696c6f8b495c97fbead741026b57906b3d1276dab406781dcb8109a0a04bc",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/models/deepseek_v2.py#L1033-L1048"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "lines": [
+        66,
+        83
+      ],
+      "purpose": "weight migration before metadata update",
+      "sha256": "f4711b71684a049d355ecb56ffe590cec4a16aa35ac9026b723fb336d0064638",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py#L66-L83"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "lines": [
+        86,
+        151
+      ],
+      "purpose": "optional canary labels",
+      "sha256": "f4711b71684a049d355ecb56ffe590cec4a16aa35ac9026b723fb336d0064638",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py#L86-L151"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "lines": [
+        290,
+        303
+      ],
+      "purpose": "receive/send/communication/copy ordering",
+      "sha256": "f4711b71684a049d355ecb56ffe590cec4a16aa35ac9026b723fb336d0064638",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py#L290-L303"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/hardware_backend/npu/eplb.py",
+      "lines": [
+        334,
+        401
+      ],
+      "purpose": "byte aliases, owner lifetime and scratch",
+      "sha256": "da075b45874af86e347c129bc94abcda55129fc79a3eb124e5353a2bb8961462",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L334-L401"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py",
+      "lines": [
+        543,
+        544
+      ],
+      "purpose": "graph replay reuses saved output",
+      "sha256": "fd64fce50b25f3a5379c3563af6119061a870ab3e0a6789539d2bda5fedade0a",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py#L543-L544"
+    }
+  ],
+  "pytorch_docs": [
+    "https://docs.pytorch.org/docs/2.10/testing.html#torch.testing.assert_close",
+    "https://docs.pytorch.org/docs/2.10/notes/numerical_accuracy.html"
+  ],
+  "teaching_scope": "Two-byte expert weights and separate scale, fixed logical routes, exact rational arithmetic. Captured references model CPU storage identity, not NPU graph or kernels.",
+  "prior_storage_evidence": [
+    {
+      "path": "assets/ascend-eplb-physical-storage-migration/storage-smoke-P.jsonl",
+      "sha256": "9cf02c42a4194f5ac51641759d837ecb922bdc632f5109d0dffe2c440aeef26c",
+      "cases": 10
+    },
+    {
+      "path": "assets/ascend-eplb-physical-storage-migration/storage-smoke-D.jsonl",
+      "sha256": "9cf02c42a4194f5ac51641759d837ecb922bdc632f5109d0dffe2c440aeef26c",
+      "cases": 10
+    }
+  ],
+  "prior_gsm8k": {
+    "commit": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+    "questions": 1319,
+    "correct": 1283,
+    "errors": 0,
+    "truncated": 0,
+    "source": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-validation-20261111/gsm8k-final-evidence.zip"
+  },
+  "device_experiments": false,
+  "public_gsm8k_archive_check": {
+    "commit": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+    "questions": 1319,
+    "unique_ids": 1319,
+    "correct": 1283,
+    "accuracy_percent": 97.27065959059894,
+    "summary_errors": 0,
+    "summary_truncated": 0,
+    "independent_decimal_disagreements": [],
+    "not_directly_decimal_count": 18,
+    "archive_sha256": "a69cdac5031748d375429a03874705e0c4925b0b1ae425a8b56cd03ef00c83f9",
+    "source": "https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-validation-20261111/gsm8k-final-evidence.zip"
+  }
+}

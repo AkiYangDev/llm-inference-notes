@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [权重搬完没报错，怎样证明模型还在算对的东西？](eplb-weight-migration-correctness.md)：用六种可运行迁移版本，说明 canary、字节校验、图回放和任务评测各自覆盖什么。
+
 - [专家收到的 token 一样多，为什么有的卡还是更慢？](moe-equal-token-counts-unequal-latency.md)：用相同路由总数的三个分布和两 rank 时间线，讲清分组、padding、通信与慢端。
 
 - [多放一份专家，还是多留一点 KV Cache？显存应该花在哪里](eplb-expert-kv-memory-budget.md)：用 DeepSeek 维度复算专家和 KV 的交换，区分固定容量对照与固定显存预算的上线选择。

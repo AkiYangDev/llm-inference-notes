@@ -1,4 +1,16 @@
 {
+  "docs/performance/eplb-weight-migration-correctness.md": {
+    "summary": "迁移返回成功之后，还要查主权重与 scale、逻辑专家映射、图读取和固定状态输出。结合故障注入示例、真实存储探针与 GSM8K 证据，解释每种检查的作用。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "正确性验证",
+      "量化权重",
+      "Graph"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/moe-equal-token-counts-unequal-latency.md": {
     "summary": "路由总数相同，专家分组、尾块和通信到达时间仍可不同。沿 NPU GroupedMatmul、EPLB 均衡度与可运行算例，定位真正的慢端。",
     "category": "性能分析",
