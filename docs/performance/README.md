@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [动态负载均衡会不会追着旧热点跑？](dynamic-eplb-stale-hotspots.md)：沿统计窗口、检查间隔和迁移时间，解释历史热度何时过期、参数怎样配合。
+
 - [一轮 EPLB 更新的时间，究竟花在哪里？](eplb-update-time-breakdown.md)：结合真实 trace 和逐轮日志，区分整轮重平衡、CPU 调用与设备执行，说明更新开销怎样摊到 forward。
 
 - [图捕获以后，为什么还能改权重，却不能随便换张量？](graph-capture-tensor-storage.md)：从三种改权重的操作，解释图读取的地址、输入输出缓冲和显式更新接口。

@@ -1,0 +1,154 @@
+{
+  "title": "动态负载均衡会不会追着旧热点跑？",
+  "date": "2026-11-13",
+  "fixed_source_commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+  "sources": {
+    "manager": {
+      "path": "python/sglang/srt/eplb/eplb_manager.py",
+      "sha256_LF": "731e16230a38dafaa855663762be658f7a06997bba1ff75482359027e870c18e",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_manager.py"
+    },
+    "recorder": {
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "sha256_LF": "eba2e8e5e2f4bc4236faf704db13ea93db207d34f177f09b0b0ea5cad6b523fc",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py"
+    },
+    "algorithm_selection": {
+      "path": "python/sglang/srt/eplb/eplb_algorithms/__init__.py",
+      "sha256_LF": "69f58f4c8c7e6eb9dc70dd124cc9b3564dbabfda6318d1b66d658822ccbdf323",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/__init__.py"
+    },
+    "vector_algorithm": {
+      "path": "python/sglang/srt/eplb/eplb_algorithms/deepseek_vec.py",
+      "sha256_LF": "573cb921aaee6b5560547ce304d65a555fefb752d8d412ed273ecf9b307bd359",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/deepseek_vec.py"
+    },
+    "model_forward": {
+      "path": "python/sglang/srt/model_executor/model_runner.py",
+      "sha256_LF": "95b3d57e8f230d706d6643a67492fd8c69b12507812fc7d5ff8cbeef7cad24f8",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/model_executor/model_runner.py"
+    },
+    "defaults": {
+      "path": "python/sglang/srt/arg_groups/fields/exec_.py",
+      "sha256_LF": "8838a70ebfcb2c5137ffd548d11ef6e5780f4463878627cc6cbccb05f6359928",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/arg_groups/fields/exec_.py"
+    },
+    "window_resolution": {
+      "path": "python/sglang/srt/arg_groups/parallel_hook.py",
+      "sha256_LF": "c9def33d9195fddc0693f0ecfe6bd5c0db72fb5efdf2c88f65f75213cdfac433",
+      "url": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/arg_groups/parallel_hook.py"
+    }
+  },
+  "scope": "stat recorder; finite positive W; I>=W; fixed EP topology; unchunked manager updates",
+  "teaching_assumptions": {
+    "effective_records_per_manager_advance": 1,
+    "constant_work_per_record": {
+      "old_A": 90,
+      "old_B": 10,
+      "new_A": 10,
+      "new_B": 90
+    },
+    "steady_phase_check_steps": [
+      4000,
+      8000
+    ],
+    "persistent_change_steps": [
+      3401,
+      3901,
+      4001
+    ],
+    "record_spacing_ms_for_age_only": 35,
+    "update_ms_for_age_only": 600,
+    "signal_definition": "B cumulative routes > A cumulative routes; no placement solver simulated.",
+    "phase_sweep": "Every phase sampled once; persistent B after change; ties keep A; units are record counts, excluding update time."
+  },
+  "simulation_output": {
+    "kind": "teaching_model",
+    "device_measurement": false,
+    "checks": "PASS",
+    "window_rows": 12,
+    "phase_summary": [
+      {
+        "I": 1000,
+        "W": 1000,
+        "phases": 1000,
+        "mean_records_to_B_signal": 1000.5,
+        "max_records_to_B_signal": 1500,
+        "min_records_to_B_signal": 501
+      },
+      {
+        "I": 4000,
+        "W": 1000,
+        "phases": 4000,
+        "mean_records_to_B_signal": 2500.5,
+        "max_records_to_B_signal": 4500,
+        "min_records_to_B_signal": 501
+      },
+      {
+        "I": 4000,
+        "W": 4000,
+        "phases": 4000,
+        "mean_records_to_B_signal": 4000.5,
+        "max_records_to_B_signal": 6000,
+        "min_records_to_B_signal": 2001
+      }
+    ],
+    "record_age": [
+      {
+        "W": 1000,
+        "record_spacing_ms": 35,
+        "update_ms": 600,
+        "youngest_age_ms": 600,
+        "oldest_age_ms": 35565,
+        "mean_age_ms": 18082.5
+      },
+      {
+        "W": 4000,
+        "record_spacing_ms": 35,
+        "update_ms": 600,
+        "youngest_age_ms": 600,
+        "oldest_age_ms": 140565,
+        "mean_age_ms": 70582.5
+      }
+    ]
+  },
+  "historical_evidence": {
+    "zero_draft_records": "https://akiyangdev.github.io/llm-inference-notes/articles/performance/eplb-zero-record-rolling-window/",
+    "scope": "Historical experiment, not a claim that the issue persists at this source commit."
+  },
+  "source_contract_tests": {
+    "result": "PASS",
+    "scope": "Original Python methods; CPU fixtures only."
+  },
+  "figure_kind": "Original teaching schematic, not a profiler trace or terminal screenshot.",
+  "new_device_experiments": false,
+  "new_measured_throughput_claims": false,
+  "article_path": "docs/performance/dynamic-eplb-stale-hotspots.md",
+  "publication_date": "2026-11-13",
+  "source_contract_test_output": {
+    "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+    "source_hashes_LF": {
+      "python/sglang/srt/eplb/eplb_manager.py": "731e16230a38dafaa855663762be658f7a06997bba1ff75482359027e870c18e",
+      "python/sglang/srt/eplb/expert_distribution.py": "eba2e8e5e2f4bc4236faf704db13ea93db207d34f177f09b0b0ea5cad6b523fc",
+      "python/sglang/srt/eplb/eplb_algorithms/__init__.py": "69f58f4c8c7e6eb9dc70dd124cc9b3564dbabfda6318d1b66d658822ccbdf323"
+    },
+    "manager_checks_I4": [
+      5,
+      9,
+      13
+    ],
+    "circular_after_six_appends_W4": [
+      5,
+      6,
+      3,
+      4
+    ],
+    "dump_events": [
+      "dump",
+      "reset"
+    ],
+    "algorithm_input_contracts": "PASS",
+    "scope": "Original Python methods; CPU fixtures only.",
+    "status": "PASS"
+  }
+}

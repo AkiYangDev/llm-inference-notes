@@ -1,0 +1,4 @@
+I,W,phases,mean_records_to_B_signal,max_records_to_B_signal,min_records_to_B_signal
+1000,1000,1000,1000.5,1500,501
+4000,1000,4000,2500.5,4500,501
+4000,4000,4000,4000.5,6000,2001

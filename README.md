@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [动态负载均衡会不会追着旧热点跑？](docs/performance/dynamic-eplb-stale-hotspots.md)：用热点切换算例解释 I、W、布局生效延迟，以及如何验证更新能跟上真实业务。
+
 - [一轮 EPLB 更新的时间，究竟花在哪里？](docs/performance/eplb-update-time-breakdown.md)：沿统计、布局与权重迁移，解释 CPU 标注的包含关系、P2P 提交和更新成本的摊销。
 
 - [图捕获以后，为什么还能改权重，却不能随便换张量？](docs/performance/graph-capture-tensor-storage.md)：用原地复制、变量赋值和存储替换，解释静态输入输出、NPU 参数更新与 EPLB 权重迁移。

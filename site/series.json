@@ -203,6 +203,11 @@
         "path": "docs/performance/eplb-update-time-breakdown.md",
         "label": "一轮 EPLB 更新的时间账",
         "description": "从 manager 日志与真实 trace，拆开 CPU 范围、设备通信和更新的摊销成本"
+      },
+      {
+        "path": "docs/performance/dynamic-eplb-stale-hotspots.md",
+        "label": "EPLB 会追着旧热点跑吗",
+        "description": "从 I/W 与记录年龄，走到热点切换后的响应延迟和迁移回本"
       }
     ]
   },
