@@ -204,7 +204,7 @@ W 也不宜盲目缩到很小。只有少量路由时，一次 batch 的偶然�
 
 ### 配套算例与源码核对
 
-下载 [可运行示例包](../../assets/dynamic-eplb-stale-hotspots/examples.zip)，解压后可以直接运行标准库脚本，不需要 PyTorch 或 NPU：
+下载 [可运行示例包](https://akiyangdev.github.io/llm-inference-notes/media/dynamic-eplb-stale-hotspots/examples.zip)，解压后可以直接运行标准库脚本，不需要 PyTorch 或 NPU：
 
 ```bash
 python examples/dynamic-eplb-stale-hotspots/simulate_hotspots.py --output results
