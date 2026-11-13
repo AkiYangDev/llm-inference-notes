@@ -1,0 +1,204 @@
+{
+  "article": "docs/performance/eplb-update-time-breakdown.md",
+  "date": "2026-11-13",
+  "source_explained": {
+    "repository": "sgl-project/sglang",
+    "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+    "files": {
+      "manager": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_manager.py",
+      "statistics": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py",
+      "npu_migration": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py",
+      "single_layer": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py",
+      "metadata": "https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location.py"
+    }
+  },
+  "profiling": {
+    "date": "2026-11-11",
+    "commit": "e60cc1a994492a36ef07f54c3640d5d6b64b1756",
+    "model": "DeepSeek-V4-Flash-0731 W8A8",
+    "device": "Ascend 910C",
+    "topology_per_endpoint": {
+      "TP": 16,
+      "EP": 16,
+      "attention_DP": 16,
+      "CP": 1,
+      "PP": 1
+    },
+    "redundant_experts_per_EP_group": 16,
+    "DSpark": {
+      "gamma": 5,
+      "verify_width": 6
+    },
+    "interval_window": {
+      "P": [
+        50,
+        50
+      ],
+      "D": [
+        4000,
+        1000
+      ]
+    },
+    "observed_rank": 0,
+    "captured_target_forward_steps": {
+      "P": 53,
+      "D": 240
+    },
+    "decode_traffic": "Rolling concurrency 64; not a fixed input/batch/context A-update-B experiment.",
+    "annotation_origin": "Experiment-only wrappers using torch.profiler.record_function, restored after capture.",
+    "annotations": {
+      "EPLB/update": "ExpertLocationUpdater.update",
+      "EPLB/layer_migration": "update_expert_weights_single_layer",
+      "EPLB/prepare_weights": "_ExpertWeightAdapter.make_weight_views",
+      "EPLB/scratch": "_ExpertWeightAdapter.create_temp_buffers",
+      "EPLB/local_writeback": "experiment-revision _copy_expert_weight_runs; nested in single-layer migration"
+    },
+    "scope": "CPU elapsed ranges on the updater host thread. All local_writeback ranges lie within layer_migration; top-level child ranges do not overlap.",
+    "results": {
+      "P": {
+        "gzip_sha256": "399872a0cc34012127fe7edad192fb3ff260da6d40320dd73e776a0119e36d1b",
+        "events_scanned": 2442301,
+        "layers": 43,
+        "updater_CPU_ms": 665.44167,
+        "range_ms": {
+          "scratch": 0.1942600000000002,
+          "prepare_weight_views": 8.43375000000002,
+          "layer_migration_inclusive": 430.86480999999986,
+          "local_writeback_inside_layer": 13.758839999999909,
+          "layer_other_excluding_local_writeback": 417.10596999999996,
+          "updater_other_outside_marked_children": 225.9488500000001
+        },
+        "longest_tail_to_copy_CPU_ms": 209.95338,
+        "to_copy_calls_after_last_layer": 4
+      },
+      "D": {
+        "gzip_sha256": "fc28bc20d1e019a1afb3aabf4fb3bc7298e2fa57b29c8641b3bf3d61e96e0db9",
+        "events_scanned": 5050714,
+        "layers": 43,
+        "updater_CPU_ms": 515.89928,
+        "range_ms": {
+          "scratch": 0.20104999999999928,
+          "prepare_weight_views": 8.384609999999935,
+          "layer_migration_inclusive": 386.4495800000001,
+          "local_writeback_inside_layer": 18.487010000000012,
+          "layer_other_excluding_local_writeback": 367.9625700000001,
+          "updater_other_outside_marked_children": 120.86404000000003
+        },
+        "longest_tail_to_copy_CPU_ms": 99.59053,
+        "to_copy_calls_after_last_layer": 4
+      }
+    },
+    "format_cast_events_inside_update": {
+      "P": 0,
+      "D": 0
+    },
+    "original_trace_distribution": "Original traces retained by the author; raw deployment paths are not included in this article package.",
+    "device_critical_path_breakdown": "Not inferred from CPU ranges. Device correlation and completion dependencies are required."
+  },
+  "clean_manager_comparison": {
+    "old_commit": "ddc2a3ababd82db41cd097470fc51569577a0dff",
+    "new_commit": "4eb587cad0780ef1cb69b0b32563bd2d364a375e",
+    "profiled": false,
+    "eplb_enabled_in_both": true,
+    "actual_KV_tokens": {
+      "P": 911104,
+      "D": 514304
+    },
+    "scope": "Each round takes the maximum of 16 rank-local manager log durations. P representative value is median of three rounds; D has one round per version.",
+    "fixed_identical_migration_plan": false,
+    "public_release": "https://github.com/AkiYangDev/sglang/releases/tag/eplb-pr49701-update-memory-20261111",
+    "round_csv": {
+      "path": "assets/eplb-update-time-breakdown/data/update_per_round.csv",
+      "copied_without_modification": true,
+      "sha256": "a1b06052e702df9870908acf487e0648fa1b9354f56b8c16556e83c73cf98a73"
+    },
+    "rounds": [
+      {
+        "version": "new",
+        "role": "P",
+        "round": 1,
+        "ranks": 16,
+        "max_rank_ms": 576.0
+      },
+      {
+        "version": "new",
+        "role": "P",
+        "round": 2,
+        "ranks": 16,
+        "max_rank_ms": 621.0
+      },
+      {
+        "version": "new",
+        "role": "P",
+        "round": 3,
+        "ranks": 16,
+        "max_rank_ms": 611.0
+      },
+      {
+        "version": "new",
+        "role": "D",
+        "round": 1,
+        "ranks": 16,
+        "max_rank_ms": 658.0
+      },
+      {
+        "version": "old",
+        "role": "P",
+        "round": 1,
+        "ranks": 16,
+        "max_rank_ms": 696.0
+      },
+      {
+        "version": "old",
+        "role": "P",
+        "round": 2,
+        "ranks": 16,
+        "max_rank_ms": 711.0
+      },
+      {
+        "version": "old",
+        "role": "P",
+        "round": 3,
+        "ranks": 16,
+        "max_rank_ms": 689.0
+      },
+      {
+        "version": "old",
+        "role": "D",
+        "round": 1,
+        "ranks": 16,
+        "max_rank_ms": 730.0
+      }
+    ]
+  },
+  "backend_reference": {
+    "repository": "Ascend/pytorch",
+    "branch": "v2.10.0",
+    "commit": "e945b7088a865036fbd06bc02c3097005526469a",
+    "wait_source": "https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/torch_npu/csrc/distributed/ProcessGroupHCCL.cpp#L1125-L1242",
+    "scope": "Fixed official source explaining stream completion events and conditional blocking wait, not a binary identity claim."
+  },
+  "teaching_examples": {
+    "overlap_timeline_ms": {
+      "CPU_submit": [
+        0,
+        2
+      ],
+      "device": [
+        1,
+        5
+      ],
+      "CPU_wait": [
+        2,
+        5
+      ]
+    },
+    "amortization": {
+      "update_ms": 600,
+      "interval_forward_steps": 4000,
+      "normal_forward_ms": 35
+    },
+    "measured": false
+  },
+  "new_device_collection_performed": false
+}

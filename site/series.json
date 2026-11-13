@@ -198,6 +198,11 @@
         "path": "docs/performance/graph-capture-tensor-storage.md",
         "label": "图捕获与权重地址",
         "description": "从 Python 名字与设备地址，走到静态输入、输出复用和 EPLB 原位更新"
+      },
+      {
+        "path": "docs/performance/eplb-update-time-breakdown.md",
+        "label": "一轮 EPLB 更新的时间账",
+        "description": "从 manager 日志与真实 trace，拆开 CPU 范围、设备通信和更新的摊销成本"
       }
     ]
   },

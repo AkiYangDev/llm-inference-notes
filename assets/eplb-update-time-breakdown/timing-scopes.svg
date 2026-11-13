@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="580" viewBox="0 0 1100 580" role="img" aria-labelledby="title desc">
+<title id="title">EPLB manager、updater 与单层迁移的计时范围</title>
+<desc id="desc">manager 日志计时包含统计、布局、updater 和末尾同步；updater 包含权重准备、逐层迁移和位置元数据更新；本地专家块复制嵌套在单层迁移里。图只说明包含关系，不按耗时比例绘制。</desc>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10" fill="#5b6b80"/></marker></defs>
+<rect width="1100" height="580" rx="16" fill="#f5f7fb"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#182a40">
+<text x="34" y="43" font-size="25" font-weight="700">同一轮更新，三种范围</text>
+<text x="34" y="77" font-size="17">前置设备同步在计时起点之前；下图是未分 chunk 的完整重平衡路径。</text>
+<rect x="34" y="104" width="1032" height="136" rx="12" fill="#e8f0ff" stroke="#96afd0"/>
+<text x="52" y="133" font-size="20" font-weight="700">manager 日志：统计 → 布局 → updater → 末尾设备同步</text>
+<rect x="54" y="155" width="187" height="58" rx="8" fill="#fff"/><text x="76" y="190" font-size="19">计数整理与归并</text>
+<rect x="280" y="155" width="170" height="58" rx="8" fill="#fff"/><text x="313" y="190" font-size="19">计算新布局</text>
+<rect x="490" y="155" width="255" height="58" rx="8" fill="#fff0dc"/><text x="522" y="190" font-size="19">权重与元数据更新</text>
+<rect x="785" y="155" width="259" height="58" rx="8" fill="#fff"/><text x="819" y="190" font-size="19">等待本轮设备工作完成</text>
+<g stroke="#5b6b80" stroke-width="2" marker-end="url(#a)"><path d="M244 184H273"/><path d="M452 184H483"/><path d="M747 184H778"/></g>
+<path d="M616 215V260" stroke="#b39a76" stroke-width="2" stroke-dasharray="6 5"/>
+<rect x="34" y="274" width="1032" height="203" rx="12" fill="#fff0dc" stroke="#c8a575"/>
+<text x="52" y="307" font-size="20" font-weight="700">EPLB/update：CPU 进入 updater 到函数返回</text>
+<rect x="54" y="335" width="228" height="101" rx="8" fill="#fff"/><text x="72" y="370" font-size="18">选层、校验、scratch</text><text x="72" y="404" font-size="18">准备原权重访问视图</text>
+<rect x="314" y="335" width="451" height="119" rx="8" fill="#e0ece5" stroke="#91ac99"/>
+<text x="332" y="366" font-size="19" font-weight="700">逐层 layer_migration</text><text x="332" y="396" font-size="17">来源选择、索引、源数据准备、提交与依赖</text>
+<rect x="331" y="409" width="416" height="32" rx="5" fill="#c3dacf"/><text x="344" y="431" font-size="16">local_writeback 已包含在单层迁移中</text>
+<rect x="799" y="335" width="245" height="101" rx="8" fill="#fff"/><text x="818" y="373" font-size="18">更新原有路由映射</text><text x="818" y="406" font-size="17">还有未单独标注的范围</text>
+<text x="34" y="523" font-size="19">父范围已包含子范围；CPU 范围还可以与设备通信、复制重叠。</text>
+<text x="34" y="555" font-size="16">示意图，不按实际耗时比例绘制。设备完成时长需要沿流与事件依赖另行核对。</text>
+</g></svg>

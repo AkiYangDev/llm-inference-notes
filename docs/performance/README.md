@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [一轮 EPLB 更新的时间，究竟花在哪里？](eplb-update-time-breakdown.md)：结合真实 trace 和逐轮日志，区分整轮重平衡、CPU 调用与设备执行，说明更新开销怎样摊到 forward。
+
 - [图捕获以后，为什么还能改权重，却不能随便换张量？](graph-capture-tensor-storage.md)：从三种改权重的操作，解释图读取的地址、输入输出缓冲和显式更新接口。
 
 - [搬专家权重，还需要 NZ→ND 吗？一次 Ascend EPLB 存储路径重构](ascend-eplb-physical-storage-migration.md)：从完整专家字节块、padding 与共享存储视图，解释省去整层格式转换与写回的实现和实测结果。

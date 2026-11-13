@@ -299,3 +299,5 @@ python graph_storage_demo.py --backend cuda --device-index 0
 这些例子把每种变化分开，`set_` 一项还刻意保留旧存储，以免把地址绑定问题混成悬空指针问题。源码依据和本稿实际完成的检查见[配套说明](../../assets/graph-capture-tensor-storage/evidence.json)。
 
 下一次遇到“Python 中已经换成新权重，图结果却没变”，就从图实际读取的地址开始查：新值有没有写到那里，存储是否仍有效，设备是否在读取前完成了写入，以及这次变化是否需要一条显式更新路径。
+
+要继续分析原位更新的实际开销，可以读[一轮 EPLB 更新的时间，究竟花在哪里？](eplb-update-time-breakdown.md)。

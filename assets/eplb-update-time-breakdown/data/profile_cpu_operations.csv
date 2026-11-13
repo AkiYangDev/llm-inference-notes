@@ -1,0 +1,5 @@
+role,rank,event_name,calls,inclusive_CPU_ms
+P,0,c10d::recv_,4062,106.09082000000025
+P,0,c10d::send,4224,110.96417000000005
+D,0,c10d::recv_,4062,86.40351999999996
+D,0,c10d::send,4236,94.9158400000002

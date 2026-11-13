@@ -1,4 +1,16 @@
 {
+  "docs/performance/eplb-update-time-breakdown.md": {
+    "summary": "沿一次真实更新，拆开统计、布局、权重迁移和元数据，结合 43 层 trace 解释嵌套计时、P2P 与更新成本的摊销。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "Profiling",
+      "Ascend",
+      "性能测量"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/graph-capture-tensor-storage.md": {
     "summary": "用 copy_、重新赋值和 set_ 三个小例子，讲清图地址、静态缓冲、输出复用，以及 NPU 显式参数更新与 EPLB 原位迁移。",
     "category": "性能分析",

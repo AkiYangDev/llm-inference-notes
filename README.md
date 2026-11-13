@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [一轮 EPLB 更新的时间，究竟花在哪里？](docs/performance/eplb-update-time-breakdown.md)：沿统计、布局与权重迁移，解释 CPU 标注的包含关系、P2P 提交和更新成本的摊销。
+
 - [图捕获以后，为什么还能改权重，却不能随便换张量？](docs/performance/graph-capture-tensor-storage.md)：用原地复制、变量赋值和存储替换，解释静态输入输出、NPU 参数更新与 EPLB 权重迁移。
 
 - [搬专家权重，还需要 NZ→ND 吗？一次 Ascend EPLB 存储路径重构](docs/performance/ascend-eplb-physical-storage-migration.md)：对照 NZ↔ND 中转与物理字节视图，讲清 padding、scratch、地址与生命周期，以及显存和 update 耗时的变化。
