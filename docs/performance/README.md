@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [让 EPLB 在后台搬权重，前台推理就不用等了吗？](async-eplb-foreground-wait.md)：从两卡交换专家到事件交接与理想时间线，讲清传输重叠、布局提交和资源争用。
+
 - [动态负载均衡会不会追着旧热点跑？](dynamic-eplb-stale-hotspots.md)：沿统计窗口、检查间隔和迁移时间，解释历史热度何时过期、参数怎样配合。
 
 - [一轮 EPLB 更新的时间，究竟花在哪里？](eplb-update-time-breakdown.md)：结合真实 trace 和逐轮日志，区分整轮重平衡、CPU 调用与设备执行，说明更新开销怎样摊到 forward。

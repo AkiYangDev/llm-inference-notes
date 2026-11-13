@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="535" viewBox="0 0 1100 535" role="img" aria-labelledby="title desc">
+<title id="title">后台传输隐藏到五次正常 forward 中，前台仍保留提交时间</title>
+<desc id="desc">教学时间线。每轮forward十毫秒，传输二十五毫秒，提交两毫秒。同步完成于七十七毫秒，理想异步完成于五十二毫秒，无更新基线五十毫秒。</desc>
+<rect width="1100" height="535" rx="14" fill="#f3f5f7"/>
+<g font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" fill="#263746">
+<text x="30" y="42" font-size="25" font-weight="600">相同五次 forward，传输可以重叠，提交仍要排进前台</text>
+<text x="30" y="74" font-size="17" fill="#526576">教学设定：forward 10 ms，传输 25 ms，提交 2 ms；忽略统计、规划、协调及资源争用</text>
+<line x1="178.0" y1="103" x2="178.0" y2="415" stroke="#dce2e8"/><text x="173.0" y="98" font-size="15">0</text>
+<line x1="283.0" y1="103" x2="283.0" y2="415" stroke="#dce2e8"/><text x="278.0" y="98" font-size="15">10</text>
+<line x1="388.0" y1="103" x2="388.0" y2="415" stroke="#dce2e8"/><text x="383.0" y="98" font-size="15">20</text>
+<line x1="493.0" y1="103" x2="493.0" y2="415" stroke="#dce2e8"/><text x="488.0" y="98" font-size="15">30</text>
+<line x1="598.0" y1="103" x2="598.0" y2="415" stroke="#dce2e8"/><text x="593.0" y="98" font-size="15">40</text>
+<line x1="703.0" y1="103" x2="703.0" y2="415" stroke="#dce2e8"/><text x="698.0" y="98" font-size="15">50</text>
+<line x1="808.0" y1="103" x2="808.0" y2="415" stroke="#dce2e8"/><text x="803.0" y="98" font-size="15">60</text>
+<line x1="913.0" y1="103" x2="913.0" y2="415" stroke="#dce2e8"/><text x="908.0" y="98" font-size="15">70</text>
+<line x1="1018.0" y1="103" x2="1018.0" y2="415" stroke="#dce2e8"/><text x="1013.0" y="98" font-size="15">80</text>
+<text x="1040" y="99" font-size="15">ms</text>
+<text x="25" y="167" font-size="20">同步 · 前台</text>
+<text x="25" y="269" font-size="20">异步 · 前台</text>
+<text x="25" y="334" font-size="20">异步 · 后台</text>
+<text x="25" y="415" font-size="20">无更新 · 基线</text>
+<rect x="178.0" y="388" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="230.5" y="413" text-anchor="middle" font-size="17" fill="white">F1</text>
+<rect x="283.0" y="388" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="335.5" y="413" text-anchor="middle" font-size="17" fill="white">F2</text>
+<rect x="388.0" y="388" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="440.5" y="413" text-anchor="middle" font-size="17" fill="white">F3</text>
+<rect x="493.0" y="388" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="545.5" y="413" text-anchor="middle" font-size="17" fill="white">F4</text>
+<rect x="598.0" y="388" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="650.5" y="413" text-anchor="middle" font-size="17" fill="white">F5</text>
+<rect x="178.0" y="140" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="230.5" y="165" text-anchor="middle" font-size="17" fill="white">F1</text>
+<rect x="283.0" y="140" width="261.5" height="37" rx="3" fill="#5c947f"/>
+<text x="414.25" y="165" text-anchor="middle" font-size="17" fill="white">传输 25 ms</text>
+<rect x="545.5" y="140" width="20.0" height="37" rx="3" fill="#d6a950"/>
+<text x="527.5" y="130" font-size="16">提交 2 ms</text>
+<rect x="566.5" y="140" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="619.0" y="165" text-anchor="middle" font-size="17" fill="white">F2</text>
+<rect x="671.5" y="140" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="724.0" y="165" text-anchor="middle" font-size="17" fill="white">F3</text>
+<rect x="776.5" y="140" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="829.0" y="165" text-anchor="middle" font-size="17" fill="white">F4</text>
+<rect x="881.5" y="140" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="934.0" y="165" text-anchor="middle" font-size="17" fill="white">F5</text>
+<rect x="178.0" y="242" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="230.5" y="267" text-anchor="middle" font-size="17" fill="white">F1</text>
+<rect x="283.0" y="307" width="261.5" height="37" rx="3" fill="#5c947f"/>
+<text x="414.25" y="332" text-anchor="middle" font-size="17" fill="white">传输 25 ms</text>
+<rect x="283.0" y="242" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="335.5" y="267" text-anchor="middle" font-size="17" fill="white">F2</text>
+<rect x="388.0" y="242" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="440.5" y="267" text-anchor="middle" font-size="17" fill="white">F3</text>
+<rect x="493.0" y="242" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="545.5" y="267" text-anchor="middle" font-size="17" fill="white">F4</text>
+<rect x="598.0" y="242" width="20.0" height="37" rx="3" fill="#d6a950"/>
+<text x="580.0" y="232" font-size="16">提交 2 ms</text>
+<rect x="619.0" y="242" width="104.0" height="37" rx="3" fill="#567da5"/>
+<text x="671.5" y="267" text-anchor="middle" font-size="17" fill="white">F5</text>
+<text x="995" y="166" font-size="20" font-weight="600">77 ms</text>
+<text x="750" y="269" font-size="20" font-weight="600">52 ms</text>
+<text x="730" y="414" font-size="20" font-weight="600">50 ms</text>
+<path d="M545.5,347 H598.0 V284" fill="none" stroke="#a37b2e" stroke-width="2" stroke-dasharray="5,4"/>
+<text x="630" y="366" font-size="16">缓冲保留到安全提交边界</text>
+<text x="30" y="472" font-size="17">异步前台 F2～F4 继续用旧布局；F4 结束后提交，F5 使用新布局。</text>
+<text x="30" y="508" font-size="15" fill="#526576">图为理想教学模型，不是设备 profiling 或服务吞吐实测。两种更新方案在观察结束前都已提交。</text>
+</g></svg>

@@ -1,0 +1,214 @@
+{
+  "date": "2026-11-13",
+  "article": "让 EPLB 在后台搬权重，前台推理就不用等了吗？",
+  "source_scope": "Independently pinned source snapshots; not a claim of an installed or benchmarked vLLM/Ascend version pair.",
+  "references": [
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/eplb_manager.py",
+      "start": 115,
+      "end": 189,
+      "sha256_LF": "731e16230a38dafaa855663762be658f7a06997bba1ff75482359027e870c18e"
+    },
+    {
+      "repository": "sgl-project/sglang",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "start": 560,
+      "end": 570,
+      "sha256_LF": "179f7f2c778d2b6560cdea78a20ea8e31e9fa072a0d3e429838baaa6b6ce8a79"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/async_worker.py",
+      "start": 163,
+      "end": 224,
+      "sha256_LF": "baecf680ce90dc8069e4c40791336ae216a0fa7f8691e243b4ebef9d3d70fcb0"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/rebalance_execute.py",
+      "start": 48,
+      "end": 66,
+      "sha256_LF": "fb87712af5be3e16e7bfcefb374aa65cd3ffea1988f9f2b0798a64d82d1161d9"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 521,
+      "end": 534,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    },
+    {
+      "repository": "vllm-project/vllm-ascend",
+      "commit": "d476b009777343b1b5e4a3550e4a34f43108ed8e",
+      "path": "vllm_ascend/distributed/eplb/eplb_communicator.py",
+      "start": 696,
+      "end": 730,
+      "sha256_LF": "eeed780832adeec06c5fa8b6afd2e186bfc5268c97e2ce43eee92320069f202f"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 713,
+      "end": 746,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 1147,
+      "end": 1163,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 1533,
+      "end": 1559,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/rebalance_execute.py",
+      "start": 503,
+      "end": 571,
+      "sha256_LF": "fb87712af5be3e16e7bfcefb374aa65cd3ffea1988f9f2b0798a64d82d1161d9"
+    },
+    {
+      "repository": "vllm-project/vllm-ascend",
+      "commit": "d476b009777343b1b5e4a3550e4a34f43108ed8e",
+      "path": "vllm_ascend/patch/platform/patch_eplb.py",
+      "start": 821,
+      "end": 893,
+      "sha256_LF": "a0b8171e8903780aad09d3e07125f7b3ee110fff545c1a8c0015f7dc592f581b"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_utils.py",
+      "start": 35,
+      "end": 82,
+      "sha256_LF": "1c12bf530ad208579ca8ffb9d7de49e87761bf2822aec7d3b01e9ea557c9e713"
+    },
+    {
+      "repository": "vllm-project/vllm-ascend",
+      "commit": "d476b009777343b1b5e4a3550e4a34f43108ed8e",
+      "path": "vllm_ascend/distributed/eplb/eplb_communicator.py",
+      "start": 702,
+      "end": 713,
+      "sha256_LF": "eeed780832adeec06c5fa8b6afd2e186bfc5268c97e2ce43eee92320069f202f"
+    },
+    {
+      "repository": "vllm-project/vllm-ascend",
+      "commit": "d476b009777343b1b5e4a3550e4a34f43108ed8e",
+      "path": "vllm_ascend/distributed/eplb/eplb_state.py",
+      "start": 689,
+      "end": 724,
+      "sha256_LF": "9257275e8a7c6b2935683e07525974ccc7973d98e16fc7b9135e69e8fcac59c0"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 904,
+      "end": 940,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 1077,
+      "end": 1093,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    },
+    {
+      "repository": "vllm-project/vllm-ascend",
+      "commit": "d476b009777343b1b5e4a3550e4a34f43108ed8e",
+      "path": "vllm_ascend/distributed/eplb/eplb_state.py",
+      "start": 621,
+      "end": 649,
+      "sha256_LF": "9257275e8a7c6b2935683e07525974ccc7973d98e16fc7b9135e69e8fcac59c0"
+    },
+    {
+      "repository": "vllm-project/vllm",
+      "commit": "0fab1aa459bd5bdfee4950f6a8752870e71810cb",
+      "path": "vllm/distributed/eplb/eplb_state.py",
+      "start": 724,
+      "end": 753,
+      "sha256_LF": "cd58f543be50cdef3b8d8ab244981b444d2ba79da4fbd7a034b7df7c055b995a"
+    }
+  ],
+  "teaching_model": {
+    "kind": "teaching_model",
+    "checks": "PASS",
+    "completion": [
+      {
+        "mode": "baseline",
+        "forwards": 5,
+        "update_committed": false,
+        "completion_ms": 50
+      },
+      {
+        "mode": "sync",
+        "forwards": 5,
+        "update_committed": true,
+        "completion_ms": 77
+      },
+      {
+        "mode": "async",
+        "forwards": 5,
+        "update_committed": true,
+        "completion_ms": 52
+      }
+    ],
+    "device_measurement": false
+  },
+  "timeline_assumptions": {
+    "normal_forward_ms": 10,
+    "transfer_ms": 25,
+    "commit_ms": 2,
+    "forwards": 5,
+    "trigger_after_forward": 1,
+    "safe_poll_boundary": "between forwards",
+    "statistics_cost_ms": 0,
+    "planning_cost_ms": 0,
+    "coordination_cost_ms": 0,
+    "resource_interference": false
+  },
+  "source_class_check": {
+    "class": "_DeferredConsumedEvent",
+    "acknowledgement_order": [
+      [
+        "routing_tables_refreshed",
+        null
+      ],
+      [
+        "actual_acknowledgement",
+        "foreground_stream"
+      ]
+    ],
+    "duplicate_record_rejected": true,
+    "scope": "Original AST class on CPU fixture; no device event execution."
+  },
+  "existing_sglang_profile": {
+    "P_updater_CPU_ms": 665.44,
+    "D_updater_CPU_ms": 515.9,
+    "used_as_async_measurement": false,
+    "article": "https://akiyangdev.github.io/llm-inference-notes/articles/performance/eplb-update-time-breakdown/"
+  },
+  "new_device_experiments": false,
+  "new_async_throughput_measurements": false,
+  "figure": "Original teaching timeline generated from data/timeline.csv",
+  "article_path": "docs/performance/async-eplb-foreground-wait.md",
+  "publication_date": "2026-11-13"
+}

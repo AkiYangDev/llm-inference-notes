@@ -1,0 +1,29 @@
+{
+  "partial_live_overwrite": {
+    "logical_id": "A",
+    "actual": 8,
+    "expected": 5,
+    "correct": false
+  },
+  "early_mapping_switch": {
+    "logical_id": "B",
+    "actual": 5,
+    "expected": 12,
+    "correct": false
+  },
+  "staged_but_not_committed": {
+    "logical_id": "A",
+    "actual": 5,
+    "expected": 5,
+    "correct": true
+  },
+  "after_safe_commit": {
+    "logical_id": "B",
+    "actual": 12,
+    "expected": 12,
+    "correct": true
+  },
+  "unready_peer_keeps_old_layout": true,
+  "premature_buffer_reuse_rejected": true,
+  "scope": "Sequential state model; no GPU/NPU ordering is simulated."
+}

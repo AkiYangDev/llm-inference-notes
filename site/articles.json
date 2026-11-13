@@ -1,4 +1,16 @@
 {
+  "docs/performance/async-eplb-foreground-wait.md": {
+    "summary": "后台收到新专家后，前台仍要等跨 rank 就绪、原位写入并切换路由。对照 vLLM 与 Ascend 源码，解释消费事件、缓冲复用和真正能隐藏的迁移时间。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "异步迁移",
+      "Ascend",
+      "执行依赖"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/dynamic-eplb-stale-hotspots.md": {
     "summary": "同一次热点切换，W1000 看到 B 占 58%，W4000 只看到 22%。沿固定源码和可运行算例，解释统计、检查、布局生效与收益持续时间。",
     "category": "性能分析",

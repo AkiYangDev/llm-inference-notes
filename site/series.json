@@ -208,6 +208,11 @@
         "path": "docs/performance/dynamic-eplb-stale-hotspots.md",
         "label": "EPLB 会追着旧热点跑吗",
         "description": "从 I/W 与记录年龄，走到热点切换后的响应延迟和迁移回本"
+      },
+      {
+        "path": "docs/performance/async-eplb-foreground-wait.md",
+        "label": "异步 EPLB 与前台等待",
+        "description": "沿接收缓冲、跨 rank 就绪、原位提交和消费确认，看迁移怎样与推理重叠"
       }
     ]
   },

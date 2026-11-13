@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [让 EPLB 在后台搬权重，前台推理就不用等了吗？](docs/performance/async-eplb-foreground-wait.md)：沿后台接收、跨 rank 就绪和前台提交，解释异步迁移怎样隐藏时间、又留下哪些开销。
+
 - [动态负载均衡会不会追着旧热点跑？](docs/performance/dynamic-eplb-stale-hotspots.md)：用热点切换算例解释 I、W、布局生效延迟，以及如何验证更新能跟上真实业务。
 
 - [一轮 EPLB 更新的时间，究竟花在哪里？](docs/performance/eplb-update-time-breakdown.md)：沿统计、布局与权重迁移，解释 CPU 标注的包含关系、P2P 提交和更新成本的摊销。
