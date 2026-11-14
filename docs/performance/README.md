@@ -6,6 +6,10 @@
 
 ## 调优实践
 
+- [合法的 int32 权重，为什么被 EPLB 拒绝了？从元素个数到专家字节边界](eplb-packed-nd-byte-boundaries.md)：从 int8→int32 view 和二维 GPTQ reshape 的真实修复，算清专家字节跨度、容量、前缀与仍需拒绝的切片。
+- [FP4 第一次搬专家就报错：该补格式，还是放宽 stride 检查？](eplb-fp4-nz-format-validation.md)：沿 Ascend 950PR 三组真实探针和 124 次迁移记录，解释为什么补格式允许项就够了，原 NZ stride 条件应保留。
+- [1000 条热度记录都要跨卡传吗？先看 EPLB 算法最后用了什么](eplb-count-reduction-before-communication.md)：沿统计 dump 与算法消费者判断何时可压缩记录轴，用 144 组 CPU 对照说明等价条件、信息损失与通信容量。
+
 - [P 端和 D 端，为什么不能照抄同一套 EPLB 参数？](eplb-prefill-decode-parameter-design.md)：把 I、W 换成各端真实执行节奏，解释 chunk、DSpark、窗口新鲜度与周期更新的收益成本。
 - [EPLB 的收益上限在哪？先看 MoE 占了多少时间](eplb-speedup-upper-bound.md)：从关键路径占比、负载均衡到更新摊销和 PD 瓶颈，用可运行算例判断下一轮优化是否值得测。
 - [一次更新到底搬了多少数据？从专家字节账到 P2P 时间下限](eplb-migration-byte-budget.md)：从主权重、scale、NZ padding 与目标 rank 去重，算到最忙发送端和共享链路的传输时间下限。

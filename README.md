@@ -22,7 +22,9 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 [从专家热度、权重迁移到服务收益](docs/distributed/eplb-study-guide.md)：按入门、统计与决策、存储与正确性、性能验证串起文章，也可沿 PR #49701 的实际提交查看优化与取舍。
 
-本轮新增：路由与副本入门、NPZ 原始计数读取、P/D 参数设计、减少搬运、收益上限、迁移字节预算，以及 commit 演进复盘。专题内附原始数据、图表和可运行算例。
+专题包含 GPU / NPU 实现对照、路由与副本入门、原始计数读取、存储边界、通信、显存和服务验证；配有源码图、原始材料与可运行算例。
+
+新补充：[GPU / NPU 共用与差异](docs/distributed/sglang-eplb-gpu-npu-implementation.md) · [打包 ND 字节边界](docs/performance/eplb-packed-nd-byte-boundaries.md) · [FP4 格式修复](docs/performance/eplb-fp4-nz-format-validation.md) · [归约前求和的设计](docs/performance/eplb-count-reduction-before-communication.md)。
 
 ## 专题文章
 

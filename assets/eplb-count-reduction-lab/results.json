@@ -1,0 +1,21 @@
+{
+  "scope": "CPU exact-integer study; no collective or device timing",
+  "equivalence_cases": 144,
+  "full_int32_payload_bytes": 44032000,
+  "compact_int64_payload_bytes": 88064,
+  "payload_ratio": 500,
+  "equal_totals_different_peak_sums": [
+    200,
+    100
+  ],
+  "changing_map_correct": [
+    20,
+    0
+  ],
+  "changing_map_wrong": [
+    10,
+    10
+  ],
+  "overflow_example_exact": 3000000000,
+  "overflow_example_int32": -1294967296
+}

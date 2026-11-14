@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1090" viewBox="0 0 1040 1090" role="img" aria-labelledby="title desc">
+<title id="title">一套 EPLB 主链，两种设备接入</title><desc id="desc">固定 SGLang 2914be60 · 常规 CUDA 与本文 NPU 路径 · 源码示意</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#61778c"/></marker></defs>
+<rect width="1040" height="1090" rx="20" fill="#f6f8fc"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#163047">
+<text x="40" y="48" text-anchor="start" font-size="28" font-weight="bold" fill="#163047">一套 EPLB 主链，两种设备接入</text>
+<text x="40" y="83" text-anchor="start" font-size="17" font-weight="normal" fill="#536779">固定 SGLang 2914be60 · 常规 CUDA 与本文 NPU 路径 · 源码示意</text>
+<rect x="60" y="115" width="920" height="80" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="162.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">一次 forward：进入公共 recorder 记录上下文</text>
+<path d="M290,195 L290,232" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,195 L750,232" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="235" width="430" height="114" rx="12" fill="#e5f1fa" stroke="#6aa1c3" stroke-width="1.5"/>
+<text x="275.0" y="283.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">CUDA：按后端选择计数入口</text>
+<text x="275.0" y="314.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">TopK IDs 或后端计数</text>
+<rect x="550" y="235" width="430" height="114" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="765.0" y="283.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">NPU DeepEP stat：有效 TopK IDs</text>
+<text x="765.0" y="314.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">屏蔽图补齐行，再累加</text>
+<path d="M290,349 L290,383" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,349 L750,383" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="386" width="920" height="96" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="425.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">公共统计窗口与归约 → planner</text>
+<text x="520.0" y="456.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">逻辑热度 → 副本数与新物理布局</text>
+<path d="M290,482 L290,518" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,482 L750,518" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="521" width="430" height="145" rx="12" fill="#e5f1fa" stroke="#6aa1c3" stroke-width="1.5"/>
+<text x="80" y="554" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">CUDA 常规更新入口</text>
+<text x="275.0" y="585" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">原权重张量</text>
+<text x="275.0" y="616" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">必要时准备稠密发送区</text>
+<text x="275.0" y="647" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">按张量布局创建 scratch</text>
+<rect x="550" y="521" width="430" height="145" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="570" y="554" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">NPU storage adapter</text>
+<text x="765.0" y="585" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">校验完整物理专家块</text>
+<text x="765.0" y="616" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">建立可写 uint8 字节视图</text>
+<text x="765.0" y="647" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">创建字节行 scratch</text>
+<path d="M290,666 L290,704" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,666 L750,704" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="707" width="920" height="106" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="751.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">公共单层 updater：本地复用、来源选择、分批 P2P</text>
+<text x="520.0" y="782.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">同一个 update_expert_weights_single_layer</text>
+<path d="M520,813 L520,851" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="854" width="920" height="100" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="895.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">完成必要通信与目标写入 → 提交新映射</text>
+<text x="520.0" y="926.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">后续 forward 使用新位置的完整专家数据</text>
+<text x="60" y="999" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">共用：统计生命周期、算法、迁移计划、映射更新</text>
+<text x="40" y="1065" text-anchor="start" font-size="16" font-weight="normal" fill="#536779">图中没有比较 GPU / NPU 性能；每个分支均有明确配置条件。</text>
+</g></svg>

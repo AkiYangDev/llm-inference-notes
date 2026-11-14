@@ -15,6 +15,11 @@
         "description": "入门与方案演进 · 用四位逻辑专家、六个物理槽位，串起路由、副本、统计、规划、权重迁移与映射提交。"
       },
       {
+        "path": "docs/distributed/sglang-eplb-gpu-npu-implementation.md",
+        "label": "GPU / NPU 共用与差异",
+        "description": "入门与方案演进 · 用四张源码图对照计数入口、公共 planner、权重表示、共享 updater 与通信组，解释 NPU 适配应放在哪一层。"
+      },
+      {
         "path": "docs/distributed/eplb-redundant-expert-allocation.md",
         "label": "16 个冗余槽位怎么分",
         "description": "入门与方案演进 · 用四专家、两冗余跑完副本分配和固定槽 packing，再对照真实层的 16 步分配，说明热点为何能连续拿到副本。"
@@ -50,6 +55,11 @@
         "description": "统计与决策 · 生成已结束，导出专家计数却让 scheduler 退出。沿错误栈解释 CPU/Gloo 导出为何能保持原统计含义。"
       },
       {
+        "path": "docs/performance/eplb-count-reduction-before-communication.md",
+        "label": "归约前能否先求和",
+        "description": "统计与决策 · 沿统计 dump 与算法消费者判断何时可压缩记录轴，用 144 组 CPU 对照说明等价条件、信息损失与通信容量。"
+      },
+      {
         "path": "docs/performance/eplb-prefill-decode-parameter-design.md",
         "label": "P / D 参数怎样分开选",
         "description": "统计与决策 · 把 I、W 换成各端真实执行节奏，解释 chunk、DSpark、窗口新鲜度与周期更新的收益成本。"
@@ -78,6 +88,16 @@
         "path": "docs/performance/ascend-eplb-physical-storage-migration.md",
         "label": "保留物理字节搬运",
         "description": "存储与正确性 · 迁移专家时，保留 NZ 和量化打包字节，怎样省去整层转换与写回？从共享存储视图、padding 和 scratch 讲到完整服务的显存与耗时对照。"
+      },
+      {
+        "path": "docs/performance/eplb-packed-nd-byte-boundaries.md",
+        "label": "打包 ND 为什么按字节检查",
+        "description": "存储与正确性 · 从 int8→int32 view 和二维 GPTQ reshape 的真实修复，算清专家字节跨度、容量、前缀与仍需拒绝的切片。"
+      },
+      {
+        "path": "docs/performance/eplb-fp4-nz-format-validation.md",
+        "label": "FP4 格式与严格块检查",
+        "description": "存储与正确性 · 沿 Ascend 950PR 三组真实探针和 124 次迁移记录，解释为什么补格式允许项就够了，原 NZ stride 条件应保留。"
       },
       {
         "path": "docs/performance/graph-capture-tensor-storage.md",

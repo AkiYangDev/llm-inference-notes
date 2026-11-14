@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="510" viewBox="0 0 1040 510" role="img" aria-labelledby="title desc">
+<title id="title">导出 80 行，分配 81 行：最后一行保留</title><desc id="desc">Ascend 950PR FP4 探针 w13 · uint8 · format 50</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#61778c"/></marker></defs>
+<rect width="1040" height="510" rx="20" fill="#f6f8fc"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#163047">
+<text x="40" y="48" text-anchor="start" font-size="28" font-weight="bold" fill="#163047">导出 80 行，分配 81 行：最后一行保留</text>
+<text x="40" y="83" text-anchor="start" font-size="17" font-weight="normal" fill="#536779">Ascend 950PR FP4 探针 w13 · uint8 · format 50</text>
+<rect x="60" y="125" width="920" height="80" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="520.0" y="172.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">完整分配：81 × 8388608 B = 679477248 B</text>
+<path d="M520,205 L520,249" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="252" width="744" height="102" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="432.0" y="294.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">EPLB 暴露前 80 行</text>
+<text x="432.0" y="325.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">80 × 8 MiB = 640 MiB</text>
+<rect x="824" y="252" width="156" height="102" rx="12" fill="#fff1dd" stroke="#d0a164" stroke-width="1.5"/>
+<text x="902.0" y="294.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">共享后缀</text>
+<text x="902.0" y="325.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">8 MiB</text>
+<text x="60" y="411" text-anchor="start" font-size="22" font-weight="bold" fill="#163047">物理块大小用完整 81 行计算，视图行数使用导出 80 行。</text>
+<text x="40" y="485" text-anchor="start" font-size="16" font-weight="normal" fill="#536779">首维 stride 是单专家跨度；它不随导出前缀行数改变。</text>
+</g></svg>

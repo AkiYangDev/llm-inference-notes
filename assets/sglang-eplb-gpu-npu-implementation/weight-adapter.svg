@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="834" viewBox="0 0 1040 834" role="img" aria-labelledby="title desc">
+<title id="title">适配的是权重表示，单层搬运算法继续复用</title><desc id="desc">连续 GPU 权重仅作易读示例；公共代码也处理非稠密切片</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#61778c"/></marker></defs>
+<rect width="1040" height="834" rx="20" fill="#f6f8fc"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#163047">
+<text x="40" y="48" text-anchor="start" font-size="28" font-weight="bold" fill="#163047">适配的是权重表示，单层搬运算法继续复用</text>
+<text x="40" y="83" text-anchor="start" font-size="17" font-weight="normal" fill="#536779">连续 GPU 权重仅作易读示例；公共代码也处理非稠密切片</text>
+<rect x="60" y="125" width="430" height="146" rx="12" fill="#e5f1fa" stroke="#6aa1c3" stroke-width="1.5"/>
+<text x="80" y="158" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">CUDA 示例</text>
+<text x="275.0" y="189" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">原权重 [E,M,N]</text>
+<text x="275.0" y="220" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">单专家切片具备稠密布局</text>
+<text x="275.0" y="251" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">保留原 dtype 与数值位模式</text>
+<rect x="550" y="125" width="430" height="146" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="570" y="158" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">NPU 示例</text>
+<text x="765.0" y="189" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">原权重：NZ / packed / 转置</text>
+<text x="765.0" y="220" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">实际分配含完整物理专家块</text>
+<text x="765.0" y="251" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">原 shape / stride / format 保留</text>
+<path d="M750,271 L750,296" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="550" y="299" width="430" height="114" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="765.0" y="332.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">单独创建 ND 字节描述</text>
+<text x="765.0" y="363.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">uint8 [E,物理字节/专家]</text>
+<text x="765.0" y="394.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">与模型原存储共享地址</text>
+<path d="M290,271 L290,460" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,413 L750,460" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="463" width="920" height="107" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="508.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">公共 updater 只需定位一位完整专家的数据行</text>
+<text x="520.0" y="539.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">本地源保护 / P2P 接收 / 写入原模型存储</text>
+<path d="M520,570 L520,614" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="617" width="920" height="108" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="520.0" y="662.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">原权重数据已更新，模型张量元数据不变</text>
+<text x="520.0" y="693.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">字节视图不是 NZ→ND 数值转换，也不是另一份模型</text>
+<text x="40" y="809" text-anchor="start" font-size="16" font-weight="normal" fill="#536779">scratch 仍然存在，用于保护源数据和接收远端专家。</text>
+</g></svg>

@@ -1,4 +1,48 @@
 {
+  "docs/distributed/sglang-eplb-gpu-npu-implementation.md": {
+    "summary": "用四张源码图对照计数入口、公共 planner、权重表示、共享 updater 与通信组，解释 NPU 适配应放在哪一层。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "GPU/NPU",
+      "实现对比"
+    ],
+    "topic": "distributed",
+    "role": "deep"
+  },
+  "docs/performance/eplb-packed-nd-byte-boundaries.md": {
+    "summary": "从 int8→int32 view 和二维 GPTQ reshape 的真实修复，算清专家字节跨度、容量、前缀与仍需拒绝的切片。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "量化权重",
+      "字节边界"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
+  "docs/performance/eplb-fp4-nz-format-validation.md": {
+    "summary": "沿 Ascend 950PR 三组真实探针和 124 次迁移记录，解释为什么补格式允许项就够了，原 NZ stride 条件应保留。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "FP4",
+      "NZ格式"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
+  "docs/performance/eplb-count-reduction-before-communication.md": {
+    "summary": "沿统计 dump 与算法消费者判断何时可压缩记录轴，用 144 组 CPU 对照说明等价条件、信息损失与通信容量。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "统计通信",
+      "优化设计"
+    ],
+    "topic": "performance",
+    "role": "advanced"
+  },
   "docs/distributed/eplb-study-guide.md": {
     "summary": "从专家身份与热度表，到物理存储、通信、显存和完整服务验证；按问题阅读，也可沿 PR 提交追踪优化取舍。",
     "category": "分布式工程",

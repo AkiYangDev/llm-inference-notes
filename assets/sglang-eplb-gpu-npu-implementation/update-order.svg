@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="728" viewBox="0 0 1040 728" role="img" aria-labelledby="title desc">
+<title id="title">同样的覆盖依赖，GPU 与 NPU 都要遵守</title><desc id="desc">本地交换 B / C 是教学例子；设备完成依赖由具体路径维护</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#61778c"/></marker></defs>
+<rect width="1040" height="728" rx="20" fill="#f6f8fc"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#163047">
+<text x="40" y="48" text-anchor="start" font-size="28" font-weight="bold" fill="#163047">同样的覆盖依赖，GPU 与 NPU 都要遵守</text>
+<text x="40" y="83" text-anchor="start" font-size="17" font-weight="normal" fill="#536779">本地交换 B / C 是教学例子；设备完成依赖由具体路径维护</text>
+<rect x="60" y="120" width="920" height="100" rx="12" fill="#fff1dd" stroke="#d0a164" stroke-width="1.5"/>
+<text x="520.0" y="161.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">旧布局：槽 0 是 B，槽 1 是 C</text>
+<text x="520.0" y="192.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">若直接覆盖，后续可能读不到旧 B</text>
+<path d="M520,220 L520,252" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="257" width="920" height="100" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="298.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">保护来源；组织本地复用与远端接收</text>
+<text x="520.0" y="329.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">共享 updater 保留必要 scratch</text>
+<path d="M520,357 L520,389" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="394" width="920" height="100" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="435.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">提交 P2P，等待对应 work，再执行目标复制</text>
+<text x="520.0" y="466.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">NPU 的目标是原权重可写字节视图</text>
+<path d="M520,494 L520,526" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="531" width="920" height="100" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="572.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">权重更新路径返回，提交所选层的新映射</text>
+<text x="520.0" y="603.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">后续 forward 按新位置读取权重</text>
+<text x="40" y="703" text-anchor="start" font-size="16" font-weight="normal" fill="#536779">这里没有宣称全局事务或后台异步提交；只画当前主链的必要先后关系。</text>
+</g></svg>

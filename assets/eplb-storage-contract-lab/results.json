@@ -1,0 +1,37 @@
+{
+  "scope": "CPU byte/metadata checks, not an NPU execution",
+  "nd_block_bytes": 1088,
+  "nd_allocation_bytes": 6528,
+  "packed_and_reshape_equal": true,
+  "byte_permutation_pass": true,
+  "invalid_nd_cases_rejected": 4,
+  "nz_probe_metadata": [
+    {
+      "name": "w13_full",
+      "exported_rows": 80,
+      "allocation_rows": 80,
+      "block_bytes": 8388608,
+      "storage_bytes": 671088640,
+      "exported_bytes": 671088640,
+      "strict_metadata_pass": true
+    },
+    {
+      "name": "w13_shared_suffix",
+      "exported_rows": 80,
+      "allocation_rows": 81,
+      "block_bytes": 8388608,
+      "storage_bytes": 679477248,
+      "exported_bytes": 671088640,
+      "strict_metadata_pass": true
+    },
+    {
+      "name": "w2_full",
+      "exported_rows": 80,
+      "allocation_rows": 80,
+      "block_bytes": 4194304,
+      "storage_bytes": 335544320,
+      "exported_bytes": 335544320,
+      "strict_metadata_pass": true
+    }
+  ]
+}

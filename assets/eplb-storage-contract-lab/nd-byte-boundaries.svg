@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="530" viewBox="0 0 1040 530" role="img" aria-labelledby="title desc">
+<title id="title">dtype 换了，专家的字节边界没有换</title><desc id="desc">ND 教学算例：同一个 6528 字节分配，六位专家</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#61778c"/></marker></defs>
+<rect width="1040" height="530" rx="20" fill="#f6f8fc"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#163047">
+<text x="40" y="48" text-anchor="start" font-size="28" font-weight="bold" fill="#163047">dtype 换了，专家的字节边界没有换</text>
+<text x="40" y="83" text-anchor="start" font-size="17" font-weight="normal" fill="#536779">ND 教学算例：同一个 6528 字节分配，六位专家</text>
+<rect x="60" y="125" width="430" height="146" rx="12" fill="#e5f1fa" stroke="#6aa1c3" stroke-width="1.5"/>
+<text x="80" y="158" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">原分配描述</text>
+<text x="275.0" y="189" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">[6,17,64] int8</text>
+<text x="275.0" y="220" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">stride(0) = 1088</text>
+<text x="275.0" y="251" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">1088 × 1 B = 1088 B</text>
+<rect x="550" y="125" width="430" height="146" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="570" y="158" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">导出 dtype view</text>
+<text x="765.0" y="189" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">[6,17,16] int32</text>
+<text x="765.0" y="220" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">stride(0) = 272</text>
+<text x="765.0" y="251" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">272 × 4 B = 1088 B</text>
+<rect x="60" y="305" width="145" height="66" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="132.5" y="345.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">专家 0</text>
+<rect x="215" y="305" width="145" height="66" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="287.5" y="345.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">专家 1</text>
+<rect x="370" y="305" width="145" height="66" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="442.5" y="345.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">专家 2</text>
+<rect x="525" y="305" width="145" height="66" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="597.5" y="345.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">专家 3</text>
+<rect x="680" y="305" width="145" height="66" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="752.5" y="345.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">专家 4</text>
+<rect x="835" y="305" width="145" height="66" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="907.5" y="345.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">专家 5</text>
+<text x="60" y="416" text-anchor="start" font-size="23" font-weight="bold" fill="#163047">每块 1088 B；先统一字节单位，再检查容量与专家前缀。</text>
+<text x="40" y="505" text-anchor="start" font-size="16" font-weight="normal" fill="#536779">示意图没有执行量化；view 重新解释位模式，数值 cast 则会改变内容。</text>
+</g></svg>

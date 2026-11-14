@@ -1,0 +1,166 @@
+{
+  "source_commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+  "sources": [
+    {
+      "path": "python/sglang/srt/hardware_backend/npu/eplb.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py",
+      "sha256": "13c2a2bb32ea9426ac7ee1bbf72c01a13cc69212901a60d8c4f54715cbe521a9",
+      "bytes": 17475
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_distribution.py",
+      "sha256": "eba2e8e5e2f4bc4236faf704db13ea93db207d34f177f09b0b0ea5cad6b523fc",
+      "bytes": 42727
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py",
+      "sha256": "179f7f2c778d2b6560cdea78a20ea8e31e9fa072a0d3e429838baaa6b6ce8a79",
+      "bytes": 26502
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location.py",
+      "sha256": "bddf805b123d9fab352f526ce2d2001e97e799da23ffc54722537bff4e8b7ea6",
+      "bytes": 33683
+    },
+    {
+      "path": "python/sglang/srt/eplb/eplb_manager.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_manager.py",
+      "sha256": "731e16230a38dafaa855663762be658f7a06997bba1ff75482359027e870c18e",
+      "bytes": 13349
+    },
+    {
+      "path": "python/sglang/srt/eplb/eplb_algorithms/__init__.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/__init__.py",
+      "sha256": "69f58f4c8c7e6eb9dc70dd124cc9b3564dbabfda6318d1b66d658822ccbdf323",
+      "bytes": 2901
+    },
+    {
+      "path": "python/sglang/srt/eplb/eplb_algorithms/deepseek_vec.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/eplb_algorithms/deepseek_vec.py",
+      "sha256": "573cb921aaee6b5560547ce304d65a555fefb752d8d412ed273ecf9b307bd359",
+      "bytes": 10654
+    },
+    {
+      "path": "python/sglang/srt/hardware_backend/npu/quantization/moe_methods.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/quantization/moe_methods.py",
+      "sha256": "a7e3afb29d27248f2464eec0f31d3dc9f2a518dcd94895e33913d03012e856c6",
+      "bytes": 46590
+    },
+    {
+      "path": "python/sglang/srt/hardware_backend/npu/quantization/gptq_kernels.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/quantization/gptq_kernels.py",
+      "sha256": "24e0d280c29b5c23d9d842c954edc32d88f829cd2b6ccbcfe3ea37f622217c31",
+      "bytes": 12140
+    },
+    {
+      "path": "python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py",
+      "sha256": "234cbccb4820c2c19cd5625d781f8ccf9ac2110aab8349dd5863b0f8907c6422",
+      "bytes": 26224
+    },
+    {
+      "path": "python/sglang/srt/model_executor/model_runner.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/model_executor/model_runner.py",
+      "sha256": "95b3d57e8f230d706d6643a67492fd8c69b12507812fc7d5ff8cbeef7cad24f8",
+      "bytes": 114092
+    },
+    {
+      "path": "python/sglang/srt/distributed/bootstrap.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/distributed/bootstrap.py",
+      "sha256": "f12044c890118910bb316ea483670149e5700493386b356c4a98e3499223a67f",
+      "bytes": 16909
+    },
+    {
+      "path": "python/sglang/srt/layers/moe/topk.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/layers/moe/topk.py",
+      "sha256": "81e4845b2647a571a862f3ac03ff297844a113cd5360fea40a92c69a8c4682be",
+      "bytes": 128811
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location_dispatch.py",
+      "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_dispatch.py",
+      "sha256": "19ff435b1ede3a336336c611a444e9767388c96a16093deded4a627bed69c027",
+      "bytes": 8347
+    }
+  ],
+  "checked_on": "2026-11-14",
+  "device_work_this_round": false,
+  "nz_strict_function_ast_identical_before_after_e7fc1cdd": true,
+  "device_report": {
+    "origin": "Author-supplied Ascend 950PR device report, followed by correction in the same investigation",
+    "model": "DeepSeek-V4-Flash-0731 FP4",
+    "format": 50,
+    "software": {
+      "CANN": "9.1.0",
+      "torch": "2.10.0+cpu",
+      "torch_npu": "2.10.0.post6"
+    },
+    "strict_check_restored": {
+      "rebalance": 124,
+      "prefill": 12,
+      "decode": 112,
+      "exceptions": 0
+    },
+    "earlier_wider_patch_rebalances": 272,
+    "correction": "No second stride error occurred; the strict NZ conditions were restored. Use the 124-run result for the format-only patch.",
+    "scope": "Reported migration completion, not a full task-accuracy result or timing benchmark",
+    "probe_metadata": [
+      {
+        "name": "w13_full",
+        "exported_rows": 80,
+        "allocation_rows": 80,
+        "block_bytes": 8388608,
+        "storage_bytes": 671088640,
+        "exported_bytes": 671088640,
+        "strict_metadata_pass": true
+      },
+      {
+        "name": "w13_shared_suffix",
+        "exported_rows": 80,
+        "allocation_rows": 81,
+        "block_bytes": 8388608,
+        "storage_bytes": 679477248,
+        "exported_bytes": 671088640,
+        "strict_metadata_pass": true
+      },
+      {
+        "name": "w2_full",
+        "exported_rows": 80,
+        "allocation_rows": 80,
+        "block_bytes": 4194304,
+        "storage_bytes": 335544320,
+        "exported_bytes": 335544320,
+        "strict_metadata_pass": true
+      }
+    ],
+    "public_reference": "https://github.com/sgl-project/sglang/pull/49701"
+  },
+  "packed_nd_device_checks": {
+    "public_reference": "https://github.com/sgl-project/sglang/pull/49701",
+    "per_endpoint": 10,
+    "adapter_checked_at": "e60cc1a99",
+    "full_service_at": "08865d168",
+    "includes": [
+      "packed int32 dtype view",
+      "flat-allocation ND reshape"
+    ],
+    "adapter_unchanged_between_revisions": true
+  }
+}

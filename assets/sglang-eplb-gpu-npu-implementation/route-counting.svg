@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="795" viewBox="0 0 1040 795" role="img" aria-labelledby="title desc">
+<title id="title">同一份热度，应统计同一类有效工作</title><desc id="desc">stat + DeepEP 的计数入口；4 行与 2 行是教学设定</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#61778c"/></marker></defs>
+<rect width="1040" height="795" rx="20" fill="#f6f8fc"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#163047">
+<text x="40" y="48" text-anchor="start" font-size="28" font-weight="bold" fill="#163047">同一份热度，应统计同一类有效工作</text>
+<text x="40" y="83" text-anchor="start" font-size="17" font-weight="normal" fill="#536779">stat + DeepEP 的计数入口；4 行与 2 行是教学设定</text>
+<rect x="60" y="120" width="920" height="84" rx="12" fill="#ffffff" stroke="#b7c5d4" stroke-width="1.5"/>
+<text x="520.0" y="169.0" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">一轮图执行：2 行真实工作 + 2 行 padding</text>
+<path d="M290,204 L290,245" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,204 L750,245" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="248" width="430" height="144" rx="12" fill="#e5f1fa" stroke="#6aa1c3" stroke-width="1.5"/>
+<text x="80" y="281" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">CUDA</text>
+<text x="275.0" y="312" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">normal：TopK 选择计数</text>
+<text x="275.0" y="343" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">low-latency：后端计数</text>
+<text x="275.0" y="374" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">入口由 gatherer 工厂选择</text>
+<rect x="550" y="248" width="430" height="144" rx="12" fill="#e5f4f0" stroke="#65a998" stroke-width="1.5"/>
+<text x="570" y="281" text-anchor="start" font-size="21" font-weight="bold" fill="#163047">NPU</text>
+<text x="765.0" y="312" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">normal / low-latency / auto</text>
+<text x="765.0" y="343" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">均使用有效 TopK ID 计数</text>
+<text x="765.0" y="374" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">padding ID 在统计入口屏蔽</text>
+<path d="M290,392 L290,443" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<path d="M750,392 L750,443" stroke="#61778c" stroke-width="2.2" fill="none" marker-end="url(#arrow)"/>
+<rect x="60" y="446" width="920" height="102" rx="12" fill="#e9eff8" stroke="#809ac0" stroke-width="1.5"/>
+<text x="520.0" y="488.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">共同输出：每层、每物理槽位的有效路由计数</text>
+<text x="520.0" y="519.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">逻辑归并 → 统计窗口 → planner</text>
+<rect x="60" y="589" width="920" height="104" rx="12" fill="#fff1dd" stroke="#d0a164" stroke-width="1.5"/>
+<text x="520.0" y="632.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">补齐行可以被 dispatch，却不应伪装成模型负载</text>
+<text x="520.0" y="663.5" text-anchor="middle" font-size="21" font-weight="normal" fill="#163047">接收 4 行 ≠ 真实工作 4 行</text>
+<text x="40" y="770" text-anchor="start" font-size="16" font-weight="normal" fill="#536779">stat_approx、per_token 与其他后端另有分支；图没有覆盖它们。</text>
+</g></svg>

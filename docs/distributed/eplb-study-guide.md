@@ -14,6 +14,16 @@ EPLB 要解决的问题很具体：同一层 MoE 的工作没有均匀落到设�
 
 想先看整项工程怎么演进，可以从[一个 EPLB PR 怎样收敛](../performance/eplb-pr49701-commit-evolution.md)进入。它按 PR #49701 的实际 commit 解释核心改动、兼容性修复和撤回的尝试，再连接到各篇深挖。
 
+## 新补充：GPU / NPU 对照与边界修复
+
+想理解 NPU 为什么需要额外适配，先读 [SGLang 的 GPU / NPU 动态 EPLB 实现对照](sglang-eplb-gpu-npu-implementation.md)。四张源码图把共同主链、计数入口、权重表示与更新顺序放在一起。
+
+接着可以按问题深入：
+
+- [合法 int32 view 为什么曾被拒绝](../performance/eplb-packed-nd-byte-boundaries.md)：用 1088 字节专家块读懂 dtype、stride、reshape 与容量。
+- [FP4 格式补全为何不用放宽 stride](../performance/eplb-fp4-nz-format-validation.md)：沿三组设备探针与 124 次迁移对照核对原块条件。
+- [1000 条统计都要跨卡传吗](../performance/eplb-count-reduction-before-communication.md)：区分总量算法与逐记录算法，讨论一项有 CPU 等价对照的通信优化设计。
+
 ## 一、从统计开始：窗口里究竟装了什么
 
 统计的单位不是客户端请求。一次 forward 可以处理多个请求或多个候选，一个请求也可以经历很多次 forward；物理槽位的路由计数，还要按正确布局汇总成逻辑专家负载。
@@ -76,10 +86,10 @@ Planner 要同时满足每位逻辑专家的基本副本、冗余预算与各 ra
 | 演进问题 | 主要提交或证据 | 读哪篇 |
 |---|---|---|
 | NZ→ND 中转与独立写回 | `4c9a1c24` | [物理存储重构](../performance/ascend-eplb-physical-storage-migration.md) |
-| 打包 ND 的 dtype view 与 reshape | `83a22098` | [沿提交看兼容性修复](../performance/eplb-pr49701-commit-evolution.md) |
+| 打包 ND 的 dtype view 与 reshape | `83a22098` | [ND 专家字节边界](../performance/eplb-packed-nd-byte-boundaries.md) |
 | 视图命名、存储描述与生命周期 | `a9430a31`、`a4d6fc31` | [提交演进](../performance/eplb-pr49701-commit-evolution.md)、[图与地址](../performance/graph-capture-tensor-storage.md) |
 | TP 复用、预热和拓扑约束 | `d84edc66`、`240f795f`、`2914be60` | [TP / WORLD 显存实验](../performance/ascend-eplb-tp-world-memory.md) |
-| FP4 packed NZ 格式 | `e7fc1cdd`、`a29d6456` | [格式补全与边界保留](../performance/eplb-pr49701-commit-evolution.md) |
+| FP4 packed NZ 格式 | `e7fc1cdd`、`a29d6456` | [格式补全与边界保留](../performance/eplb-fp4-nz-format-validation.md) |
 | PP 与计划/复制分支的收敛 | `4802d2bb`、`08865d16` | [哪些尝试最后撤回了](../performance/eplb-pr49701-commit-evolution.md) |
 | draft 与 padding 的统计边界 | 原始计数与固定源码 | [零记录](../performance/eplb-zero-record-rolling-window.md)、[有效路由](../performance/deepep-received-vs-valid-routes.md) |
 
