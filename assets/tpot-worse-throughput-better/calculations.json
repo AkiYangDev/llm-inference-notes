@@ -1,0 +1,41 @@
+{
+  "observed_commit": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+  "observed": {
+    "off": {
+      "output_tok_s": 2648.8866666666668,
+      "TTFT_s": 41.42985514658927,
+      "generation_s": 9.055720622606527,
+      "E2E_s": 50.48557576919579,
+      "TPOT_ms": 8.852121820729742,
+      "D_running_sample_mean": 31.642857142857142
+    },
+    "on": {
+      "output_tok_s": 3627.0533333333333,
+      "TTFT_s": 25.634415925121314,
+      "generation_s": 10.760016341866898,
+      "E2E_s": 36.39443226698821,
+      "TPOT_ms": 10.518100040925608,
+      "D_running_sample_mean": 45.214285714285715
+    },
+    "change_pct": {
+      "output_tok_s": 36.92746386532202,
+      "TTFT_s": -38.125740883186076,
+      "generation_s": 18.820100467828027,
+      "E2E_s": -27.91122669696363,
+      "TPOT_ms": 18.820100467828027,
+      "D_running_sample_mean": 42.889390519187366
+    }
+  },
+  "teaching_only": {
+    "32": {
+      "batch": 32,
+      "step_ms": 10,
+      "output_tok_s": 3200.0
+    },
+    "48": {
+      "batch": 48,
+      "step_ms": 12,
+      "output_tok_s": 4000.0
+    }
+  }
+}

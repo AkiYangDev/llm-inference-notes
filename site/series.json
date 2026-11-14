@@ -228,6 +228,11 @@
         "path": "docs/performance/eplb-weight-migration-correctness.md",
         "label": "迁移后模型还在算对吗",
         "description": "把字节、量化参数、映射、图存储与固定状态数值、任务结果连起来验证"
+      },
+      {
+        "path": "docs/performance/tpot-worse-throughput-better.md",
+        "label": "吞吐提高，TPOT 为什么变差",
+        "description": "把单请求推进速度与 PD 流水线产出放在同一组证据里分析"
       }
     ]
   },

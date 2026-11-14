@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [平均 TPOT 变差了，吞吐却提高了：这两个指标为什么不矛盾？](tpot-worse-throughput-better.md)：吞吐提高 36.93%、TPOT 增加 18.82% 时，怎样判断收益、代价与下一轮对照。
+
 - [权重搬完没报错，怎样证明模型还在算对的东西？](eplb-weight-migration-correctness.md)：用六种可运行迁移版本，说明 canary、字节校验、图回放和任务评测各自覆盖什么。
 
 - [专家收到的 token 一样多，为什么有的卡还是更慢？](moe-equal-token-counts-unequal-latency.md)：用相同路由总数的三个分布和两 rank 时间线，讲清分组、padding、通信与慢端。

@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/AkiYangDev/sglang/releases/tag/eplb-pr49701-validation-20261111",
+  "archive_sha256": "67463e60143b91199152ae712a59fb265c2a2864c06c5dc058d4bccc90472fd6",
+  "source_commit": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+  "observed_file": "observed.json",
+  "figure": "Mean request decomposition, not a raw trace.",
+  "teaching_example": "Ordinary decode batches 32/48 and step times 10/12 ms; not device measurements."
+}

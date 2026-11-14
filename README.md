@@ -20,6 +20,8 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 
 ## 专题文章
 
+- [平均 TPOT 变差了，吞吐却提高了：这两个指标为什么不矛盾？](docs/performance/tpot-worse-throughput-better.md)：结合一组真实 OFF/ON 数据，拆开首 token 等待、生成节奏与流水线产出。
+
 - [权重搬完没报错，怎样证明模型还在算对的东西？](docs/performance/eplb-weight-migration-correctness.md)：从字节与量化参数，到映射、图读取和固定状态前向，讲清迁移正确性如何逐项验证。
 
 - [专家收到的 token 一样多，为什么有的卡还是更慢？](docs/performance/moe-equal-token-counts-unequal-latency.md)：从每专家矩阵分组、尾块到通信到达时间，解释计数均衡与执行耗时之间的差别。

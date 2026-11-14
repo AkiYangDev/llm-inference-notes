@@ -1,0 +1,1022 @@
+{
+  "source": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+  "model": "DeepSeek-V4-Flash-0731 W8A8/modelslim",
+  "hardware": "Ascend 910C",
+  "physical_cards_P_plus_D": 16,
+  "logical_chips_P_plus_D": 32,
+  "PP": 1,
+  "TP_per_role": 16,
+  "EP_per_role": 16,
+  "attention_DP_per_role": 16,
+  "CP": 1,
+  "actual_KV_tokens": {
+    "P": 800000,
+    "D": 480000
+  },
+  "redundant_experts": 16,
+  "DSpark": {
+    "gamma": 5,
+    "verify_width": 6
+  },
+  "I_W": {
+    "P": [
+      50,
+      50
+    ],
+    "D": [
+      4000,
+      1000
+    ]
+  },
+  "prefix_cache": false,
+  "index_cache": false,
+  "P_chunk_CLI": 131072,
+  "P_chunk_tokens_per_DP_rank": 8192,
+  "concurrency": 128,
+  "requests": 3072,
+  "input_tokens_after_template": 16384,
+  "output_tokens": 1024,
+  "measurement_window_seconds": [
+    60,
+    360
+  ],
+  "case": "Controlled long-text copying. Same frozen request list and seed within this pair.",
+  "comparison": {
+    "output_change_pct": 36.92746386532202,
+    "TTFT_change_pct": -38.125740883186076,
+    "TPOT_change_pct": 18.820100467828027,
+    "E2E_change_pct": -27.91122669696364,
+    "same_request_text": {
+      "compared_full_outputs": 3072,
+      "exact_matches": 3072,
+      "mismatches": []
+    },
+    "paired_service_HBM": {
+      "P": {
+        "per_chip_p50_ON_minus_OFF_MiB": [
+          15.0,
+          -44.0,
+          16.0,
+          17.0,
+          16.0,
+          -4.0,
+          15.0,
+          16.0,
+          15.0,
+          -123.0,
+          -324.0,
+          16.0,
+          15.0,
+          -305.0,
+          -84.0,
+          16.0
+        ],
+        "mean_MiB": -45.4375,
+        "median_MiB": 15.0,
+        "min_MiB": -324.0,
+        "max_MiB": 17.0
+      },
+      "D": {
+        "per_chip_p50_ON_minus_OFF_MiB": [
+          536.0,
+          539.0,
+          537.0,
+          532.0,
+          537.0,
+          540.0,
+          536.0,
+          534.0,
+          535.0,
+          532.0,
+          541.0,
+          538.0,
+          533.0,
+          539.0,
+          533.0,
+          538.0
+        ],
+        "mean_MiB": 536.25,
+        "median_MiB": 536.5,
+        "min_MiB": 532.0,
+        "max_MiB": 541.0
+      }
+    }
+  },
+  "arms": {
+    "off": {
+      "source": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+      "requests": 3072,
+      "full_outputs": 3072,
+      "native_whole": {
+        "duration": 1227.0723723401316,
+        "completed": 3072,
+        "total_output_tokens": 3145728,
+        "output_throughput": 2563.6042917345035,
+        "mean_ttft_ms": 40114.95664333628,
+        "mean_tpot_ms": 8.780961578619255,
+        "mean_e2e_latency_ms": 49097.88033826377,
+        "mean_itl_ms": 52.52981022796718,
+        "concurrency": 122.91751635765635,
+        "cache_report": {
+          "total_prompt_tokens": 50331648,
+          "total_cached_tokens": 0,
+          "cache_hit_rate_pct": 0.0,
+          "device_cached_tokens": null,
+          "host_cached_tokens": null,
+          "storage_cached_tokens": null,
+          "storage_backend": null
+        }
+      },
+      "acceptance_whole": {
+        "observed_requests": 3072,
+        "correct_drafts": 2626560,
+        "proposed_drafts": 2626560,
+        "verify_calls": 525312,
+        "strict_AR": 1.0,
+        "AL_returned_tokens_per_verify": 5.988304093567251,
+        "per_request_AR": {
+          "n": 3072,
+          "mean": 1.0,
+          "p50": 1.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "per_request_AL": {
+          "n": 3072,
+          "mean": 5.988304093567251,
+          "p50": 5.988304093567251,
+          "p95": 5.988304093567251,
+          "p99": 5.988304093567251,
+          "min": 5.988304093567251,
+          "max": 5.988304093567251
+        },
+        "scope": "Canonical server request counters. AR excludes bonus tokens; returned-token AL includes request-end clipping."
+      },
+      "windows": [
+        {
+          "start": 2807627.61188419,
+          "end": 2807927.61188419,
+          "duration_s": 300.0,
+          "actual_received_output_tokens": 794666,
+          "output_tokens_per_s": 2648.8866666666668,
+          "output_tokens_per_s_per_physical_card": 165.55541666666667,
+          "average_active_requests": 127.99740588055613,
+          "minimum_active_requests": 123,
+          "maximum_active_requests": 128,
+          "fraction_time_at_least_90pct_of_C128": 1.0,
+          "requests_started_in_window": 770,
+          "requests_completed_in_window": 770,
+          "failures_started_in_window": 0,
+          "token_scope": "Server cumulative completion_tokens deltas at client stream receipt; half-open fixed wall window.",
+          "latency_cohort": "Successful requests whose native request start falls inside the window; full request latency, including completion after window end.",
+          "TTFT_ms": {
+            "mean": 41429.85514658927,
+            "median": 34510.35858481191,
+            "p95": 96915.10871141213
+          },
+          "E2E_ms": {
+            "mean": 50485.57576919579,
+            "median": 43519.340929808095,
+            "p95": 106051.18245258923
+          },
+          "TPOT_ms": {
+            "mean": 8.852121820729742,
+            "median": 8.752253250230762,
+            "p95": 9.629895752327714
+          },
+          "ITL_ms": {
+            "mean": 52.95549195728477,
+            "median": 65.82352006807923,
+            "p95": 75.49910489469767
+          },
+          "offset_s": [
+            60,
+            360
+          ],
+          "wall_P_clock_s": [
+            1794409265.59714,
+            1794409565.59714
+          ],
+          "acceptance_request_cohort": {
+            "observed_requests": 770,
+            "correct_drafts": 658350,
+            "proposed_drafts": 658350,
+            "verify_calls": 131670,
+            "strict_AR": 1.0,
+            "AL_returned_tokens_per_verify": 5.988304093567251,
+            "per_request_AR": {
+              "n": 770,
+              "mean": 1.0,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "min": 1.0,
+              "max": 1.0
+            },
+            "per_request_AL": {
+              "n": 770,
+              "mean": 5.988304093567251,
+              "p50": 5.988304093567251,
+              "p95": 5.988304093567251,
+              "p99": 5.988304093567251,
+              "min": 5.988304093567251,
+              "max": 5.988304093567251
+            },
+            "scope": "Canonical server request counters. AR excludes bonus tokens; returned-token AL includes request-end clipping."
+          },
+          "updates": {
+            "P": {
+              "rounds": 0,
+              "complete_manager_wall_s": null,
+              "sum_round_slowest_s": 0,
+              "window_wall_fraction": 0.0,
+              "scope": "One slowest rank per complete rebalance; logs have 1s timestamp precision. P and D values are separate and must not be added."
+            },
+            "D": {
+              "rounds": 0,
+              "complete_manager_wall_s": null,
+              "sum_round_slowest_s": 0,
+              "window_wall_fraction": 0.0,
+              "scope": "One slowest rank per complete rebalance; logs have 1s timestamp precision. P and D values are separate and must not be added."
+            }
+          }
+        }
+      ],
+      "pipeline_metrics": {
+        "P": [
+          {
+            "sglang:num_running_reqs": {
+              "n": 15,
+              "mean": 16.0,
+              "p50": 16.0,
+              "p95": 16.0,
+              "p99": 16.0,
+              "min": 16.0,
+              "max": 16.0
+            },
+            "sglang:num_queue_reqs": {
+              "n": 15,
+              "mean": 77.06666666666666,
+              "p50": 77.0,
+              "p95": 82.5,
+              "p99": 85.3,
+              "min": 70.0,
+              "max": 86.0
+            },
+            "sglang:num_prefill_inflight_queue_reqs": {
+              "n": 15,
+              "mean": 15.466666666666667,
+              "p50": 16.0,
+              "p95": 16.0,
+              "p99": 16.0,
+              "min": 14.0,
+              "max": 16.0
+            }
+          }
+        ],
+        "D": [
+          {
+            "sglang:num_running_reqs": {
+              "n": 14,
+              "mean": 31.642857142857142,
+              "p50": 31.0,
+              "p95": 36.0,
+              "p99": 36.0,
+              "min": 29.0,
+              "max": 36.0
+            },
+            "sglang:num_queue_reqs": {
+              "n": 14,
+              "mean": 0.0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "sglang:num_prefill_inflight_queue_reqs": {
+              "n": 14,
+              "mean": 0.0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            }
+          }
+        ]
+      },
+      "update_rounds": {
+        "P": [],
+        "D": []
+      },
+      "application_failures": 0
+    },
+    "on": {
+      "source": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+      "requests": 3072,
+      "full_outputs": 3072,
+      "native_whole": {
+        "duration": 911.5254145101644,
+        "completed": 3072,
+        "total_output_tokens": 3145728,
+        "output_throughput": 3451.0590159358876,
+        "mean_ttft_ms": 25674.880606349234,
+        "mean_tpot_ms": 10.51580371755607,
+        "mean_e2e_latency_ms": 36432.547809409094,
+        "mean_itl_ms": 62.90851242682846,
+        "concurrency": 122.78405526482082,
+        "cache_report": {
+          "total_prompt_tokens": 50331648,
+          "total_cached_tokens": 0,
+          "cache_hit_rate_pct": 0.0,
+          "device_cached_tokens": null,
+          "host_cached_tokens": null,
+          "storage_cached_tokens": null,
+          "storage_backend": null
+        }
+      },
+      "acceptance_whole": {
+        "observed_requests": 3072,
+        "correct_drafts": 2626560,
+        "proposed_drafts": 2626560,
+        "verify_calls": 525312,
+        "strict_AR": 1.0,
+        "AL_returned_tokens_per_verify": 5.988304093567251,
+        "per_request_AR": {
+          "n": 3072,
+          "mean": 1.0,
+          "p50": 1.0,
+          "p95": 1.0,
+          "p99": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "per_request_AL": {
+          "n": 3072,
+          "mean": 5.988304093567251,
+          "p50": 5.988304093567251,
+          "p95": 5.988304093567251,
+          "p99": 5.988304093567251,
+          "min": 5.988304093567251,
+          "max": 5.988304093567251
+        },
+        "scope": "Canonical server request counters. AR excludes bonus tokens; returned-token AL includes request-end clipping."
+      },
+      "windows": [
+        {
+          "start": 2804562.05303176,
+          "end": 2804862.05303176,
+          "duration_s": 300.0,
+          "actual_received_output_tokens": 1088116,
+          "output_tokens_per_s": 3627.0533333333333,
+          "output_tokens_per_s_per_physical_card": 226.69083333333333,
+          "average_active_requests": 127.99640976413774,
+          "minimum_active_requests": 123,
+          "maximum_active_requests": 128,
+          "fraction_time_at_least_90pct_of_C128": 1.0,
+          "requests_started_in_window": 1062,
+          "requests_completed_in_window": 1062,
+          "failures_started_in_window": 0,
+          "token_scope": "Server cumulative completion_tokens deltas at client stream receipt; half-open fixed wall window.",
+          "latency_cohort": "Successful requests whose native request start falls inside the window; full request latency, including completion after window end.",
+          "TTFT_ms": {
+            "mean": 25634.415925121313,
+            "median": 20656.987274764106,
+            "p95": 68966.61731088522
+          },
+          "E2E_ms": {
+            "mean": 36394.43226698821,
+            "median": 31340.069364989176,
+            "p95": 79756.90264219872
+          },
+          "TPOT_ms": {
+            "mean": 10.518100040925608,
+            "median": 10.526634960773084,
+            "p95": 10.84793442552991
+          },
+          "ITL_ms": {
+            "mean": 62.92216659775421,
+            "median": 74.06628015451133,
+            "p95": 79.22968440689147
+          },
+          "offset_s": [
+            60,
+            360
+          ],
+          "wall_P_clock_s": [
+            1794406200.0382879,
+            1794406500.0382879
+          ],
+          "acceptance_request_cohort": {
+            "observed_requests": 1062,
+            "correct_drafts": 908010,
+            "proposed_drafts": 908010,
+            "verify_calls": 181602,
+            "strict_AR": 1.0,
+            "AL_returned_tokens_per_verify": 5.988304093567251,
+            "per_request_AR": {
+              "n": 1062,
+              "mean": 1.0,
+              "p50": 1.0,
+              "p95": 1.0,
+              "p99": 1.0,
+              "min": 1.0,
+              "max": 1.0
+            },
+            "per_request_AL": {
+              "n": 1062,
+              "mean": 5.988304093567251,
+              "p50": 5.988304093567251,
+              "p95": 5.988304093567251,
+              "p99": 5.988304093567251,
+              "min": 5.988304093567251,
+              "max": 5.988304093567251
+            },
+            "scope": "Canonical server request counters. AR excludes bonus tokens; returned-token AL includes request-end clipping."
+          },
+          "updates": {
+            "P": {
+              "rounds": 2,
+              "complete_manager_wall_s": {
+                "n": 2,
+                "mean": 0.517,
+                "p50": 0.517,
+                "p95": 0.5233,
+                "p99": 0.52386,
+                "min": 0.51,
+                "max": 0.524
+              },
+              "sum_round_slowest_s": 1.034,
+              "window_wall_fraction": 0.003446666666666667,
+              "scope": "One slowest rank per complete rebalance; logs have 1s timestamp precision. P and D values are separate and must not be added."
+            },
+            "D": {
+              "rounds": 1,
+              "complete_manager_wall_s": {
+                "n": 1,
+                "mean": 0.547,
+                "p50": 0.547,
+                "p95": 0.547,
+                "p99": 0.547,
+                "min": 0.547,
+                "max": 0.547
+              },
+              "sum_round_slowest_s": 0.547,
+              "window_wall_fraction": 0.0018233333333333335,
+              "scope": "One slowest rank per complete rebalance; logs have 1s timestamp precision. P and D values are separate and must not be added."
+            }
+          }
+        }
+      ],
+      "pipeline_metrics": {
+        "P": [
+          {
+            "sglang:num_running_reqs": {
+              "n": 14,
+              "mean": 16.0,
+              "p50": 16.0,
+              "p95": 16.0,
+              "p99": 16.0,
+              "min": 16.0,
+              "max": 16.0
+            },
+            "sglang:num_queue_reqs": {
+              "n": 14,
+              "mean": 61.785714285714285,
+              "p50": 62.0,
+              "p95": 66.0,
+              "p99": 66.0,
+              "min": 58.0,
+              "max": 66.0
+            },
+            "sglang:num_prefill_inflight_queue_reqs": {
+              "n": 14,
+              "mean": 15.5,
+              "p50": 16.0,
+              "p95": 16.0,
+              "p99": 16.0,
+              "min": 14.0,
+              "max": 16.0
+            }
+          }
+        ],
+        "D": [
+          {
+            "sglang:num_running_reqs": {
+              "n": 14,
+              "mean": 45.214285714285715,
+              "p50": 45.0,
+              "p95": 49.05,
+              "p99": 50.61,
+              "min": 41.0,
+              "max": 51.0
+            },
+            "sglang:num_queue_reqs": {
+              "n": 14,
+              "mean": 0.0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "sglang:num_prefill_inflight_queue_reqs": {
+              "n": 14,
+              "mean": 0.0,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            }
+          }
+        ]
+      },
+      "update_rounds": {
+        "P": [
+          {
+            "ordinal": 1,
+            "slowest_wall_s": 1.705,
+            "end_P_clock_s": 1794405003.0,
+            "rank_wall_s": {
+              "0": 1.702,
+              "1": 1.687,
+              "2": 1.689,
+              "3": 1.684,
+              "4": 1.685,
+              "5": 1.683,
+              "6": 1.681,
+              "7": 1.686,
+              "8": 1.68,
+              "9": 1.68,
+              "10": 1.682,
+              "11": 1.682,
+              "12": 1.705,
+              "13": 1.68,
+              "14": 1.68,
+              "15": 1.682
+            },
+            "changed_physical_slots": 11649,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 2,
+            "slowest_wall_s": 0.503,
+            "end_P_clock_s": 1794405112.0,
+            "rank_wall_s": {
+              "0": 0.503,
+              "1": 0.495,
+              "2": 0.491,
+              "3": 0.496,
+              "4": 0.491,
+              "5": 0.491,
+              "6": 0.49,
+              "7": 0.496,
+              "8": 0.488,
+              "9": 0.489,
+              "10": 0.486,
+              "11": 0.488,
+              "12": 0.485,
+              "13": 0.485,
+              "14": 0.485,
+              "15": 0.489
+            },
+            "changed_physical_slots": 9730,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 3,
+            "slowest_wall_s": 0.504,
+            "end_P_clock_s": 1794405218.0,
+            "rank_wall_s": {
+              "0": 0.504,
+              "1": 0.491,
+              "2": 0.5,
+              "3": 0.486,
+              "4": 0.494,
+              "5": 0.486,
+              "6": 0.486,
+              "7": 0.499,
+              "8": 0.493,
+              "9": 0.49,
+              "10": 0.49,
+              "11": 0.49,
+              "12": 0.488,
+              "13": 0.48,
+              "14": 0.48,
+              "15": 0.483
+            },
+            "changed_physical_slots": 9414,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 4,
+            "slowest_wall_s": 0.506,
+            "end_P_clock_s": 1794405335.0,
+            "rank_wall_s": {
+              "0": 0.506,
+              "1": 0.501,
+              "2": 0.499,
+              "3": 0.497,
+              "4": 0.497,
+              "5": 0.497,
+              "6": 0.496,
+              "7": 0.502,
+              "8": 0.491,
+              "9": 0.493,
+              "10": 0.492,
+              "11": 0.494,
+              "12": 0.49,
+              "13": 0.49,
+              "14": 0.49,
+              "15": 0.491
+            },
+            "changed_physical_slots": 9745,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 5,
+            "slowest_wall_s": 0.531,
+            "end_P_clock_s": 1794405539.0,
+            "rank_wall_s": {
+              "0": 0.531,
+              "1": 0.527,
+              "2": 0.513,
+              "3": 0.511,
+              "4": 0.512,
+              "5": 0.511,
+              "6": 0.522,
+              "7": 0.516,
+              "8": 0.508,
+              "9": 0.516,
+              "10": 0.509,
+              "11": 0.508,
+              "12": 0.504,
+              "13": 0.504,
+              "14": 0.504,
+              "15": 0.518
+            },
+            "changed_physical_slots": 9938,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 6,
+            "slowest_wall_s": 0.506,
+            "end_P_clock_s": 1794406187.0,
+            "rank_wall_s": {
+              "0": 0.501,
+              "1": 0.506,
+              "2": 0.494,
+              "3": 0.491,
+              "4": 0.491,
+              "5": 0.491,
+              "6": 0.49,
+              "7": 0.496,
+              "8": 0.486,
+              "9": 0.486,
+              "10": 0.486,
+              "11": 0.486,
+              "12": 0.484,
+              "13": 0.484,
+              "14": 0.484,
+              "15": 0.487
+            },
+            "changed_physical_slots": 9370,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 7,
+            "slowest_wall_s": 0.524,
+            "end_P_clock_s": 1794406293.0,
+            "rank_wall_s": {
+              "0": 0.524,
+              "1": 0.519,
+              "2": 0.517,
+              "3": 0.513,
+              "4": 0.513,
+              "5": 0.513,
+              "6": 0.521,
+              "7": 0.52,
+              "8": 0.508,
+              "9": 0.508,
+              "10": 0.508,
+              "11": 0.508,
+              "12": 0.505,
+              "13": 0.505,
+              "14": 0.504,
+              "15": 0.506
+            },
+            "changed_physical_slots": 9901,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 8,
+            "slowest_wall_s": 0.51,
+            "end_P_clock_s": 1794406398.0,
+            "rank_wall_s": {
+              "0": 0.51,
+              "1": 0.504,
+              "2": 0.503,
+              "3": 0.497,
+              "4": 0.499,
+              "5": 0.506,
+              "6": 0.497,
+              "7": 0.505,
+              "8": 0.492,
+              "9": 0.49,
+              "10": 0.504,
+              "11": 0.494,
+              "12": 0.49,
+              "13": 0.491,
+              "14": 0.49,
+              "15": 0.494
+            },
+            "changed_physical_slots": 9573,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 9,
+            "slowest_wall_s": 0.51,
+            "end_P_clock_s": 1794406503.0,
+            "rank_wall_s": {
+              "0": 0.51,
+              "1": 0.505,
+              "2": 0.502,
+              "3": 0.501,
+              "4": 0.5,
+              "5": 0.5,
+              "6": 0.5,
+              "7": 0.505,
+              "8": 0.496,
+              "9": 0.498,
+              "10": 0.497,
+              "11": 0.496,
+              "12": 0.493,
+              "13": 0.501,
+              "14": 0.493,
+              "15": 0.497
+            },
+            "changed_physical_slots": 9435,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 10,
+            "slowest_wall_s": 0.517,
+            "end_P_clock_s": 1794406609.0,
+            "rank_wall_s": {
+              "0": 0.517,
+              "1": 0.513,
+              "2": 0.511,
+              "3": 0.508,
+              "4": 0.508,
+              "5": 0.507,
+              "6": 0.507,
+              "7": 0.512,
+              "8": 0.512,
+              "9": 0.503,
+              "10": 0.502,
+              "11": 0.504,
+              "12": 0.501,
+              "13": 0.501,
+              "14": 0.501,
+              "15": 0.504
+            },
+            "changed_physical_slots": 9595,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 11,
+            "slowest_wall_s": 0.521,
+            "end_P_clock_s": 1794406714.0,
+            "rank_wall_s": {
+              "0": 0.518,
+              "1": 0.513,
+              "2": 0.511,
+              "3": 0.521,
+              "4": 0.509,
+              "5": 0.508,
+              "6": 0.508,
+              "7": 0.513,
+              "8": 0.503,
+              "9": 0.503,
+              "10": 0.503,
+              "11": 0.503,
+              "12": 0.501,
+              "13": 0.502,
+              "14": 0.502,
+              "15": 0.505
+            },
+            "changed_physical_slots": 9823,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 12,
+            "slowest_wall_s": 0.544,
+            "end_P_clock_s": 1794406819.0,
+            "rank_wall_s": {
+              "0": 0.544,
+              "1": 0.54,
+              "2": 0.54,
+              "3": 0.542,
+              "4": 0.534,
+              "5": 0.532,
+              "6": 0.541,
+              "7": 0.539,
+              "8": 0.527,
+              "9": 0.527,
+              "10": 0.526,
+              "11": 0.528,
+              "12": 0.535,
+              "13": 0.525,
+              "14": 0.525,
+              "15": 0.528
+            },
+            "changed_physical_slots": 9874,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 13,
+            "slowest_wall_s": 0.516,
+            "end_P_clock_s": 1794406925.0,
+            "rank_wall_s": {
+              "0": 0.513,
+              "1": 0.516,
+              "2": 0.506,
+              "3": 0.505,
+              "4": 0.504,
+              "5": 0.503,
+              "6": 0.503,
+              "7": 0.509,
+              "8": 0.5,
+              "9": 0.499,
+              "10": 0.5,
+              "11": 0.5,
+              "12": 0.497,
+              "13": 0.497,
+              "14": 0.497,
+              "15": 0.501
+            },
+            "changed_physical_slots": 9838,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 14,
+            "slowest_wall_s": 0.511,
+            "end_P_clock_s": 1794407024.0,
+            "rank_wall_s": {
+              "0": 0.511,
+              "1": 0.502,
+              "2": 0.503,
+              "3": 0.493,
+              "4": 0.508,
+              "5": 0.505,
+              "6": 0.499,
+              "7": 0.493,
+              "8": 0.483,
+              "9": 0.484,
+              "10": 0.481,
+              "11": 0.495,
+              "12": 0.491,
+              "13": 0.491,
+              "14": 0.491,
+              "15": 0.494
+            },
+            "changed_physical_slots": 9665,
+            "total_physical_slots": 11696
+          }
+        ],
+        "D": [
+          {
+            "ordinal": 1,
+            "slowest_wall_s": 1.058,
+            "end_P_clock_s": 1794405503.4237082,
+            "rank_wall_s": {
+              "0": 1.056,
+              "1": 1.05,
+              "2": 1.057,
+              "3": 1.05,
+              "4": 1.05,
+              "5": 1.051,
+              "6": 1.05,
+              "7": 1.058,
+              "8": 1.049,
+              "9": 1.051,
+              "10": 1.049,
+              "11": 1.05,
+              "12": 1.052,
+              "13": 1.05,
+              "14": 1.053,
+              "15": 1.051
+            },
+            "changed_physical_slots": 11650,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 2,
+            "slowest_wall_s": 0.54,
+            "end_P_clock_s": 1794405807.4237082,
+            "rank_wall_s": {
+              "0": 0.54,
+              "1": 0.528,
+              "2": 0.53,
+              "3": 0.528,
+              "4": 0.528,
+              "5": 0.532,
+              "6": 0.53,
+              "7": 0.53,
+              "8": 0.528,
+              "9": 0.532,
+              "10": 0.527,
+              "11": 0.535,
+              "12": 0.533,
+              "13": 0.528,
+              "14": 0.532,
+              "15": 0.528
+            },
+            "changed_physical_slots": 11527,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 3,
+            "slowest_wall_s": 0.547,
+            "end_P_clock_s": 1794406395.4237082,
+            "rank_wall_s": {
+              "0": 0.541,
+              "1": 0.537,
+              "2": 0.537,
+              "3": 0.537,
+              "4": 0.536,
+              "5": 0.537,
+              "6": 0.537,
+              "7": 0.536,
+              "8": 0.537,
+              "9": 0.541,
+              "10": 0.536,
+              "11": 0.543,
+              "12": 0.545,
+              "13": 0.536,
+              "14": 0.542,
+              "15": 0.547
+            },
+            "changed_physical_slots": 11597,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 4,
+            "slowest_wall_s": 0.488,
+            "end_P_clock_s": 1794406695.4237082,
+            "rank_wall_s": {
+              "0": 0.488,
+              "1": 0.479,
+              "2": 0.479,
+              "3": 0.479,
+              "4": 0.481,
+              "5": 0.479,
+              "6": 0.481,
+              "7": 0.479,
+              "8": 0.479,
+              "9": 0.483,
+              "10": 0.479,
+              "11": 0.485,
+              "12": 0.484,
+              "13": 0.478,
+              "14": 0.484,
+              "15": 0.479
+            },
+            "changed_physical_slots": 9985,
+            "total_physical_slots": 11696
+          },
+          {
+            "ordinal": 5,
+            "slowest_wall_s": 0.52,
+            "end_P_clock_s": 1794406992.4237082,
+            "rank_wall_s": {
+              "0": 0.52,
+              "1": 0.515,
+              "2": 0.515,
+              "3": 0.515,
+              "4": 0.515,
+              "5": 0.514,
+              "6": 0.516,
+              "7": 0.515,
+              "8": 0.514,
+              "9": 0.517,
+              "10": 0.513,
+              "11": 0.52,
+              "12": 0.518,
+              "13": 0.514,
+              "14": 0.518,
+              "15": 0.514
+            },
+            "changed_physical_slots": 9943,
+            "total_physical_slots": 11696
+          }
+        ]
+      },
+      "application_failures": 0
+    }
+  }
+}

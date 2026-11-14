@@ -1,4 +1,16 @@
 {
+  "docs/performance/tpot-worse-throughput-better.md": {
+    "summary": "从真实 EPLB OFF/ON 对照出发，用请求时间分解、D 端负载和原生接受率解释吞吐与 TPOT 的不同变化，并讨论延迟门槛下该怎么选配置。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "TPOT",
+      "PD分离",
+      "吞吐"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/eplb-weight-migration-correctness.md": {
     "summary": "迁移返回成功之后，还要查主权重与 scale、逻辑专家映射、图读取和固定状态输出。结合故障注入示例、真实存储探针与 GSM8K 证据，解释每种检查的作用。",
     "category": "性能分析",

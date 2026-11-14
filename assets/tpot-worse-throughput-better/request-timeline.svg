@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="455" viewBox="0 0 1100 455" role="img" aria-labelledby="title desc">
+<title id="title">OFF 与 ON 的平均请求时间分解</title><desc id="desc">OFF 首 token 前 41.43 秒，之后 9.06 秒；ON 首 token 前 25.63 秒，之后 10.76 秒。由同一请求集合的均值按固定输出长度分解。</desc>
+<rect width="1100" height="455" rx="16" fill="#f3f7fb"/>
+<g font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" fill="#18354c">
+<text x="38" y="48" font-size="25" font-weight="700">生成阶段多花 1.70 秒，首 token 前少等 15.80 秒</text>
+<text x="38" y="82" font-size="18">DeepSeek-V4-Flash · Ascend 910C · 相同 300 秒窗口的请求集合均值</text>
+<text x="38" y="160" font-size="24">OFF</text><text x="38" y="270" font-size="24">ON</text>
+<rect x="140" y="116" width="621.45" height="66" rx="5" fill="#b5cbdc"/>
+<rect x="761.45" y="116" width="135.9" height="66" fill="#cba778"/>
+<rect x="140" y="226" width="384.45" height="66" rx="5" fill="#b5cbdc"/>
+<rect x="524.45" y="226" width="161.4" height="66" fill="#cba778"/>
+<g font-size="20" text-anchor="middle"><text x="450" y="156">TTFT 41.43 s</text><text x="830" y="156">9.06 s</text>
+<text x="332" y="266">TTFT 25.63 s</text><text x="606" y="266">10.76 s</text></g>
+<text x="918" y="157" font-size="21">50.49 s</text><text x="707" y="267" font-size="21">36.39 s</text>
+<path d="M140 327 H980" stroke="#96aebe"/><g font-size="17" text-anchor="middle">
+<text x="140" y="353">0</text><text x="290" y="353">10</text><text x="440" y="353">20</text><text x="590" y="353">30</text><text x="740" y="353">40</text><text x="890" y="353">50 秒</text></g>
+<rect x="140" y="382" width="22" height="18" fill="#b5cbdc"/><text x="172" y="398" font-size="17">请求到首 token：包含排队与交接</text>
+<rect x="600" y="382" width="22" height="18" fill="#cba778"/><text x="632" y="398" font-size="17">首 token 到完成</text>
+<text x="38" y="435" font-size="16">由公开实测数值绘制；不是单条请求 trace，也不是原始终端截图。</text></g></svg>
