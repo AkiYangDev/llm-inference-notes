@@ -1,0 +1,38 @@
+{
+  "scope": "CPU teaching arithmetic only; not evidence of a specific model or accelerator kernel defect.",
+  "float32_grouping": {
+    "left": 1.0,
+    "right": 0.0,
+    "exact_real_sum": 1,
+    "repeats_per_path": 100,
+    "each_path_repeatable": true
+  },
+  "near_boundary": {
+    "before": [
+      1.0,
+      1.000100016593933
+    ],
+    "after": [
+      1.0002000331878662,
+      1.000100016593933
+    ],
+    "argmax_before": 1,
+    "argmax_after": 0
+  },
+  "far_boundary": {
+    "before": [
+      1.0,
+      2.0
+    ],
+    "after": [
+      1.0002000331878662,
+      2.0
+    ],
+    "argmax_before": 1,
+    "argmax_after": 1
+  },
+  "error_bound": {
+    "statement": "If every candidate error is bounded by epsilon and top1-top2 gap > 2*epsilon, the winner is preserved.",
+    "strict_inequality_required": true
+  }
+}

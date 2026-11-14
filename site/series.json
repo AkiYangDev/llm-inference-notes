@@ -233,6 +233,11 @@
         "path": "docs/performance/tpot-worse-throughput-better.md",
         "label": "吞吐提高，TPOT 为什么变差",
         "description": "把单请求推进速度与 PD 流水线产出放在同一组证据里分析"
+      },
+      {
+        "path": "docs/performance/same-prompt-different-batch-numerics.md",
+        "label": "换 batch，为什么答案会变",
+        "description": "区分同路径确定性与跨 batch 不变性，定位第一个数值和生成分叉"
       }
     ]
   },

@@ -1,0 +1,20 @@
+{
+  "source_commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+  "topk_source_sha256": "4c15ba6e3b30cea82cf258d7d5f083e64fa540ed9c0c4c49c7f7a24a33733ff2",
+  "source_lines": {
+    "npu_gating": [
+      32,
+      52
+    ],
+    "logical_to_physical": [
+      125,
+      142
+    ]
+  },
+  "references": [
+    "https://docs.pytorch.org/docs/2.10/notes/numerical_accuracy.html#batched-computations-or-slice-computations",
+    "https://docs.pytorch.org/docs/2.10/notes/randomness.html",
+    "https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/"
+  ],
+  "example_scope": "Independent float32 rounding and argmax teaching examples, executed with Python standard library. No new model/device experiment or performance claim."
+}

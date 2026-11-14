@@ -4,6 +4,8 @@
 
 ## 调优实践
 
+- [同样的输入，换个 batch，为什么答案会变？](same-prompt-different-batch-numerics.md)：从浮点加法走到 logits、MoE 路由与固定前缀对照，区分舍入和真实数据缺陷。
+
 - [平均 TPOT 变差了，吞吐却提高了：这两个指标为什么不矛盾？](tpot-worse-throughput-better.md)：吞吐提高 36.93%、TPOT 增加 18.82% 时，怎样判断收益、代价与下一轮对照。
 
 - [权重搬完没报错，怎样证明模型还在算对的东西？](eplb-weight-migration-correctness.md)：用六种可运行迁移版本，说明 canary、字节校验、图回放和任务评测各自覆盖什么。

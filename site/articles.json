@@ -1,4 +1,16 @@
 {
+  "docs/performance/same-prompt-different-batch-numerics.md": {
+    "summary": "固定 seed 并没有固定浮点归约顺序。用可运行加法与选择边界算例，解释 batch、路由和生成分叉，并给出固定前缀寻找第一处差异的方法。",
+    "category": "性能分析",
+    "tags": [
+      "数值精度",
+      "可复现性",
+      "MoE",
+      "Batch"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/tpot-worse-throughput-better.md": {
     "summary": "从真实 EPLB OFF/ON 对照出发，用请求时间分解、D 端负载和原生接受率解释吞吐与 TPOT 的不同变化，并讨论延迟门槛下该怎么选配置。",
     "category": "性能分析",

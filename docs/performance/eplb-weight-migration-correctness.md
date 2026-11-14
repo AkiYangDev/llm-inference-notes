@@ -110,3 +110,5 @@ python examples/eplb-weight-migration-correctness/migration_checks.py --output r
 [fault_checks.csv](../../assets/eplb-weight-migration-correctness/data/fault_checks.csv)逐项列出六种版本的检查结果，[checks.json](../../assets/eplb-weight-migration-correctness/data/checks.json)保留恢复、总和碰撞和首 token 反例。程序使用整数与有理数运算，不需要 PyTorch，也不把 CPU 结果当作 NPU 内核回归。源码与原始设备、任务证据的对应关系放在[evidence.json](../../assets/eplb-weight-migration-correctness/evidence.json)。
 
 评审一条迁移优化时，我希望最后拿到的材料能连成一条具体路径：哪位逻辑专家去了哪里，哪些张量与状态一起改变，更新后的真实执行读到了什么，固定输入与最终任务表现是否符合预期。某一层失败，就沿这一层往下定位，而不是用“还能正常聊天”结束验证。
+
+固定输入以后，batch 和计算路径仍可能影响数值。怎样区分舍入、路由变化和真正的实现错误，见[同样的输入，换个 batch，为什么答案会变？](same-prompt-different-batch-numerics.md)。

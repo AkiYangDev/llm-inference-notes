@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="550" viewBox="0 0 1100 550" role="img" aria-labelledby="title desc">
+<title id="title">先固定前缀，再定位第一处分叉</title><desc id="desc">同一逻辑输入经不同形状或计算路径，可能出现数值差异，跨过路由或 token 选择边界后改变生成前缀；应在改变前缀之前比较。</desc>
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#5d788a" stroke-width="1.5"/></marker></defs>
+<rect width="1100" height="550" rx="16" fill="#f4f7fb"/>
+<g font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" fill="#18354c">
+<text x="35" y="45" font-size="25" font-weight="700">同一前缀、位置与 KV：把比较点放在生成分叉之前</text>
+<text x="35" y="79" font-size="18">数值接近不等于离散选择相同；逻辑专家 ID 与迁移后的物理槽位也要分开。</text>
+<g fill="#e0eaf3" stroke="#aec0d0"><rect x="40" y="117" width="300" height="120" rx="10"/><rect x="400" y="117" width="300" height="120" rx="10"/><rect x="760" y="117" width="300" height="120" rx="10"/></g>
+<g font-size="21" font-weight="700"><text x="63" y="153">执行条件</text><text x="423" y="153">中间数值</text><text x="783" y="153">离散选择</text></g>
+<g font-size="18"><text x="63" y="188">batch / 图桶 / 算子路径</text><text x="63" y="217">固定形状先重复，再换形状</text>
+<text x="423" y="188">层输出 / router / logits</text><text x="423" y="217">查第一处差值与候选间隔</text>
+<text x="783" y="188">逻辑专家集合 / 下个 token</text><text x="783" y="217">微小差值也可跨过边界</text></g>
+<g fill="none" stroke="#5d788a" stroke-width="2" marker-end="url(#arrow)"><path d="M340 177 H386"/><path d="M700 177 H746"/><path d="M910 237 V280 H550 V304"/></g>
+<rect x="200" y="316" width="700" height="87" rx="10" fill="#eadfcd" stroke="#c6b49a"/>
+<text x="550" y="350" text-anchor="middle" font-size="22" font-weight="700">选出不同 token → 前缀不同 → 后续输入已经不同</text>
+<text x="550" y="381" text-anchor="middle" font-size="18">比较整段回答太晚；固定参考前缀，回查首次分叉位置</text>
+<rect x="200" y="434" width="700" height="59" rx="10" fill="#dcebdd" stroke="#a7c0ac"/>
+<text x="550" y="470" text-anchor="middle" font-size="20">先排除数据、mask、KV 和映射错误，再评估舍入与质量</text>
+<text x="35" y="528" font-size="16">机制与诊断顺序示意图；不表示已确认某个设备算子存在以上差异。</text></g></svg>
