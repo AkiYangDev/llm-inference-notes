@@ -1,12 +1,16 @@
 # SGLang 的动态 EPLB：GPU 和 NPU 到底共用了什么，又差在哪里？
 
-把动态 EPLB 接到 Ascend 上，是否意味着要另写一套负载均衡？沿 SGLang 的调用链看，主要算法和迁移计划并没有分成 GPU、NPU 两份。两边共用 recorder、窗口累积、布局算法、单层搬运流程和映射提交；差异集中在有效路由怎样计数、权重怎样暴露给搬运器、通信使用哪个组，以及设备图入口的处理。
+把动态 EPLB 接到 Ascend 上，最初要回答的是一个工程问题：哪些现有代码可以直接使用，哪些地方需要适配设备？
 
-这篇文章以 PR #49701 整理后的 `2914be608009b65099c4c52ba118a597bf1b1421` 为源码截面，比较常规 CUDA GPU 路径与该 NPU 路径。GPU 侧存在多种通信和量化后端，下面会写清每个分支的条件，避免把一个配置说成所有 GPU 实现。四张图都根据这个固定版本绘制，是源码示意图。
+沿 SGLang 的调用链看，两边做的是同一件事：记录专家负载，计算新位置，搬好权重，再切换映射。这条主流程和布局算法可以共用。真正需要适配的地方，是怎样数清有效路由、怎样把设备权重交给搬运函数、使用哪个通信组，以及图捕获怎样进入模型。下面沿这条执行顺序逐段比较。
+
+这篇文章以 PR #49701 整理后的 `2914be608009b65099c4c52ba118a597bf1b1421` 为源码截面，比较常规 CUDA GPU 路径与该 NPU 路径。GPU 的通信和量化后端会选择不同分支，下面按实际调用条件展开。四张图对应这个固定版本的源码。
 
 ## 一、先把整条链放在一起
 
 一轮更新可以按数据流分成四步：记录专家被路由到的工作量；把窗口计数交给算法，产生新物理布局；把对应权重搬到新槽位；最后让模型使用新映射。
+
+可以用专家 E0 的一次移动串起来看。统计发现 E0 的负载太集中，算法决定在另一个 rank 上放一份 E0。搬运函数负责把 E0 的权重送到指定槽位；等数据可用后，映射才允许后续 token 选择这个新位置。GPU 和 NPU 都需要完成这些动作，区别在每一步接触设备数据的方式。
 
 ![GPU 与 NPU 共用的主链及各自接入位置](../../assets/sglang-eplb-gpu-npu-implementation/shared-pipeline.svg)
 
@@ -32,13 +36,13 @@
 
 CUDA 的部分 TopK 后处理还有融合路径：当 recorder 提供当前层计数 buffer，且映射方式满足融合入口的条件时，逻辑到物理 ID 映射与计数一起完成，随后跳过重复的 recorder hook。没有命中融合路径时，才继续常规后处理。对应 [TopK 调用处](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/layers/moe/topk.py#L2634-L2662)和[融合映射的选择条件](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_dispatch.py#L123-L137)。所以，图中“TopK 计数”描述的是数据来源，不能据此推断每一层必然多启动一个独立计数 kernel。
 
-因此，维护上的目标是相同的统计含义。强行使用同一个事件字段，并不自动得到相同的有效负载。
+对这两个入口，维护者首先要核对的是同一个问题：交给均衡器的数，是否都表示真实 token 的有效专家分配。后端提供的字段可以不同，只要经过处理后符合这份统计定义，就可以进入共同的窗口和算法。
 
 ## 三、最主要的权重差异，发生在进入 updater 以前
 
 GPU 常规路径从模型拿到专家权重列表，按这些张量创建 scratch，再把它们交给 `update_expert_weights_single_layer()`。以连续 `[E,M,N]` 权重为例，取 `weight[e]` 就是一位专家的完整数据。
 
-公共代码也处理非稠密专家切片：它检查单专家布局，必要时建立连续发送区，并在满足条件时使用 int64 view 搬运。不能把 GPU 路径概括成“所有权重天然连续、永远没有暂存”。完整分支见[公共 raw 更新与单层准备](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py#L148-L296)。
+公共代码还要处理非稠密的专家切片。它先检查单专家布局，遇到无法直接发送的表示，就准备连续发送区；满足条件时，再使用 int64 view 搬运。因此，这里的对比要具体到传入张量及其准备过程，GPU 也有处理存储布局的工作。完整分支见[公共 raw 更新与单层准备](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py#L148-L296)。
 
 NPU 权重还可能带有 NZ 存储描述、物理 padding、内层转置和量化打包。逻辑 `numel()` 描述的是可见张量，不一定等于要搬走的完整物理专家块。旧 NPU 方案先转换成连续 ND 工作权重，迁移后再转换、写回；当前方案则建立原存储的字节别名。
 
@@ -65,7 +69,7 @@ update_layer_fn(
 )
 ```
 
-这里传入的 `update_layer_fn` 就是公共单层更新函数。NPU 没有另外复制同机来源选择、跨机来源选择和 batch P2P 逻辑；适配层改变的是权重表示及通信组。真实调用见 [NPU 迁移入口](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L57-L106)。
+这里传入的 `update_layer_fn` 就是公共单层更新函数。适配器在调用它之前，把 NPU 权重整理成“每一行就是一位专家的完整字节”的可写视图。公共函数随后仍按原来的方法选择来源、安排发送接收、写入目标。因此维护者检查搬运计划时，可以继续读同一份代码；需要了解 NZ 存储边界时，再进入 NPU 适配器。真实调用见 [NPU 迁移入口](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L57-L106)。
 
 ![两边共享的迁移依赖与映射提交顺序](../../assets/sglang-eplb-gpu-npu-implementation/update-order.svg)
 
@@ -79,7 +83,7 @@ NPU 还在入口筛选变化层及本 rank 是否参与，但不能仅看本卡�
 
 固定版本里，GPU 的 `get_eplb_group()` 返回 `None`，表示相关 PyTorch 通信走默认组；NPU 在非弹性、PP=1、TP 覆盖 WORLD 的条件下返回已有 TP 的 device group。NPU 迁移入口还检查 TP、EP、EPLB 组与 WORLD 的规模一致。
 
-这不是“GPU 不用 TP、NPU 不用 WORLD”的整体架构结论。模型 forward 自己还有其他通信组与专用通信器；这里比较的是这条 EPLB 统计和迁移路径。组选择源码见 [`get_eplb_group`](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location.py#L41-L50)。
+这里讨论的组负责 EPLB 统计和迁移。模型 forward 还会使用 TP、EP 等其他通信组以及专用通信器，需要沿各自的调用入口查看。组选择源码见 [`get_eplb_group`](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location.py#L41-L50)。
 
 复用 TP 的理由，是使用已有成员与资源，避免另外激活默认 WORLD 的设备通信资源。复用条件不能只看“都是 HCCL”：如果 TP 是 WORLD 的子组，rank 编号与 root 语义就需要重新定义，不能原样替换。该版本没有通过放宽检查来宣称支持 PP。
 
@@ -108,9 +112,9 @@ NPU 图后端额外保护捕获入口，是因为部分捕获回调直接调用�
 | 本条 EPLB 通信组 | 默认组 | 满足约束时复用 TP device group |
 | 当前 NPU 拓扑约束 | 不能据此列举全部 GPU 支持范围 | PP=1，TP=EP=组规模=WORLD |
 
-此前公开的 P 更新 696→611 ms、D 更新 730→658 ms，是同为 NPU、旧 ND 路径与新物理路径的对照；P / D 采样 HBM 减少中位数 839.5 / 1641.5 MiB，也来自同实际 KV 容量下的那组实验。它们不回答“GPU 和 NPU 哪边搬得快”。两次运行的迁移计划也并非逐字相同，完整条件见[原始存储路径文章](../performance/ascend-eplb-physical-storage-migration.md)。
+此前公开的 P 更新 696→611 ms、D 更新 730→658 ms，是同为 NPU、旧 ND 路径与新物理路径的对照；P / D 采样 HBM 减少中位数 839.5 / 1641.5 MiB，也来自同实际 KV 容量下的那组实验。这组数据展示了 NPU 存储路径重构后的更新时间与设备水位变化；两轮都根据各自负载生成迁移计划，完整条件见[原始存储路径文章](../performance/ascend-eplb-physical-storage-migration.md)。
 
-如果要比较两边的迁移实现，应至少固定布局变化、每专家实际字节数、源与目的分布、参与 rank、网络拓扑、计时完成边界。比较整服务，则还要对齐实际 batch、上下文、KV、投机配置与请求负载。本文先把实现边界说清，避免在没有同条件硬件对照时制造一个百分比。
+如果要比较两边的迁移实现，应至少固定布局变化、每专家实际字节数、源与目的分布、参与 rank、网络拓扑、计时完成边界。比较整服务，则还要对齐实际 batch、上下文、KV、投机配置与请求负载。沿这些条件建立对照，就能继续测量权重表示、通信组和后端执行各自带来的时间变化。
 
 四张图的 [SVG 原文件与固定源码索引](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/sglang-eplb-gpu-npu-implementation/diagrams.zip)可以下载。向同事解释时，从第一张共用主链开始，再用第三张说明 NPU 适配器；若问题在计数或通信组，分别回到对应分支，读者不必先背完所有文件。
 

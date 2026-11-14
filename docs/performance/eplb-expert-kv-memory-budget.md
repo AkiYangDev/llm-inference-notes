@@ -49,6 +49,8 @@ down: [hidden, intermediate]
 
 第一行是单个 rank 的负担，第二行是跨 16 个 rank 的合计。后者没有堆在某一张卡上；也不能拿它去除以一份单卡 KV 的字节数，然后声称某张卡少了那么多 token。
 
+后面与 KV 比较时，一直使用第一行的每 rank 数值：这个 rank 多存了多少专家，就看它自己的缓存池能少留多少历史。跨 rank 的合计适合计算整套设备的总成本，不能替代任何一个本地缓存池的容量。
+
 实际工程里，要把公式中的 42 MiB 换成当前量化实现分给一个专家的完整物理字节数。融合的 w13 已经包含 gate 和 up，不能再把 gate、up 重复加一次。scale 和 bias 等辅助张量要一起计入；遇到 NZ 或 packed 权重，还要算物理 padding。多个导出视图共享同一份底层存储时，也不能把整块 storage 按视图数量重复求和。
 
 这几项决定了为什么“磁盘上的模型大小 ÷ 专家数”通常算不准：文件里还包含 Attention、共享专家、Dense、embedding 等权重；部署后又可能重排、分片和补齐。本文的简单公式适合检查数量级，启动后的实际分配和张量布局用于完成最后核对。
@@ -74,6 +76,8 @@ KV 的单位应当是“当前 rank 为一个缓存 token 保存多少字节”�
 
 但“约两条”还不是服务最大并发的下降量。服务可能有多个 Attention DP 副本，序列长度也不一致；共享前缀可以复用缓存块，页尾会留下碎片，投机解码还要预留候选位置。先在一个确定的本地 pool 内算容量，再结合请求归属和调度，才能讨论整服务并发。
 
+KV token 容量数的是所有驻留序列留下的历史之和。一条请求刚进入时可能只有输入，随后每生成一个 token，历史还会继续增长。因此，“最多有多少条请求”要结合它们当前各自多长来看；表里用完整 17K 序列，是为了给出统一长度下能直接复算的容量边界。
+
 下面把其他固定分配和运行余量先扣除，假定 R0 时本地 KV 可用预算是 40 GiB。只从这块预算里增加上述主权重，得到：
 
 | 每层 EP 组冗余数 | 每 rank 新增主权重 | 剩余 KV 预算 | 理想本地 KV token | 完整 17K 序列 |
@@ -82,7 +86,7 @@ KV 的单位应当是“当前 rank 为一个缓存 token 保存多少字节”�
 | 16 | 2.379 GiB | 37.621 GiB | 574,842 | 33 |
 | 32 | 4.758 GiB | 35.242 GiB | 538,493 | 30 |
 
-这张表忽略 scale、padding、页尾和运行期变化，用于复算容量交换。完整 17K 序列一列向下取整，表示所有序列都长到终点时能留下多少份；真实 continuous batching 不会让每条请求始终保持同一个长度。
+表中的“完整 17K 序列”用 token 容量除以 17,408 后向下取整，余下空间不够再容纳一条完整序列。这里先省略 scale、padding、页尾和运行期变化，专门看主权重与 KV 的交换。真实服务采用 continuous batching，请求会陆续进入和结束，各自的历史长度也持续变化，需要再用实际长度分布检验。
 
 ![相同预算里，冗余专家主权重与 KV 的交换](../../assets/eplb-expert-kv-memory-budget/budget.svg)
 
@@ -116,7 +120,7 @@ PD 分离还会把取舍拆到两个服务。P 的冗余专家占用 P 的内存
 
 我们此前在 Ascend 910C 上做过一次 DeepSeek-V4-Flash W8A8 的新旧搬运路径对照。两边都开动态 EPLB，冗余数相同，实际 KV 容量固定；移除 NZ↔ND 整层中转后，P 每芯片采样 HBM 差值的中位数下降 839.5 MiB，D 下降 1,641.5 MiB。完整配置、采样范围和逐芯片原始数据放在[存储路径重构文章](ascend-eplb-physical-storage-migration.md#kv)。
 
-这个结果说明，降低迁移路径的内存成本，可以让系统保留同样的专家和 KV。它比较的是两种 ON 实现，没有比较 R0、R16、R32，也没有在这轮实验里把省下的空间重新分给 KV。因此不能把它写成“已经多跑了几条序列”。要兑现成容量收益，需要重新配置 pool 并验证实际分配。
+这组实验比较两种 ON 实现，在保持专家和实际 KV 相同的条件下，观测到了更低的设备水位。省下的空间目前表现为运行余量。若想把它换成更多驻留序列，下一步需要重新配置 KV pool，记录最终 token 容量，再测对应长度下能维持多少实际 batch。R0、R16、R32 的副本预算比较则属于前面的另一项实验。
 
 还有一种容易错算的情况：两边设置相同 `mem_fraction_static`，更多权重挤掉了自动规划的 KV，最终设备总占用却差不多。总水位相同，不代表开关没有成本。SGLang 的 [KV 预算计算](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/mem_cache/kv_cache_configurator.py#L3027-L3097)使用加载后的可用内存，并扣除运行余量等项目；已经驻留的权重会通过剩余空间影响预算。
 
@@ -150,7 +154,7 @@ PD 分离还会把取舍拆到两个服务。P 的冗余专家占用 P 的内存
 python examples/eplb-expert-kv-memory-budget/memory_budget.py --output results
 ```
 
-脚本会生成 [capacity.csv](../../assets/eplb-expert-kv-memory-budget/data/capacity.csv) 和 [budget.json](../../assets/eplb-expert-kv-memory-budget/data/budget.json)，复算 42 MiB、2,436 MiB、三档 KV 容量及 35→33 的教学例子。[示例包直接下载](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/eplb-expert-kv-memory-budget/examples.zip)，参数和来源见[evidence.json](../../assets/eplb-expert-kv-memory-budget/evidence.json)。它计算字节和整数边界，不预测设备吞吐。
+脚本会生成 [capacity.csv](../../assets/eplb-expert-kv-memory-budget/data/capacity.csv) 和 [budget.json](../../assets/eplb-expert-kv-memory-budget/data/budget.json)，复算 42 MiB、2,436 MiB、三档 KV 容量及 35→33 的教学例子。[示例包直接下载](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/eplb-expert-kv-memory-budget/examples.zip)，参数和来源见[evidence.json](../../assets/eplb-expert-kv-memory-budget/evidence.json)。它逐项计算字节、可容纳 token 数和完整序列数，输出与正文表格对应。
 
 下一次看到“更新后 forward 快了几个百分点”，可以继续追问两个具体数：这个工作集还剩多少 KV 余量，稳定运行时实际 batch 保住了多少。把这两个数和更新成本放到一起，才知道那份专家副本有没有花对地方。
 

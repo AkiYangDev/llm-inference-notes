@@ -39,7 +39,7 @@ Router 以后仍然选择逻辑专家 B，分发过程根据新映射找到 rank
 
 模型代码看到的一个张量，包含地址、dtype、shape、stride 等信息。地址指向设备上的数据；shape 说明逻辑上有几个维度、每维多长；stride 说明沿一个维度走一步，需要跨过多少个元素。
 
-这些信息描述了怎样访问数据，并不意味着每次改变 shape 或 stride 都要复制数据。
+可以先把张量分成“数据”和“访问说明”两部分。设备内存里保存着一串字节；shape、stride、dtype 告诉算子怎样把它们读成矩阵。两个 Tensor 对象可以使用同一串字节，却给出不同的访问顺序。转置视图正是这种情况：改的是访问说明，数据可以留在原处。
 
 下面是一个普通 PyTorch 教学例子：
 
@@ -71,6 +71,8 @@ Ascend 的 FRACTAL_NZ 是供计算使用的分块存储格式。逻辑矩阵仍�
 ```
 
 生产适配器实际得到的传输视图却是 `[6, 4096] uint8`：每个专家占 4,096 字节。把内部两维转置成 `[6, 64, 17]` 后，传输视图仍是 `[6, 4096]`。逻辑元素没增加，物理分块的 padding 也没有因为转置消失。
+
+读这组数时，可以逐个回答三个问题。模型认为一位专家有多少有用元素？由逻辑 shape 决定。设备实际为它留了多大空间？由 NZ 的物理分块决定。迁移要带走哪一段？这里必须带走完整的 4,096 字节，使接收端拿到和源端相同的物理表示。padding 不增加模型参数，却占据这段存储的一部分。
 
 如果只搬 2,176 字节，相当于凭逻辑大小截取了一段 NZ 存储，并没有搬完这位专家的完整物理表示。新版要搬的是 4,096 字节这一整块。torch_npu 对 NZ 及其 C0 变体的存储格式定义，可对应其 [FormatHelper](https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/torch_npu/csrc/framework/FormatHelper.cpp#L51-L75) 查看。
 
@@ -165,7 +167,9 @@ view = torch_npu._C._construct_NPU_Tensor_From_Storage_And_Metadata(
 
 模型还是按原来的 NZ 方式计算。通信和复制通过字节视图访问整块物理数据。把接收到的某位专家字节复制进 view 的一行，就已经改写了模型对应槽位的权重。
 
-因此，代码中的 `npu_format = ND` 并不意味着做了 NZ→ND 数据转换。这里设置的是新包装的字节解释方式，原数据没有重新排列，原权重的 NZ 描述符也没有改动。这个区别是整次重构最容易看错的地方。
+可以沿一次写入把图读完：迁移器拿到 B 的完整字节，将它写进目标 view 的一行；这一行对应的就是模型原来的专家槽位。后续模型仍使用自己的 NZ 描述读取该槽位，于是读到 B。view 负责给搬运器指路，模型参数负责给计算内核说明格式，两者共用数据地址。
+
+代码里的 `npu_format = ND` 设置在新建的字节描述上。若真的做 NZ→ND 格式转换，设备要重新整理数据并生成转换结果；这里既没有这项数据整理，也没有生成整层权重副本。分清“新建描述”和“重新组织数据”，就能看懂这行设置。
 
 新版的尾部由此变短了：updater 把 scratch 的内容复制到目标字节行，这个写操作已经落到原模型存储，无须再生成一张 NZ 结果并整层写回。[当前 _expert_storage_view()](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L334-L365)保留了完整实现。
 
@@ -282,7 +286,7 @@ weight.record_stream(torch.npu.current_stream())
 
 ## 七、少掉的空间和时间，在完整服务里怎样体现
 
-先区分三笔账。模型的 NZ 存储仍然存在，物理 padding 仍然存在；scratch 也仍然需要。省掉的是旧路径为整层格式转换、整理和额外写回准备的中转分配。
+看显存结果前，先把三种空间对应到用途。模型原权重长期保存，forward 一直读取它；scratch 在迁移时保护旧源、接收远端数据；旧方案的 ND 中转则额外保存整层转换结果。新方案去掉的是第三种空间，以及恢复格式、额外写回时的相应分配。前两种空间各有职责，继续保留。
 
 因此，这次没有把模型权重量化得更小，也没有承诺迁移峰值为零。对没有 padding 的布局，字节传输量可以与原逻辑数据量相同；有 padding 时，物理字节路径还要携带 padding，传输量反而可能更大。选择它的依据是免去格式转换与整层中转后的整体成本。
 
@@ -343,7 +347,7 @@ new D: [EPLBManager] rebalance end time=0.658s
 
 例如 P 的 chip 0，从旧版 58,224 MiB 到新版 57,422 MiB，少了 802 MiB。P 旧版每芯片有 25 个选中样本，新版 26 个；D 两边都是 25 个。D 的取窗还应用了实际测得的主机时钟偏移。
 
-这些是服务设备总占用的采样值，包含分配器缓存、scratch 和其他运行时资源；它们没有直接把每一个减少的字节标成“转换缓冲”。从代码可以确认转换中转被删除，从对照可以确认服务水位下降，两份证据各自保留自己的含义。五秒级采样也不能当作连续峰值测量。[逐芯片统计](https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_per_chip.csv)和[全部选中样本](https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_selected_samples.csv)都可下载。
+这些是服务设备总占用的采样值，包含分配器缓存、scratch 和其他运行时资源；它们没有直接把每一个减少的字节标成“转换缓冲”。这两份材料可以合起来读：代码解释为什么有机会少占空间，设备采样确认这两次服务实际少占了多少。要继续把减少量拆到某个缓冲区，才需要查该分配的地址和生命周期。五秒级采样也不能当作连续峰值测量。[逐芯片统计](https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_per_chip.csv)和[全部选中样本](https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-update-memory-20261111/memory_selected_samples.csv)都可下载。
 
 ### 整服务吞吐没有随 update 一起提高
 

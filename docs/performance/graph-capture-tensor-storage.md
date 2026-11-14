@@ -6,7 +6,7 @@
 
 先看一项乘法：输入 `x=2`，权重 `weight=3`，捕获的工作是计算 `x * weight`。之后把原权重里的 3 改成 5，回放应得到 10；把 Python 变量 `weight` 改为指向另一张值为 5 的张量，普通回放仍然使用捕获时的旧地址。
 
-关键在于区分三件事：Python 名字指向哪个对象，Tensor 对象描述哪块存储，以及设备执行任务实际读取哪个地址。下面先按没有显式图更新的普通回放讲清这三层，再对照 SGLang 的输入缓冲、输出缓存和 NPU 参数更新路径。
+沿着这次乘法，依次看三个位置就够了：Python 的 `weight` 名字、它指向的 Tensor 对象、图中乘法记录的设备地址。普通 Python 计算每次重新查名字；图回放直接用已经记录的地址。这条差别贯穿后面的赋值、复制和存储替换。先讲普通回放，再看 SGLang 怎样准备输入，以及 NPU 怎样显式更新受支持的图参数。
 
 这里的图指 `torch.cuda.CUDAGraph` 和 `torch.npu.NPUGraph` 这类设备执行图。源码固定为 PyTorch 2.10、Ascend/pytorch 的 [`e945b708`](https://github.com/Ascend/pytorch/blob/e945b7088a865036fbd06bc02c3097005526469a/torch_npu/npu/graphs.py)，以及 SGLang 的 [`2914be608`](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py)。下文的 2、3、5 是教学用值，设备示例的预期结果集中列在文末。
 
@@ -23,7 +23,7 @@
 把结果写入地址 Y0
 ```
 
-这只是帮助理解的任务描述，不是后端实际的图文件格式。真正实现还包含内核、工作空间、参数与执行依赖等信息。这里最重要的一点是：输入和权重在执行任务中以地址参与，图并没有保存一条“下次去 Python 里重新查找变量 weight”的指令。
+上面的任务描述用来说明地址关系。后端真正保存的图还包含内核、工作空间、参数和执行依赖。重放时，它按已建立的关系访问输入与权重；Python 名字 `weight` 后来绑定到哪个对象，属于另一层状态，重新赋值不会自动改写这些任务参数。
 
 模型的一轮 forward 往往要提交很多设备任务。把这些工作捕获成图以后，CPU 可以通过图回放发起这轮计算，减少反复执行 Python、调度和逐项提交的开销。设备仍然要读取输入和权重，完成这轮实际计算，因此原地址中的新数值能够影响结果。
 
@@ -79,7 +79,7 @@ graph.replay()
 
 这次 `id(weight)` 可以不变，`weight.data_ptr()` 却已经从 W0 变成 W1。普通回放没有重新读取这个 Tensor 对象来生成参数，仍然访问 W0。因为演示显式保留了旧存储，所以图得到 6；新的 eager 计算使用已改指向的张量，得到 10。
 
-这也说明了为什么不能只看函数名末尾有没有下划线。“原地修改对象”与“保留原数据地址”不是同一个条件。`copy_` 在原分配里写数据，`set_` 则可以改掉这个对象所描述的存储。
+读这两个带下划线的方法时，要继续追它们修改的对象：`copy_` 修改原分配里的内容；`set_` 修改 Tensor 指向哪份存储。图关心的是乘法读取的地址，所以两种操作对旧图的效果不同。
 
 | 操作 | Python 对象 | 数据起点 | 普通旧图读取 |
 | --- | --- | --- | --- |
@@ -152,6 +152,8 @@ return self._outputs[shape_key]
 
 返回值是捕获时登记的输出对象，其底层数据由本次图执行更新。调用者若需要跨多轮保存结果，就要遵守上一节的输出生命周期，而不能把它当作每轮新分配的独立结果。
 
+这也解释了服务代码里为什么会同时出现“固定输出对象”和“本轮请求结果”。前者是设备反复写入的工作区，后者需要在适当时机取出本轮有效部分。把工作区的引用直接交给一个还会长期持有它的消费者，下一轮覆盖时，消费者看到的数据也会跟着变。
+
 本轮输入也不是靠重新绑定 `forward_batch` 就自动进入图。NPU 后端的 [prepare_replay()](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py#L207-L219)有将 token 与位置写入捕获缓冲的分支：
 
 ```python
@@ -212,7 +214,7 @@ SGLang 的 [replay_with_input_update()](https://github.com/sgl-project/sglang/bl
 
 ## 六、地址没变，还要检查存储有效期和执行顺序
 
-到这里仍然不能把图安全简化成 `data_ptr()` 相等。这个检查只回答两个观察时刻的数据起点数值是否一致，不能证明地址背后的存储一直有效，也不能证明读取前的写入已经完成。
+核对 `data_ptr()` 以后，还要接着问两件事：这块分配是否一直被正确持有；新数据是否在图读取之前写完。指针相等只比较了两次观察到的地址数值。地址背后的内存已经被回收，或者写入仍在另一条流里排队，都会让“地址相同”失去原本想证明的含义。
 
 ### 存储要能活过未来的每次回放
 
@@ -254,7 +256,7 @@ SGLang 的 [replay_with_input_update()](https://github.com/sgl-project/sglang/bl
 
 检查真实模型时，还要找到算子最终读取的那份权重。如果加载或编译过程额外生成了预打包副本，更新源 Parameter 后，也需要更新或失效对应副本。只看 Python 模型属性里的值已经变化，不能证明设备任务读取的那份数据也变了。EPLB 迁移必须拿到实际参与推理的权重存储。
 
-所以“不能换张量”不应理解成程序里不能出现新 Tensor。真正要问的是：新对象是否替代了图原先使用的地址，还是仅仅为同一份存储增加了一种受控的访问方式。[NPU 的 _expert_storage_view()](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L334-L365)正是在同一 `weight.data_ptr()` 上构造独立的字节描述，细节见[上一篇存储迁移文章](ascend-eplb-physical-storage-migration.md)。
+程序当然可以创建新的 Tensor。判断它会不会影响旧图，要看这个对象准备接替什么：若替换图原先读取的分配，就需要相应图更新；若只给同一份存储增加访问视图，模型原地址仍可以保留。[NPU 的 _expert_storage_view()](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/eplb.py#L334-L365)正是在同一 `weight.data_ptr()` 上构造独立的字节描述，细节见[上一篇存储迁移文章](ascend-eplb-physical-storage-migration.md)。
 
 同样，专家权重写完还不够。权重槽位与路由映射要按一致的顺序切换。本文固定实现中，[外层 updater](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/eplb/expert_location_updater.py#L43-L83)先调用权重迁移，再更新相关层的位置元数据。保留地址解决了图的访问约定，迁移算法和调度依赖解决的是读写安全，两者缺一不可。
 
@@ -272,7 +274,7 @@ SGLang 的 [replay_with_input_update()](https://github.com/sgl-project/sglang/bl
 
 ### 随文设备示例
 
-[graph_storage_demo.py](../../examples/graph-capture-tensor-storage/graph_storage_demo.py)提供五项小例子：`copy_`、Python 重新绑定、`set_` 换存储、输出复用，以及 Python 分支和标量。它只创建几个单元素张量，不加载模型、不启动服务，也不创建通信组。
+[graph_storage_demo.py](../../examples/graph-capture-tensor-storage/graph_storage_demo.py)提供五项小例子：`copy_`、Python 重新绑定、`set_` 换存储、输出复用，以及 Python 分支和标量。它使用单元素张量，让地址、数值和输出变化可以直接打印查看。
 
 下载脚本并进入保存它的目录，在已经具备相应 PyTorch 与设备运行环境的空闲设备上，可选择执行：
 
@@ -286,7 +288,7 @@ python graph_storage_demo.py --backend npu --device-index 0
 python graph_storage_demo.py --backend cuda --device-index 0
 ```
 
-按本文分析的普通捕获与回放语义，脚本中断言的预期结果如下。这是预期值表，不是本稿新采集的设备运行记录：
+脚本按普通捕获与回放语义设置以下断言。运行时可以将实际输出与这张预期值表逐项核对：
 
 | 例子 | 初次图输出 | 修改后的图输出 | 另行观察 |
 | --- | ---: | ---: | --- |

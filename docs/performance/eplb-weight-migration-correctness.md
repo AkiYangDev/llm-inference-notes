@@ -12,6 +12,8 @@ EPLB 改变的是逻辑专家的放置位置。专家 A 可以从 rank 0 的槽�
 
 假设某层三个槽位原本是 `[A,B,C]`，更新后变成 `[B,C,A]`。验证目标很具体：新槽位 0 的完整专家数据对应旧 B，新槽位 1 对应旧 C，新槽位 2 对应旧 A；路由也要改为按这个新位置寻找逻辑专家。
 
+检查时要沿“逻辑专家”追数据。更新前，A 在槽位 0；更新后，A 在槽位 2，所以应当比较旧槽位 0 与新槽位 2。若始终比较同一槽位下标，看到的本来就是两个不同专家，正常搬运也会被误判为权重变化。给快照同时记下逻辑 ID 和物理槽位，可以避免这类混淆。
+
 这里的“完整专家数据”需要从模型当前量化实现确认。除了 gate/up/down 主权重，还可能有 scale、zero point、bias 或其他辅助张量。同一组量化整数配上不同 scale，会表示不同的实数权重；只对主矩阵做拷贝校验，会漏掉这种错配。
 
 把专家缩成两个整数更直观：B 的量化权重是 `[6,8]`，scale 为 2，输入为 `[1,2]`，结果是 `(6 × 1 + 8 × 2) × 2 = 44`。若只把 `[6,8]` 搬到旧 A 的位置，却留下 scale=1，结果就变成 22。主权重逐字节完全正确，计算照样已经错了。
@@ -48,7 +50,7 @@ NZ 和 packed 权重还要先界定比较区域：专家的有效字节、物理
 
 图回放也必须实际测。固定 NPU 后端的[普通 replay 分支](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/graph_runner/npu_cudagraph_backend.py#L543-L544)重放图后返回已有输出对象。保存多轮对照时，要在本轮结果有效期间复制快照；只往列表里存同一个输出对象，下一次回放可能把前一份“结果”一起覆盖。
 
-这也是为什么权重字节一致、地址没变、eager 输出正确，都不能省略 graph replay 的检查。图的输入、输出和依赖需要一起成立，细节可以结合[图捕获与张量存储](graph-capture-tensor-storage.md)阅读。
+可以让同一份固定输入分别走 eager 和实际 replay：eager 检查当前模型对象能否正确计算，replay 检查捕获后的执行是否仍读到正确数据。保存两边结果时都复制独立快照，并记录读写完成时刻。若只在 replay 出错，地址引用和设备依赖就是需要继续追的方向，细节可以结合[图捕获与张量存储](graph-capture-tensor-storage.md)阅读。
 
 ## 四、固定状态，看模型哪一步开始偏了
 
@@ -56,7 +58,7 @@ NZ 和 packed 权重还要先界定比较区域：专家的有效字节、物理
 
 这里要固定的比输入文字多。token ID、position、有效长度、attention mask、batch 排列、KV 内容及其位置、图桶和相关元数据都属于这次计算的输入。Decode 会推进 KV 和位置，直接把相邻两步的输出拿来比，实际上已经换了上下文。投机解码还要对齐候选 token 和验证状态。
 
-布局更新本身应当真的改变物理位置。至少留下一层的旧/新映射、变化槽位数和更新回执；只开着 `--enable-eplb`，却没有触发更新，或者 planner 返回原布局，都没有覆盖搬运后的前向。
+先确认这次更新确实搬动了权重：保存至少一层的旧、新映射，数出变化槽位，再核对更新完成回执。若 planner 返回原布局，这轮可以用于检查跳过路径；要验证搬运后的前向，则继续选取实际有位置变化的更新。
 
 对照可以先从目标 MoE 层输出开始，再到完整模型 logits。logits 是模型给词表各 token 的分数，最终采样或取最大值只是它的后续处理。如果最早一层就出现大误差，定位比等最终回答变错容易得多。
 
@@ -91,7 +93,7 @@ Ascend 910C 的 P、D 两端各有十项设备小实验：ND、int8→int32 打�
 | 设备存储小实验，P/D 各十项通过 | 这些已测布局能否正确重排、恢复并保留张量描述 |
 | 该提交的 GSM8K，1,283/1,319 | 该版本与该评测配置下，完整模型的实际答题结果 |
 
-GSM8K 的[完整公开附件](https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-validation-20261111/gsm8k-final-evidence.zip)包含原生逐题预测、summary 和原始截图。设备小实验与任务结果共同提供覆盖，不能把“字节一致”改写成“所有模型质量都已证明”，也不能把旧提交的评测标成本文解读提交的重测。
+GSM8K 的[完整公开附件](https://github.com/AkiYangDev/sglang/releases/download/eplb-pr49701-validation-20261111/gsm8k-final-evidence.zip)包含原生逐题预测、summary 和原始截图。读这些材料时，可以先用设备小实验确认存储重排，再查看对应提交的任务答题结果。两组材料分别保留版本号，后续代码变化也就有了明确的回归起点。
 
 ## 七、把能漏掉错误的检查，放进一个可运行例子
 
@@ -107,9 +109,9 @@ GSM8K 的[完整公开附件](https://github.com/AkiYangDev/sglang/releases/down
 python examples/eplb-weight-migration-correctness/migration_checks.py --output results
 ```
 
-[fault_checks.csv](../../assets/eplb-weight-migration-correctness/data/fault_checks.csv)逐项列出六种版本的检查结果，[checks.json](../../assets/eplb-weight-migration-correctness/data/checks.json)保留恢复、总和碰撞和首 token 反例。程序使用整数与有理数运算，不需要 PyTorch，也不把 CPU 结果当作 NPU 内核回归。源码与原始设备、任务证据的对应关系放在[evidence.json](../../assets/eplb-weight-migration-correctness/evidence.json)。
+[fault_checks.csv](../../assets/eplb-weight-migration-correctness/data/fault_checks.csv)逐项列出六种版本的检查结果，[checks.json](../../assets/eplb-weight-migration-correctness/data/checks.json)保留恢复、总和碰撞和首 token 反例。程序使用整数与有理数运算，可以直接运行，输出每种注入错误触发了哪些检查。源码与原始设备、任务证据的对应关系放在[evidence.json](../../assets/eplb-weight-migration-correctness/evidence.json)。
 
-评审一条迁移优化时，我希望最后拿到的材料能连成一条具体路径：哪位逻辑专家去了哪里，哪些张量与状态一起改变，更新后的真实执行读到了什么，固定输入与最终任务表现是否符合预期。某一层失败，就沿这一层往下定位，而不是用“还能正常聊天”结束验证。
+把这些检查按一次更新串起来，最后应能回答：A 从哪个旧槽位到了哪个新槽位，主权重和 scale 是否都对上，路由是否找到了它，真实 replay 是否使用了它，以及固定输入和任务结果是否达标。数据错就查来源和字节边界；数据对、路由错就查映射；两者都对但 replay 错，再查存储引用和执行依赖。定位可以沿着这条顺序逐步缩小。
 
 固定输入以后，batch 和计算路径仍可能影响数值。怎样区分舍入、路由变化和真正的实现错误，见[同样的输入，换个 batch，为什么答案会变？](same-prompt-different-batch-numerics.md)。
 

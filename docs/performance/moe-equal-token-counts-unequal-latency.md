@@ -4,11 +4,11 @@
 
 这种情况要把问题拆开看。卡上的路由总数相同，保留的是工作量的一项统计；算子还要处理每位专家的矩阵形状、数据排列和读写，通信还要等数据与依赖就绪，MoE 之前的 Attention 也有自己的工作。计数没有记录这些时间。
 
-下面沿一层 DeepSeek MoE 展开：先确认热度表数的是什么，再看相同总数怎样形成不同的分组，最后用一张两 rank 时间线解释等待该算在谁头上。源码固定在 SGLang [`2914be60`](https://github.com/sgl-project/sglang/tree/2914be608009b65099c4c52ba118a597bf1b1421)。文中的矩阵分组、64 行 tile 和毫秒时间线用于教学复算；引用已有 Ascend 910C 实验时，会给出它实际验证的内容。
+下面沿一层 DeepSeek MoE 展开：先确认热度表数的是什么，再看相同总数怎样形成不同的分组，最后用一张两 rank 时间线解释等待该算在谁头上。源码固定在 SGLang [`2914be60`](https://github.com/sgl-project/sglang/tree/2914be608009b65099c4c52ba118a597bf1b1421)。下面用教学矩阵分组、64 行分块和两 rank 时间线解释机制；第一节先放一组 Ascend 910C 的真实有效路由实验。
 
 ## 一、先问“一样多”是在数哪一层
 
-一个 token 经过 TopK 路由，会选择多位专家。TopK 8 时，一行有效 token 形成八条 token→expert 关系。因此专家热度通常数的是**路由条数**，不是八个不同请求，也不是客户端输出了八个 token。
+一个 token 经过 TopK 路由，会选择多位专家。TopK 8 时，一行有效 token 形成八条 token→expert 关系。热度表把这八次选择分别记到对应专家名下，所以它统计的是**路由条数**；客户端看到的仍是这一枚 token 的生成进度。
 
 EP 把专家分在不同 rank。本 rank 的专家会接到多个来源 rank 的路由，所以它们的合计也不等于本 rank 在 Attention 阶段处理的原始 token 行数。到了专家计算前，这些路由通常已经按本地专家重新组织。
 
@@ -42,7 +42,9 @@ rank 1：[ 64,  64,  64,  64, ...   ]，16 位专家各 64 条
 
 Grouped GEMM 会把不同专家的矩阵乘组织到分组算子中执行，各组仍使用各自的权重。上例交给它的分组不同：一边是四个较大的 M，另一边是十六个较小的 M。固定源码的 [NPU GroupedMatmul](https://github.com/sgl-project/sglang/blob/2914be608009b65099c4c52ba118a597bf1b1421/python/sglang/srt/hardware_backend/npu/moe/matmul.py#L24-L50)直接把 `expert_tokens` 传作 `group_list`；[官方接口说明](https://ascend.github.io/docs/sources/pytorch/api_doc.html#torch_npu.npu_grouped_matmul)也把它解释为输入 M 轴的分组信息。算子需要知道完整分组，单独一个 1,024 无法替代。
 
-M 较大时，一份专家权重可以被更多行使用；M 较小时，权重搬入、分组调度和尾块处理的成本分摊到更少行上。上例的有效计算分别涉及四份与十六份专家权重，工作集不同，缓存和 HBM 访问也要跟着看。
+把输入按专家展开，一边是四组 `[256,H]`，另一边是十六组 `[64,H]`。算子在每组里使用对应专家的权重，不能把十六个不同专家的输入直接合成同一个专家的大矩阵。
+
+M 较大时，一份专家权重可以被更多行复用；M 较小时，读权重、安排分组和处理尾块的成本分摊到更少行上。上例分别需要四份与十六份专家权重，实际访问的数据集合也随之改变，所以还要查看缓存和 HBM 访问。
 
 这不意味着四个大组一定更快。分组变多也可能提供更多并行任务，较大的单组还可能改变 tiling 与分核策略；Grouped GEMM 通常也不会简单地为每位专家各启动一次独立 kernel。应当从真实算子看到它怎样调度，而不能把活跃专家数直接当成启动次数。
 
@@ -96,7 +98,7 @@ M 较大时，一份专家权重可以被更多行使用；M 较小时，权重�
 
 真实准备阶段可能包含当前 rank 的 Attention、路由、permute、量化或 Host 提交依赖。Attention DP 下，各 rank 在 MoE 前处理的本地请求和上下文长度也可能不同。专家接收计数描述不了这些工作，即使 MoE 内部已经完全均衡，前面的慢端仍会传递到后续通信。
 
-因此，profiling 中至少要把“何时开始等”“数据何时就绪”“通信何时实际推进”“专家计算何时结束”连起来。Host 函数返回、设备任务完成和跨 rank 进入下一阶段，是不同事件。通信 duration 里包含的等待，也不能再作为一项独立开销重复加到 forward 上。
+读 profiling 时，可以先从专家 GEMM 的起点往前追：它在等哪份 dispatch 结果，这份数据何时准备好，发送端又被什么工作挡住。在图里的例子中，这条链最后指向 rank 1 的准备阶段。通信条带中已经包含的等待，应留在该区间内解释，统计完整 forward 时再按依赖计算，避免重复相加。
 
 跨主机比较开始时间时还要校准时钟；没有校准，就先用同一条 trace 里的关联与事件依赖建立关系，不能直接把两份绝对时间戳相减。计时范围怎样闭合，可以参照[设备区间与时间线分析](npu-timeline-gaps-and-recoverable-speedup.md)。
 
@@ -137,9 +139,9 @@ M 较大时，一份专家权重可以被更多行使用；M 较小时，权重�
 python examples/moe-equal-token-counts-unequal-latency/count_examples.py --output results
 ```
 
-输出包含 [count_profiles.csv](../../assets/moe-equal-token-counts-unequal-latency/data/count_profiles.csv)、[dependency_timeline.csv](../../assets/moe-equal-token-counts-unequal-latency/data/dependency_timeline.csv) 和 [checks.json](../../assets/moe-equal-token-counts-unequal-latency/data/checks.json)。[下载示例包](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/moe-equal-token-counts-unequal-latency/examples.zip)，固定源码与证据范围见[evidence.json](../../assets/moe-equal-token-counts-unequal-latency/evidence.json)。这些输出复算文章里的形状和依赖，不生成设备性能预测。
+输出包含 [count_profiles.csv](../../assets/moe-equal-token-counts-unequal-latency/data/count_profiles.csv)、[dependency_timeline.csv](../../assets/moe-equal-token-counts-unequal-latency/data/dependency_timeline.csv) 和 [checks.json](../../assets/moe-equal-token-counts-unequal-latency/data/checks.json)。[下载示例包](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/moe-equal-token-counts-unequal-latency/examples.zip)，固定源码与证据范围见[evidence.json](../../assets/moe-equal-token-counts-unequal-latency/evidence.json)。这些输出可以逐项核对分组形状、块容量和时间线依赖。
 
-下一次再遇到“专家收到一样多，某张卡却更慢”，先把同一轮的专家向量和阶段结束时间摆在一起。慢在专家计算里，就查分组与执行形状；慢在进入计算以前，就沿数据和依赖往前找。这样才知道下一次迁移到底有没有东西可改善。
+下一次再遇到“收到一样多却更慢”，先保留同一轮的完整专家计数向量，再对齐 dispatch、GEMM 和 combine 的结束时间。若 GEMM 本身更长，就检查每专家 M 与真实执行形状；若 GEMM 开始得更晚，就沿输入就绪关系往前找。找到慢端出现在哪一步之后，再决定是否继续调整专家位置。
 
 修改迁移路径或布局以后，怎样核对数据与真实模型输出，见[权重搬完没报错，怎样证明模型还在算对的东西？](eplb-weight-migration-correctness.md)。
 

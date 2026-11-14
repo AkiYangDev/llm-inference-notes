@@ -45,6 +45,8 @@
 
 关键在中间那一行：**B 已经收到，前台仍然使用 A。** “收到权重”和“启用新布局”是两个状态。
 
+这时前台若又收到一个选择 A 的 token，仍按旧路由读取原槽位里的 A；接收缓冲中的 B 暂时不参加计算。等本轮旧计算结束，并且各 rank 满足提交条件，前台才把 B 写进实际槽位、切换对应映射。缓冲区让“准备新数据”和“开始用新数据”可以分开安排。
+
 vLLM 的后台 worker 就沿着这条路径工作：计算新映射，调用 `transfer_layer()` 把一层的新数据准备到 `expert_buffer`，等待相应 stream 的写入完成，再发布 `pending_result`。这份结果里包含层号、新映射、迁移元数据和一个消费确认事件。[后台 worker](https://github.com/vllm-project/vllm/blob/0fab1aa459bd5bdfee4950f6a8752870e71810cb/vllm/distributed/eplb/async_worker.py#L163-L224)与[结果对象](https://github.com/vllm-project/vllm/blob/0fab1aa459bd5bdfee4950f6a8752870e71810cb/vllm/distributed/eplb/rebalance_execute.py#L48-L66)明确区分了这两步。
 
 它发布结果以后，也不能立刻往同一个缓冲区写下一层。前台还要从这里复制 B；后台过早复用，就会把前台尚未读取的数据覆盖掉。所以这一层形成一个往返交接：
@@ -105,7 +107,7 @@ HIXL 的传输又使用自己的内部 stream，不能只依靠 EPLB stream 上�
 
 该 Ascend 版本把就绪 all-reduce 做成流水：本轮提交异步检查，后续一轮读取上一轮结果。代码仍会对上一份 `work` 调用 `wait()`，并累计 `_eplb_foreground_wait_ms`。这比“每轮都立即等本轮检查”多了重叠机会，却没有保证等待永远为零。如果上一份检查仍未完成，前台还是会等。[流水式就绪检查](https://github.com/vllm-project/vllm-ascend/blob/d476b009777343b1b5e4a3550e4a34f43108ed8e/vllm_ascend/distributed/eplb/eplb_state.py#L689-L724)保留了这个明确的计时位置。
 
-所以，后台持续几十毫秒，并不要求前台停几十毫秒；前台每轮都能继续，也不代表它完全没付出协调和提交成本。
+因此，前台的时间账要单独列出来：检查是否就绪用了多久，真正安装权重和刷新路由用了多久，是否因上一轮检查未完成而等待。后台传输持续多久，则是另一项记录。两条时间线有了对应事件，才能看见到底藏住了多少传输，又留下了多少前台工作。
 
 统计整理也要计入这笔账。所读 vLLM 的 `rearrange()` 会先把物理负载整理成逻辑专家负载，执行跨 rank 归约，再复制一份统计快照供后台使用，最后用事件唤醒 worker。Ascend 的自定义统计分支也在收集全局统计后才发布快照。后台计算布局和搬运，并没有把这些前置操作一并移走。[上游统计与发布](https://github.com/vllm-project/vllm/blob/0fab1aa459bd5bdfee4950f6a8752870e71810cb/vllm/distributed/eplb/eplb_state.py#L904-L940)、[快照交接](https://github.com/vllm-project/vllm/blob/0fab1aa459bd5bdfee4950f6a8752870e71810cb/vllm/distributed/eplb/eplb_state.py#L1077-L1093)和[Ascend 统计入口](https://github.com/vllm-project/vllm-ascend/blob/d476b009777343b1b5e4a3550e4a34f43108ed8e/vllm_ascend/distributed/eplb/eplb_state.py#L621-L649)能分别看到这条顺序。
 
@@ -149,7 +151,7 @@ vLLM 的这份实现会检查异步重排是否还在进行；上轮没有结束
 
 我会先检查提交过程是否正确，再看它有没有省时间。正确性上，至少要能沿一层对齐：使用哪份旧映射，哪些源权重被读取，接收缓冲何时写完，各 rank 何时同意提交，模型权重与后端路由何时更新，以及缓冲什么时候允许复用。
 
-这里的“全部就绪”也不能忽略错误。如果一个后台 worker 已经失败，其他 rank 把它当成“再等等就能准备好”，前台可能永远沿用旧布局。所读 vLLM 实现在就绪归约中同时汇总后台异常标记，发现任一 rank 失败便报错。故障恢复属于另一套生命周期，不能用等待循环代替。
+就绪协议还需要区分“仍在传输”和“已经失败”。前者可以继续沿用旧布局并稍后检查，后者若一直当作未就绪处理，前台就可能永久停留在旧状态。所读 vLLM 实现在就绪归约中同时汇总后台异常标记，任一 rank 失败便报告错误，把问题交给故障处理流程。
 
 性能证据则需要放在同一段服务时间里：
 
@@ -167,11 +169,11 @@ vLLM 的这份实现会检查异步重排是否还在进行；上轮没有结束
 
 我们此前采到的 P 端 665.44 ms、D 端 515.90 ms，是另一份 SGLang 实验中 updater 的 CPU 标注范围，见[一轮 EPLB 更新的时间](eplb-update-time-breakdown.md)。那份实测用于分析同步 updater 的组成；这里的 25 ms 与 2 ms 是独立的教学设定，用来推演传输怎样与推理重叠。异步服务的实际收益，需要由上述同负载对照给出。
 
-最终应当同时报告：一次更新从开始到完全生效花多久，它给前台增加了多少时间，以及新布局随后省下多少计算。异步可以让第一项变长、第二项变短，这种变化本身很合理。只有把第三项和真实请求延迟一起放回来，才能决定这次后台搬运是否值得。
+最终把三段时间放在一起：从触发到最后一层采用新布局，前台为协调和提交额外花的时间，以及新布局随后节省的计算。后台可以慢慢传，让整轮安装持续更久，同时减少前台的集中停顿；若安装拖得太久，新布局又可能错过热点。服务结果取决于这两种影响，以及重叠期间正常 forward 是否被争用拖慢。
 
 ### 配套示例与源码依据
 
-[CPU 交接示例](../../examples/async-eplb-foreground-wait/async_handoff_demo.py)使用两段小数组演示提前改写权重、提前切换映射和安全提交，并复算图中的五轮时间线。它不创建设备线程，不模拟通信后端，也不会产生服务性能测量：
+[CPU 交接示例](../../examples/async-eplb-foreground-wait/async_handoff_demo.py)使用两段小数组演示提前改写权重、提前切换映射和安全提交，并复算图中的五轮时间线。脚本在 CPU 上逐步执行数据交接，并输出各检查点的数组内容与时间线算术：
 
 ```bash
 python examples/async-eplb-foreground-wait/async_handoff_demo.py --output results
