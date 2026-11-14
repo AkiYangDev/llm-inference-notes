@@ -112,3 +112,5 @@ python examples/eplb-weight-migration-correctness/migration_checks.py --output r
 评审一条迁移优化时，我希望最后拿到的材料能连成一条具体路径：哪位逻辑专家去了哪里，哪些张量与状态一起改变，更新后的真实执行读到了什么，固定输入与最终任务表现是否符合预期。某一层失败，就沿这一层往下定位，而不是用“还能正常聊天”结束验证。
 
 固定输入以后，batch 和计算路径仍可能影响数值。怎样区分舍入、路由变化和真正的实现错误，见[同样的输入，换个 batch，为什么答案会变？](same-prompt-different-batch-numerics.md)。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

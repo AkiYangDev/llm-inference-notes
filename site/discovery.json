@@ -1,7 +1,7 @@
 {
   "featured": [
+    "docs/distributed/eplb-study-guide.md",
     "docs/fundamentals/prefill-vs-decode-performance.md",
-    "docs/sglang/sglang-ascend-request-lifecycle.md",
     "docs/performance/decode-fast-throughput-limited-by-prefill.md"
   ],
   "guides": [

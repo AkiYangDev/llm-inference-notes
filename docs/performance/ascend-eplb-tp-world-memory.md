@@ -175,3 +175,5 @@ return tp_group.device_group
 完整服务记录来自 2026-10-29 的 `f6ad2f4f922d0df111dc66153f543a453267455c`，包含启动过程和 512 请求后的同进程通信。独立实验执行于 2026-10-30，使用 PyTorch 2.10.0+cpu、torch_npu 2.10.0.post6、Ascend 910C，提取了当时工作区的通信选项、单层迁移、staging 实现；冻结标识为 `f6d3a584ce239d4cbc713996663a7de181d3bfdc6f4862bf52a6dc1e75efee65`。工作区基于 `796ec868`，包含当时的 staging 优化，各源文件校验值随数据保留。
 
 [证据说明](../../assets/ascend-eplb-tp-world-memory/evidence.json)交代测量口径和源码校验值，[通信实验 CSV](../../assets/ascend-eplb-tp-world-memory/memory-per-rank.csv)保留逐 rank、逐阶段读数，[OFF 后续激活记录](../../assets/ascend-eplb-tp-world-memory/off-late-results.json)记录完整服务后续通信。文中的均值和范围均可从各自测点重算。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

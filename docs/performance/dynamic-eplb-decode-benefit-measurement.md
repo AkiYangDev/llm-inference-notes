@@ -161,3 +161,5 @@ I 控制多久检查一次，W 决定保存多少记录；该版正窗口配置�
 当时真实 AISBench 终端截图为 [OFF](https://raw.githubusercontent.com/AkiYangDev/sglang/226d98f58db4402a79c8ce9b2ae8e6aabd9a0232/eplb-aisbench-20261029/OFF_native_result_retake.jpg)、[ON](https://raw.githubusercontent.com/AkiYangDev/sglang/226d98f58db4402a79c8ce9b2ae8e6aabd9a0232/eplb-aisbench-20261029/ON_native_result_retake.jpg)，对应 [OFF CSV](https://github.com/AkiYangDev/sglang/blob/226d98f58db4402a79c8ce9b2ae8e6aabd9a0232/eplb-aisbench-20261029/OFF_native_stable.csv)、[ON CSV](https://github.com/AkiYangDev/sglang/blob/226d98f58db4402a79c8ce9b2ae8e6aabd9a0232/eplb-aisbench-20261029/ON_native_stable.csv)。客户端指标的算法见 [AISBench whole、native、TPOT 和 ITL](aisbench-whole-native-tpot-itl.md)。
 
 整服务吞吐提高、平均 TPOT 却变差时，可接着看[平均 TPOT 变差了，吞吐却提高了：这两个指标为什么不矛盾？](tpot-worse-throughput-better.md)，其中使用另一组已公开 OFF/ON 数据分析流水线负载与延迟取舍。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

@@ -148,3 +148,5 @@ TopK 后处理、gatherer、accumulator 已经分别具备屏蔽、计数、窗�
 实验于 2026-10-31 执行，统计实现来自 `950433a6fdb7c378c132f6cf38fba95d47e3f30e`，工厂链接固定在后续整理版 `9f037d73`。环境为 PyTorch 2.10.0+cpu、torch_npu 2.10.0.post6、sgl-kernel-npu 2026.9.0、DeepEP `1.0.0+00db6cd6.cann.9.1.0.b243`。使用 Ascend 910C，2 ranks、64 experts、TopK 8、hidden size 7168，每 rank 分配 8 行。
 
 [完整实验记录](../../assets/deepep-received-vs-valid-routes/deepep-counts.json)保留逐专家接收向量、有效 TopK 向量、图回放和 combine 校验结果、原材料校验值，[汇总 CSV](../../assets/deepep-received-vs-valid-routes/count-summary.csv)可重算各表。各 rank 回执都存了同一份全局归约向量，读取一份即可，不能把两个副本再相加。公开材料另存于[固定提交的数据目录](https://github.com/AkiYangDev/sglang/blob/b091064f791ab77afd47b9ffb2e8f49b58dd4c67/eplb-micro-20261031/deepep_counts.json)。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

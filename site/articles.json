@@ -1,4 +1,91 @@
 {
+  "docs/distributed/eplb-study-guide.md": {
+    "summary": "从专家身份与热度表，到物理存储、通信、显存和完整服务验证；按问题阅读，也可沿 PR 提交追踪优化取舍。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "阅读指南"
+    ],
+    "topic": "distributed",
+    "role": "reference"
+  },
+  "docs/distributed/eplb-routing-to-migration-primer.md": {
+    "summary": "用四位逻辑专家、六个物理槽位，串起路由、副本、统计、规划、权重迁移与映射提交。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "MoE",
+      "专家副本"
+    ],
+    "topic": "distributed",
+    "role": "entry"
+  },
+  "docs/distributed/eplb-count-npz-reading.md": {
+    "summary": "实际读取两份原始 NPZ，解释记录、层、物理槽位、rank 归约、角色与布局映射，并提供完整脚本与数据。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "路由统计",
+      "NPZ"
+    ],
+    "topic": "distributed",
+    "role": "advanced"
+  },
+  "docs/performance/eplb-prefill-decode-parameter-design.md": {
+    "summary": "把 I、W 换成各端真实执行节奏，解释 chunk、DSpark、窗口新鲜度与周期更新的收益成本。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "PD分离",
+      "参数设计"
+    ],
+    "topic": "performance",
+    "role": "advanced"
+  },
+  "docs/distributed/eplb-minimize-weight-movement.md": {
+    "summary": "区分原槽位保留、本地重排和远端引入，对照现有 updater 的复用与源保护，再看稳定槽位的收益范围。",
+    "category": "分布式工程",
+    "tags": [
+      "EPLB",
+      "权重迁移",
+      "P2P"
+    ],
+    "topic": "distributed",
+    "role": "deep"
+  },
+  "docs/performance/eplb-speedup-upper-bound.md": {
+    "summary": "从关键路径占比、负载均衡到更新摊销和 PD 瓶颈，用可运行算例判断下一轮优化是否值得测。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "性能模型",
+      "关键路径"
+    ],
+    "topic": "performance",
+    "role": "advanced"
+  },
+  "docs/performance/eplb-migration-byte-budget.md": {
+    "summary": "从主权重、scale、NZ padding 与目标 rank 去重，算到最忙发送端和共享链路的传输时间下限。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "P2P",
+      "带宽"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
+  "docs/performance/eplb-pr49701-commit-evolution.md": {
+    "summary": "逐项核对 PR #49701 的实际提交，说明存储重构、ND 兼容、TP 复用、FP4 格式，以及后来撤回的扩展与小优化。",
+    "category": "性能分析",
+    "tags": [
+      "EPLB",
+      "工程演进",
+      "源码评审"
+    ],
+    "topic": "performance",
+    "role": "deep"
+  },
   "docs/performance/same-prompt-different-batch-numerics.md": {
     "summary": "固定 seed 并没有固定浮点归约顺序。用可运行加法与选择边界算例，解释 batch、路由和生成分叉，并给出固定前缀寻找第一处差异的方法。",
     "category": "性能分析",

@@ -1,0 +1,11 @@
+{
+  "source_archive": "https://github.com/AkiYangDev/sglang/releases/download/eplb-spec-decode-window200-20261105/eplb-spec-decode-200-records.zip",
+  "archive_sha256": "b1875e2ae0a205619946e3944c7e3bef678d272d1c264bb43f265500220ab24b",
+  "measured_date": "2026-10-31",
+  "ranks_already_summed": 16,
+  "source_commit": "59565b93d17a6e5f176b64335b1978993a223e5f",
+  "community_lifecycle_commit": "de7055f59645ebe03784b0980e1f222789f468a3",
+  "numpy_version": "2.4.1",
+  "matplotlib_version": "3.10.8",
+  "figure_scope": "First 32 appends, layer 0, all 272 slots, common linear scale; no interpolation. Independent runs, not token-aligned."
+}

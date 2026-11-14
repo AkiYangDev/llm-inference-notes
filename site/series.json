@@ -1,5 +1,147 @@
 [
   {
+    "id": "eplb",
+    "title": "EPLB：统计、迁移与服务收益",
+    "topic": "distributed",
+    "items": [
+      {
+        "path": "docs/distributed/eplb-study-guide.md",
+        "label": "EPLB 专题入口",
+        "description": "入门与方案演进 · 从专家身份与热度表，到物理存储、通信、显存和完整服务验证；按问题阅读，也可沿 PR 提交追踪优化取舍。"
+      },
+      {
+        "path": "docs/distributed/eplb-routing-to-migration-primer.md",
+        "label": "先读懂一次专家搬家",
+        "description": "入门与方案演进 · 用四位逻辑专家、六个物理槽位，串起路由、副本、统计、规划、权重迁移与映射提交。"
+      },
+      {
+        "path": "docs/distributed/eplb-redundant-expert-allocation.md",
+        "label": "16 个冗余槽位怎么分",
+        "description": "入门与方案演进 · 用四专家、两冗余跑完副本分配和固定槽 packing，再对照真实层的 16 步分配，说明热点为何能连续拿到副本。"
+      },
+      {
+        "path": "docs/performance/ascend-910c-prefill-scenario-static-eplb.md",
+        "label": "先看场景静态布局",
+        "description": "入门与方案演进 · 从路由计数生成 P 端静态布局，再看副本怎样分发。14.18% 对照来自布局和 static dispatch 的组合。"
+      },
+      {
+        "path": "docs/performance/eplb-pr49701-commit-evolution.md",
+        "label": "沿 PR 看优化如何收敛",
+        "description": "入门与方案演进 · 逐项核对 PR #49701 的实际提交，说明存储重构、ND 兼容、TP 复用、FP4 格式，以及后来撤回的扩展与小优化。"
+      },
+      {
+        "path": "docs/distributed/eplb-count-npz-reading.md",
+        "label": "把原始热度表读明白",
+        "description": "统计与决策 · 实际读取两份原始 NPZ，解释记录、层、物理槽位、rank 归约、角色与布局映射，并提供完整脚本与数据。"
+      },
+      {
+        "path": "docs/performance/deepep-received-vs-valid-routes.md",
+        "label": "区分接收与有效路由",
+        "description": "统计与决策 · 两个 Rank 各收 64 条，真实需求却是 64/0。用双设备通信和计数图说明 padding 如何掩盖专家倾斜。"
+      },
+      {
+        "path": "docs/performance/eplb-zero-record-rolling-window.md",
+        "label": "零记录为何改变窗口",
+        "description": "统计与决策 · draft 的零记录不增加负载，却挤掉 target 历史。沿 200 次真实入窗与七轮离线复算追踪副本决策的变化。"
+      },
+      {
+        "path": "docs/performance/expert-count-export-hccl-gloo.md",
+        "label": "统计怎样可靠导出",
+        "description": "统计与决策 · 生成已结束，导出专家计数却让 scheduler 退出。沿错误栈解释 CPU/Gloo 导出为何能保持原统计含义。"
+      },
+      {
+        "path": "docs/performance/eplb-prefill-decode-parameter-design.md",
+        "label": "P / D 参数怎样分开选",
+        "description": "统计与决策 · 把 I、W 换成各端真实执行节奏，解释 chunk、DSpark、窗口新鲜度与周期更新的收益成本。"
+      },
+      {
+        "path": "docs/performance/dynamic-eplb-stale-hotspots.md",
+        "label": "I、W 与旧热点",
+        "description": "统计与决策 · 同一次热点切换，W1000 看到 B 占 58%，W4000 只看到 22%。沿固定源码和可运行算例，解释统计、检查、布局生效与收益持续时间。"
+      },
+      {
+        "path": "docs/distributed/eplb-skip-unnecessary-migration.md",
+        "label": "哪些更新可以跳过",
+        "description": "统计与决策 · 更新间隔到了，也未必搬权重。沿均衡度、整层布局、本地 Rank 参与三个判断，看流程在哪里提前结束。"
+      },
+      {
+        "path": "docs/distributed/ascend-dynamic-eplb-weight-migration.md",
+        "label": "历史 ND 迁移流程",
+        "description": "存储与正确性 · 跟随 B、C 两个专家交换槽位，追踪暂存、ND 工作区、通信等待与映射更新，再核迁移的功能和性能代价。"
+      },
+      {
+        "path": "docs/performance/ascend-eplb-memory-bounded-staging.md",
+        "label": "临时张量为何堆积",
+        "description": "存储与正确性 · Python 逐层处理，临时张量仍在跨 stream 积压。沿地址和完成事件解释每芯片缓存驻留减少 P 约 3.05、D 约 3.32 GiB 的修复。"
+      },
+      {
+        "path": "docs/performance/ascend-eplb-physical-storage-migration.md",
+        "label": "保留物理字节搬运",
+        "description": "存储与正确性 · 迁移专家时，保留 NZ 和量化打包字节，怎样省去整层转换与写回？从共享存储视图、padding 和 scratch 讲到完整服务的显存与耗时对照。"
+      },
+      {
+        "path": "docs/performance/graph-capture-tensor-storage.md",
+        "label": "图怎样读取原位权重",
+        "description": "存储与正确性 · 用 copy_、重新赋值和 set_ 三个小例子，讲清图地址、静态缓冲、输出复用，以及 NPU 显式参数更新与 EPLB 原位迁移。"
+      },
+      {
+        "path": "docs/performance/ascend-eplb-tp-world-memory.md",
+        "label": "TP 与 WORLD 的资源",
+        "description": "存储与正确性 · 从小统计触发几个 GiB 占用查起，分开核对 OFF 的 TP 初始化和 WORLD 的额外激活，比较四次 16-rank 实验。"
+      },
+      {
+        "path": "docs/distributed/eplb-minimize-weight-movement.md",
+        "label": "同样的布局怎样少搬",
+        "description": "存储与正确性 · 区分原槽位保留、本地重排和远端引入，对照现有 updater 的复用与源保护，再看稳定槽位的收益范围。"
+      },
+      {
+        "path": "docs/performance/async-eplb-foreground-wait.md",
+        "label": "后台搬运与前台提交",
+        "description": "存储与正确性 · 后台收到新专家后，前台仍要等跨 rank 就绪、原位写入并切换路由。对照 vLLM 与 Ascend 源码，解释消费事件、缓冲复用和真正能隐藏的迁移时间。"
+      },
+      {
+        "path": "docs/performance/eplb-weight-migration-correctness.md",
+        "label": "迁移后怎样证明算对",
+        "description": "存储与正确性 · 迁移返回成功之后，还要查主权重与 scale、逻辑专家映射、图读取和固定状态输出。结合故障注入示例、真实存储探针与 GSM8K 证据，解释每种检查的作用。"
+      },
+      {
+        "path": "docs/performance/eplb-migration-byte-budget.md",
+        "label": "把迁移字节算清",
+        "description": "性能与服务验证 · 从主权重、scale、NZ padding 与目标 rank 去重，算到最忙发送端和共享链路的传输时间下限。"
+      },
+      {
+        "path": "docs/performance/eplb-update-time-breakdown.md",
+        "label": "一次 update 的时间拆解",
+        "description": "性能与服务验证 · 沿一次真实更新，拆开统计、布局、权重迁移和元数据，结合 43 层 trace 解释嵌套计时、P2P 与更新成本的摊销。"
+      },
+      {
+        "path": "docs/performance/eplb-speedup-upper-bound.md",
+        "label": "先算整轮收益上限",
+        "description": "性能与服务验证 · 从关键路径占比、负载均衡到更新摊销和 PD 瓶颈，用可运行算例判断下一轮优化是否值得测。"
+      },
+      {
+        "path": "docs/performance/eplb-expert-kv-memory-budget.md",
+        "label": "副本与 KV 怎样取舍",
+        "description": "性能与服务验证 · 16 个冗余槽位会在每层增加多少常驻权重，又挤掉多少 KV？沿 DeepSeek 维度、可运行算例与真实显存对照，解释 batch、吞吐和运行余量的取舍。"
+      },
+      {
+        "path": "docs/performance/moe-equal-token-counts-unequal-latency.md",
+        "label": "计数相同仍有慢端",
+        "description": "性能与服务验证 · 路由总数相同，专家分组、尾块和通信到达时间仍可不同。沿 NPU GroupedMatmul、EPLB 均衡度与可运行算例，定位真正的慢端。"
+      },
+      {
+        "path": "docs/performance/dynamic-eplb-decode-benefit-measurement.md",
+        "label": "固定 forward 测 Decode",
+        "description": "性能与服务验证 · 普通 forward、target verify 与稳态吞吐测到不同收益。结合固定 A/B/A、热态成本和完整服务配对解释测量边界。"
+      },
+      {
+        "path": "docs/performance/tpot-worse-throughput-better.md",
+        "label": "吞吐与 TPOT 一起看",
+        "description": "性能与服务验证 · 从真实 EPLB OFF/ON 对照出发，用请求时间分解、D 端负载和原生接受率解释吞吐与 TPOT 的不同变化，并讨论延迟门槛下该怎么选配置。"
+      }
+    ]
+  },
+  {
     "id": "ai-infra-foundation",
     "title": "AI Infra 基础",
     "topic": "fundamentals",
@@ -185,56 +327,6 @@
         "description": "从 Decode 小 M、FRACTAL_NZ 与 Expert M_e 解释 INT8 性能能否兑现"
       },
       {
-        "path": "docs/distributed/ascend-dynamic-eplb-weight-migration.md",
-        "label": "动态EPLB权重迁移",
-        "description": "从NZ暂存与P2P等待走到原位权重和路由映射的一致提交"
-      },
-      {
-        "path": "docs/performance/ascend-eplb-physical-storage-migration.md",
-        "label": "EPLB 直接搬物理存储",
-        "description": "从 NZ↔ND 中转改为原地址字节视图，解释专家边界、异步生命周期与实测成本"
-      },
-      {
-        "path": "docs/performance/graph-capture-tensor-storage.md",
-        "label": "图捕获与权重地址",
-        "description": "从 Python 名字与设备地址，走到静态输入、输出复用和 EPLB 原位更新"
-      },
-      {
-        "path": "docs/performance/eplb-update-time-breakdown.md",
-        "label": "一轮 EPLB 更新的时间账",
-        "description": "从 manager 日志与真实 trace，拆开 CPU 范围、设备通信和更新的摊销成本"
-      },
-      {
-        "path": "docs/performance/dynamic-eplb-stale-hotspots.md",
-        "label": "EPLB 会追着旧热点跑吗",
-        "description": "从 I/W 与记录年龄，走到热点切换后的响应延迟和迁移回本"
-      },
-      {
-        "path": "docs/performance/async-eplb-foreground-wait.md",
-        "label": "异步 EPLB 与前台等待",
-        "description": "沿接收缓冲、跨 rank 就绪、原位提交和消费确认，看迁移怎样与推理重叠"
-      },
-      {
-        "path": "docs/performance/eplb-expert-kv-memory-budget.md",
-        "label": "专家副本与 KV 预算",
-        "description": "先算每 rank 常驻字节，再看本地缓存容量、实际 batch 和整服务收益"
-      },
-      {
-        "path": "docs/performance/moe-equal-token-counts-unequal-latency.md",
-        "label": "相同路由数与不同耗时",
-        "description": "从每专家 M 维分组和尾块，走到通信到达时间与阶段慢端"
-      },
-      {
-        "path": "docs/performance/eplb-weight-migration-correctness.md",
-        "label": "迁移后模型还在算对吗",
-        "description": "把字节、量化参数、映射、图存储与固定状态数值、任务结果连起来验证"
-      },
-      {
-        "path": "docs/performance/tpot-worse-throughput-better.md",
-        "label": "吞吐提高，TPOT 为什么变差",
-        "description": "把单请求推进速度与 PD 流水线产出放在同一组证据里分析"
-      },
-      {
         "path": "docs/performance/same-prompt-different-batch-numerics.md",
         "label": "换 batch，为什么答案会变",
         "description": "区分同路径确定性与跨 batch 不变性，定位第一个数值和生成分叉"
@@ -275,11 +367,6 @@
         "path": "docs/performance/128k-prefix-cache-remaining-costs.md",
         "label": "前缀命中之后的剩余成本",
         "description": "从新Query、压缩历史和PD交接解释90%命中为何不等于90%时间节省"
-      },
-      {
-        "path": "docs/performance/expert-count-export-hccl-gloo.md",
-        "label": "专家计数怎样可靠导出",
-        "description": "沿HCCL故障、CPU归约与循环槽位理解统计的完整生命周期"
       }
     ]
   },

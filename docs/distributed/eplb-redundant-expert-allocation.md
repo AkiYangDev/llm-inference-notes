@@ -156,3 +156,5 @@ Router 若为一个 token 选中 E0、E2，dispatch 为 E0 选一份物理权重
 源码固定为 `bf8fa56315f86388f1941ff2358ea0fccec65741` 的 [`deepseek.py`](https://github.com/AkiYangDev/sglang/blob/bf8fa56315f86388f1941ff2358ea0fccec65741/python/sglang/srt/eplb/eplb_algorithms/deepseek.py)，该文件由 SGLang 从 DeepSeek EPLB 引入。上述推演只覆盖非分层求和策略；分层版本先安排专家组到节点，再在节点内复制、放置，还受分组和拓扑约束。
 
 小例子在 PyTorch 2.5.1+cpu 上执行原函数。真实输入取自 2026-10-30 的 DeepSeek-V4-Flash W8A8、Ascend 910C 服务，本次仅 CPU 复算。[小例子的全部中间结果](../../assets/eplb-redundant-expert-allocation/toy-allocation.json)、[真实层 32 的负载与 16 步分配](../../assets/eplb-redundant-expert-allocation/real-layer32.json)和[源码与原始材料校验值](../../assets/eplb-redundant-expert-allocation/evidence.json)保留了表格、映射和逐步结果，可逐项对照。
+
+[返回 EPLB 专题](eplb-study-guide.md)。

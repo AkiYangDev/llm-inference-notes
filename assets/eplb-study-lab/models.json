@@ -1,0 +1,171 @@
+{
+  "scope": "Teaching arithmetic only. No inferred accelerator latency or new service experiment.",
+  "primer": {
+    "logical_load": {
+      "A": 120,
+      "B": 50,
+      "C": 20,
+      "D": 10
+    },
+    "original_rank_load": [
+      130,
+      70
+    ],
+    "replicated_rank_load": [
+      100,
+      100
+    ]
+  },
+  "movement": {
+    "local_permutation": {
+      "changed_slots": 6,
+      "remote_new_experts_per_rank": [
+        [],
+        []
+      ],
+      "remote_payload_bytes": 0
+    },
+    "stable_slot_layout": [
+      [
+        "A",
+        "B",
+        "C"
+      ],
+      [
+        "D",
+        "E",
+        "F"
+      ]
+    ],
+    "remote_swap": {
+      "changed_slots": 2,
+      "remote_new_experts_per_rank": [
+        [
+          "D"
+        ],
+        [
+          "A"
+        ]
+      ],
+      "remote_payload_bytes": 83886080
+    },
+    "sender_only_case": {
+      "changed_slots": 2,
+      "remote_new_experts_per_rank": [
+        [],
+        [
+          "A"
+        ],
+        [
+          "C"
+        ]
+      ],
+      "remote_payload_bytes": 83886080
+    },
+    "snapshot_permutation": [
+      "B",
+      "A"
+    ],
+    "overwritten_source": [
+      "B",
+      "B"
+    ]
+  },
+  "uniform_clock_assumption": [
+    {
+      "role": "P",
+      "step_ms": 80,
+      "I": 50,
+      "W": 50,
+      "nominal_check_s": 4.0,
+      "nominal_history_s": 4.0
+    },
+    {
+      "role": "D",
+      "step_ms": 35,
+      "I": 1000,
+      "W": 1000,
+      "nominal_check_s": 35.0,
+      "nominal_history_s": 35.0
+    },
+    {
+      "role": "D",
+      "step_ms": 35,
+      "I": 4000,
+      "W": 1000,
+      "nominal_check_s": 140.0,
+      "nominal_history_s": 35.0
+    },
+    {
+      "role": "D",
+      "step_ms": 35,
+      "I": 4000,
+      "W": 4000,
+      "nominal_check_s": 140.0,
+      "nominal_history_s": 140.0
+    }
+  ],
+  "critical_path_bounds": [
+    {
+      "affected_fraction": 0.1,
+      "local_speedup": 2,
+      "new_time_fraction": 0.9500000000000001,
+      "rate_gain_pct": 5.263157894736836
+    },
+    {
+      "affected_fraction": 0.3,
+      "local_speedup": 2,
+      "new_time_fraction": 0.85,
+      "rate_gain_pct": 17.647058823529417
+    },
+    {
+      "affected_fraction": 0.6,
+      "local_speedup": 2,
+      "new_time_fraction": 0.7,
+      "rate_gain_pct": 42.85714285714286
+    },
+    {
+      "affected_fraction": 0.3,
+      "local_speedup": null,
+      "new_time_fraction": 0.7,
+      "rate_gain_pct": 42.85714285714286
+    },
+    {
+      "affected_fraction": 0.3,
+      "local_speedup": 1.6,
+      "new_time_fraction": 0.8875,
+      "rate_gain_pct": 12.676056338028175
+    }
+  ],
+  "amortization": {
+    "update_ms": 600,
+    "saved_per_forward_ms": 0.2,
+    "break_even_forwards": 3000,
+    "interval_forwards": 4000,
+    "original_interval_ms": 140000,
+    "net_saved_ms": 200.0
+  },
+  "byte_budget": {
+    "H": 4096,
+    "I": 2048,
+    "main_bytes_per_element": 1,
+    "teaching_scale_rule": "One FP32 scale per output channel",
+    "main_bytes": 25165824,
+    "scale_bytes": 32768,
+    "expert_bytes": 25198592,
+    "new_remote_experts_per_layer": 8,
+    "layers": 20,
+    "global_sent_payload_bytes": 4031774720,
+    "shared_channel_assumption_GiB_s": 25,
+    "shared_channel_lower_bound_ms": 150.1953125,
+    "independent_senders_GiB": [
+      1.5,
+      0.5,
+      0.5,
+      0.5
+    ],
+    "sender_rate_GiB_s": 20,
+    "slowest_sender_lower_bound_ms": 75,
+    "aggregate_only_estimate_ms": 37.5
+  }
+}

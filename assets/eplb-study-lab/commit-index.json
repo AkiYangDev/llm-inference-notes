@@ -1,0 +1,120 @@
+{
+  "pr": "https://github.com/sgl-project/sglang/pull/49701",
+  "merged_at": "2026-11-13T09:02:37Z",
+  "merge_commit": "6c29aa5954a0dab3c2f8a23835fabda5d759947d",
+  "functional_snapshot": "2914be608009b65099c4c52ba118a597bf1b1421",
+  "commits": [
+    {
+      "sha": "4c9a1c241910381465e239382c0b2daa08f5644f",
+      "title": "Preserve expert storage in NPU EPLB migration",
+      "date": "2026-11-11T02:34:43Z",
+      "url": "https://github.com/sgl-project/sglang/commit/4c9a1c241910381465e239382c0b2daa08f5644f",
+      "final_scope_note": "Physical storage path retained."
+    },
+    {
+      "sha": "d84edc66ecac7c5f14a1511638e22c1120e24485",
+      "title": "Retain TP reuse and pipeline-stage EPLB for NPU",
+      "date": "2026-11-11T02:53:46Z",
+      "url": "https://github.com/sgl-project/sglang/commit/d84edc66ecac7c5f14a1511638e22c1120e24485",
+      "final_scope_note": "TP reuse retained; PP extension later removed."
+    },
+    {
+      "sha": "a9430a31deb48b113958231adf72a46508539dc0",
+      "title": "Clarify NPU EPLB weight views and storage metadata",
+      "date": "2026-11-11T03:03:06Z",
+      "url": "https://github.com/sgl-project/sglang/commit/a9430a31deb48b113958231adf72a46508539dc0",
+      "final_scope_note": "Adapter naming and writable-view contract retained."
+    },
+    {
+      "sha": "a3cff6d26ddb3fa1a0117da7d2d8be4bb5192c9b",
+      "title": "Remove redundant sorting and flattening before EPLB P2P batches",
+      "date": "2026-11-11T03:07:04Z",
+      "url": "https://github.com/sgl-project/sglang/commit/a3cff6d26ddb3fa1a0117da7d2d8be4bb5192c9b",
+      "final_scope_note": "Sorting/flattening cleanup reverted by 08865d168."
+    },
+    {
+      "sha": "83a220985a1b4c1ca583c7b57a565a48c8315edb",
+      "title": "Fix packed ND expert views and PP detailed record ranks",
+      "date": "2026-11-11T03:21:02Z",
+      "url": "https://github.com/sgl-project/sglang/commit/83a220985a1b4c1ca583c7b57a565a48c8315edb",
+      "final_scope_note": "Packed ND byte-unit fix retained; PP detail changes later removed."
+    },
+    {
+      "sha": "a4d6fc316811b3ef063b31fd79c010002e3cd16b",
+      "title": "Clarify NPU EPLB storage checks and rank roles",
+      "date": "2026-11-11T03:35:34Z",
+      "url": "https://github.com/sgl-project/sglang/commit/a4d6fc316811b3ef063b31fd79c010002e3cd16b",
+      "final_scope_note": "Storage and rank explanations refined; PP scope later removed."
+    },
+    {
+      "sha": "95bdcc05db9551724c3983a716cc5c2df1e95f22",
+      "title": "Simplify EPLB rank setup and peer translation",
+      "date": "2026-11-11T07:04:18Z",
+      "url": "https://github.com/sgl-project/sglang/commit/95bdcc05db9551724c3983a716cc5c2df1e95f22",
+      "final_scope_note": "Intermediate rank/peer simplification during the PP implementation."
+    },
+    {
+      "sha": "4802d2bb2ceecb792ae678d4dc148cf7d4b30417",
+      "title": "Remove pipeline-parallel support from NPU EPLB changes",
+      "date": "2026-11-11T07:17:35Z",
+      "url": "https://github.com/sgl-project/sglang/commit/4802d2bb2ceecb792ae678d4dc148cf7d4b30417",
+      "final_scope_note": "PP support and offline merge script removed from this PR."
+    },
+    {
+      "sha": "e60cc1a994492a36ef07f54c3640d5d6b64b1756",
+      "title": "Clarify NPU expert migration flow and storage contracts",
+      "date": "2026-11-11T07:30:25Z",
+      "url": "https://github.com/sgl-project/sglang/commit/e60cc1a994492a36ef07f54c3640d5d6b64b1756",
+      "final_scope_note": "Migration flow and storage contracts clarified."
+    },
+    {
+      "sha": "08865d168dc0c3b7946f46a93ef3854b4612311f",
+      "title": "Simplify NPU expert migration planning and writeback",
+      "date": "2026-11-11T13:10:15Z",
+      "url": "https://github.com/sgl-project/sglang/commit/08865d168dc0c3b7946f46a93ef3854b4612311f",
+      "final_scope_note": "Removed NPU-specific indexing/coalescing and restored common P2P bookkeeping."
+    },
+    {
+      "sha": "e7fc1cddf5dcb92b1b074301f2d748629293718f",
+      "title": "Fix NPU EPLB support for packed NZ storage formats",
+      "date": "2026-11-12T06:23:04Z",
+      "url": "https://github.com/sgl-project/sglang/commit/e7fc1cddf5dcb92b1b074301f2d748629293718f",
+      "final_scope_note": "Packed NZ format acceptance extended; strict NZ block checks unchanged."
+    },
+    {
+      "sha": "240f795fb2cb3166640c7369e23ed3360f504a9c",
+      "title": "Gate NPU EPLB communication warmup at bootstrap",
+      "date": "2026-11-12T07:16:26Z",
+      "url": "https://github.com/sgl-project/sglang/commit/240f795fb2cb3166640c7369e23ed3360f504a9c",
+      "final_scope_note": "NPU EPLB warmup gated at bootstrap."
+    },
+    {
+      "sha": "30dcac29821bd3e89d0c54dbf62aa8d369e48073",
+      "title": "Merge remote-tracking branch 'refs/remotes/sglang-upstream/main' into feat/npu-eplb-storage-only-20261111",
+      "date": "2026-11-12T07:18:46Z",
+      "url": "https://github.com/sgl-project/sglang/commit/30dcac29821bd3e89d0c54dbf62aa8d369e48073",
+      "final_scope_note": "Merge of mainline; not a standalone benchmark result."
+    },
+    {
+      "sha": "a29d6456262fff2651988c895ab04d4e593d8649",
+      "title": "Name NPU EPLB storage and warmup constants",
+      "date": "2026-11-12T07:23:12Z",
+      "url": "https://github.com/sgl-project/sglang/commit/a29d6456262fff2651988c895ab04d4e593d8649",
+      "final_scope_note": "Format, dimension and warmup constants named."
+    },
+    {
+      "sha": "2914be608009b65099c4c52ba118a597bf1b1421",
+      "title": "Check WORLD size before reusing NPU TP for EPLB",
+      "date": "2026-11-12T07:29:30Z",
+      "url": "https://github.com/sgl-project/sglang/commit/2914be608009b65099c4c52ba118a597bf1b1421",
+      "final_scope_note": "TP reuse requires PP=1 and TP spanning WORLD."
+    },
+    {
+      "sha": "851f5f31bd7fbe2210bcc2bd46f118ccc83fe725",
+      "title": "Merge branch 'main' into feat/npu-eplb-storage-only-20261111",
+      "date": "2026-11-13T02:46:14Z",
+      "url": "https://github.com/sgl-project/sglang/commit/851f5f31bd7fbe2210bcc2bd46f118ccc83fe725",
+      "final_scope_note": "Final mainline merge; not a standalone benchmark result."
+    }
+  ]
+}

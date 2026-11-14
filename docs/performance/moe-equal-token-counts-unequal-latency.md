@@ -142,3 +142,5 @@ python examples/moe-equal-token-counts-unequal-latency/count_examples.py --outpu
 下一次再遇到“专家收到一样多，某张卡却更慢”，先把同一轮的专家向量和阶段结束时间摆在一起。慢在专家计算里，就查分组与执行形状；慢在进入计算以前，就沿数据和依赖往前找。这样才知道下一次迁移到底有没有东西可改善。
 
 修改迁移路径或布局以后，怎样核对数据与真实模型输出，见[权重搬完没报错，怎样证明模型还在算对的东西？](eplb-weight-migration-correctness.md)。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

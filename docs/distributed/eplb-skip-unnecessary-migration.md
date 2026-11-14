@@ -165,3 +165,5 @@ threshold 评估当前均衡程度，I 决定多久检查一次，也影响收�
 社区部分固定在 SGLang [`fb9846d3`](https://github.com/sgl-project/sglang/tree/fb9846d3e2d66811b372b28c73229e9dbbf54288)，Ascend 整层与本地参与筛选固定在 [`9f4ee2cc`](https://github.com/AkiYangDev/sglang/blob/9f4ee2cc165b2072890fac5c90afa2a4550fefce/python/sglang/srt/hardware_backend/npu/eplb.py)，对应写作时仍在评审的 [PR #47574](https://github.com/sgl-project/sglang/pull/47574)。这份 Ascend 版本的 manager 与本文引用的社区 manager 内容一致。
 
 阈值、历史平均、生成器边界和布局例子，都在 PyTorch 2.5.1+cpu 上抽取原函数执行。验证含 10 个阈值分支、4 个指标返回空值的配置、5 个负载评分、8 个 Ascend 参与选择、4 个本地权重更新，以及弹性状态保留参与的对照。输入是教学数据，没有跨设备传输或服务吞吐测试。[完整 CPU 结果](../../assets/eplb-skip-unnecessary-migration/cpu-examples.json)和[源码校验信息](../../assets/eplb-skip-unnecessary-migration/evidence.json)随文保存。
+
+[返回 EPLB 专题](eplb-study-guide.md)。

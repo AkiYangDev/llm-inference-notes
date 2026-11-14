@@ -180,3 +180,5 @@ python examples/async-eplb-foreground-wait/async_handoff_demo.py --output result
 结果见[交接检查](../../assets/async-eplb-foreground-wait/data/handoff_checks.json)、[时间线 CSV](../../assets/async-eplb-foreground-wait/data/timeline.csv)和[完成时间](../../assets/async-eplb-foreground-wait/data/completion.csv)。[evidence.json](../../assets/async-eplb-foreground-wait/evidence.json)记录固定源码版本、引用位置与算例前提。下载[可运行示例包](https://raw.githubusercontent.com/AkiYangDev/llm-inference-notes/main/assets/async-eplb-foreground-wait/examples.zip)，解压后可在包的根目录执行上面的命令。
 
 常驻专家副本与临时迁移缓冲会怎样挤占 KV，见[多放一份专家，还是多留一点 KV Cache？显存应该花在哪里](eplb-expert-kv-memory-budget.md)。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

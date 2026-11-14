@@ -164,3 +164,5 @@ P 第 4 层估计 2.4649→1.0176，43 层中位 1.3868→1.0134。同 N160/C64/
 **数据与实现范围**：[实验对照](../../assets/ascend-910c-prefill-static-eplb/measurements.csv)保留whole/native、N/C/r及缺失标记；[离线拟合数值](../../assets/ascend-910c-prefill-static-eplb/offline-fit-summary.json)保留两种场景的槽数、分割语义、逐层理想估计和拟合脚本指纹。教学布局不属于实测。严格proposal接受率及native接受计数未完整观测，均标`NOT_OBSERVED`；正文AL采用whole输出/verify定义，包含首token与输出截断影响。本文没有重新压测、采集或修改服务，也不公开内部地址、账号、请求正文及原始计数文件。
 
 运行中迁移的权重与路由顺序，见[动态 EPLB 一文](../distributed/ascend-dynamic-eplb-weight-migration.md)。它沿固定版本解释迁移与生效，并单独报告动态方案的成本和验证范围。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

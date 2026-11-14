@@ -184,3 +184,5 @@ if self._disable_all or is_draft:
 200 条入窗实验执行于 2026-10-31，基于 `59565b93d17a6e5f176b64335b1978993a223e5f`，无保护组生命周期与社区 `de7055f59645ebe03784b0980e1f222789f468a3` 相同。完整 PD 同次运行对照来自 2026-10-30 的 `bf8fa56315f86388f1941ff2358ea0fccec65741`。前者检查入窗组成，后者检查更新时的决策差异。
 
 [实验说明与校验值](../../assets/eplb-zero-record-rolling-window/evidence.json)给出配置和测量来源，[400 条入窗记录 CSV](../../assets/eplb-zero-record-rolling-window/append-records.csv)保留两组来源、forward ID、槽位与全局计数，[七轮副本分配对照](../../assets/eplb-zero-record-rolling-window/replica-comparison.json)可重算逐层额外副本差异。教学例子的对照在[窗口计算结果](../../assets/eplb-zero-record-rolling-window/window-examples.json)中，旧生命周期、环形窗口、均衡度公式可对应[固定社区源码](https://github.com/AkiYangDev/sglang/blob/de7055f59645ebe03784b0980e1f222789f468a3/python/sglang/srt/eplb/expert_distribution.py)查看。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

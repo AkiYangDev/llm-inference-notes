@@ -1,8 +1,15 @@
 # 性能分析
 
+[EPLB 专题：从专家热度、权重迁移到服务收益](../distributed/eplb-study-guide.md)，按问题查阅，也可顺着系列阅读。
+
 时延、吞吐、显存、算子、通信与 Profiling。这里重点回答的不只是“哪个 Kernel 最慢”，而是如何从源码建立性能假设，再用 Ascend 的真实运行数据与 Timeline 验证。
 
 ## 调优实践
+
+- [P 端和 D 端，为什么不能照抄同一套 EPLB 参数？](eplb-prefill-decode-parameter-design.md)：把 I、W 换成各端真实执行节奏，解释 chunk、DSpark、窗口新鲜度与周期更新的收益成本。
+- [EPLB 的收益上限在哪？先看 MoE 占了多少时间](eplb-speedup-upper-bound.md)：从关键路径占比、负载均衡到更新摊销和 PD 瓶颈，用可运行算例判断下一轮优化是否值得测。
+- [一次更新到底搬了多少数据？从专家字节账到 P2P 时间下限](eplb-migration-byte-budget.md)：从主权重、scale、NZ padding 与目标 rank 去重，算到最忙发送端和共享链路的传输时间下限。
+- [一个 EPLB PR 怎样收敛：沿提交看存储、兼容性与优化取舍](eplb-pr49701-commit-evolution.md)：逐项核对 PR #49701 的实际提交，说明存储重构、ND 兼容、TP 复用、FP4 格式，以及后来撤回的扩展与小优化。
 
 - [同样的输入，换个 batch，为什么答案会变？](same-prompt-different-batch-numerics.md)：从浮点加法走到 logits、MoE 路由与固定前缀对照，区分舍入和真实数据缺陷。
 

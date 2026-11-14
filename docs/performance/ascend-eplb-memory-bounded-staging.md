@@ -1,5 +1,7 @@
 # 一次 Ascend EPLB 显存优化：为什么逐层处理，仍然堆出了多层临时张量？
 
+> 版本提示：本文记录旧 ND 中转路径及其问题。后续实现改用[原权重物理字节视图](ascend-eplb-physical-storage-migration.md)，阅读当前方案请接着看该文。
+
 动态 EPLB 搬专家权重，我们已经改成逐层转换、迁移、写回，也没有用列表存下所有层的中转结果。一次更新做完，分配器的 reserved 仍然上涨几个 GiB。
 
 追到张量地址以后才看清，Python 已经在提交下一层，设备还在使用上一层的存储。局部引用离开作用域，allocator 收到了释放请求，但跨 stream 的工作没结束，旧块还不能复用。后面的层继续申请，没用完的临时存储就堆了起来。
@@ -198,3 +200,5 @@ CPU 多等了一下，更新耗时需要实际量到设备完成。这里用 EPL
 数据可从[汇总与来源校验值](../../assets/ascend-eplb-memory-bounded-staging/evidence.json)、[小实验](../../assets/ascend-eplb-memory-bounded-staging/micro-results.json)、[逐 rank 缓存](../../assets/ascend-eplb-memory-bounded-staging/memory-per-rank.csv)、[逐轮更新](../../assets/ascend-eplb-memory-bounded-staging/update-per-rank.csv)和[迁移峰值](../../assets/ascend-eplb-memory-bounded-staging/lifecycle-peaks.csv)复核。专家身份、物理槽位与迁移算法见[动态专家负载均衡怎样安全地迁移权重](../distributed/ascend-dynamic-eplb-weight-migration.md)，那篇固定了更早版本，这里记录其后的临时存储问题。
 
 后续的[物理存储迁移重构](ascend-eplb-physical-storage-migration.md)进一步去掉了整层 NZ↔ND 中转：为原权重建立字节视图，保留迁移算法需要的 scratch。这两次优化分别处理临时张量的排队数量与临时存储本身，实验版本和结果也分别记录。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

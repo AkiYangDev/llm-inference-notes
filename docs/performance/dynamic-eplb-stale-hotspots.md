@@ -221,3 +221,5 @@ python examples/dynamic-eplb-stale-hotspots/check_source_contracts.py --repo /pa
 核对依据、固定版本和算例前提保存在 [evidence.json](../../assets/dynamic-eplb-stale-hotspots/evidence.json)。时间线图是教学示意，CPU 算例也没有产生真实服务吞吐数据。
 
 后台迁移如何影响前台停顿与布局生效时间，见[让 EPLB 在后台搬权重，前台推理就不用等了吗？](async-eplb-foreground-wait.md)。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

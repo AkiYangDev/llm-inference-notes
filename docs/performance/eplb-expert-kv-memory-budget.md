@@ -155,3 +155,5 @@ python examples/eplb-expert-kv-memory-budget/memory_budget.py --output results
 下一次看到“更新后 forward 快了几个百分点”，可以继续追问两个具体数：这个工作集还剩多少 KV 余量，稳定运行时实际 batch 保住了多少。把这两个数和更新成本放到一起，才知道那份专家副本有没有花对地方。
 
 计数已经均匀、执行却仍有慢端时，可以接着看[专家收到的 token 一样多，为什么有的卡还是更慢？](moe-equal-token-counts-unequal-latency.md)。
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

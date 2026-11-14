@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="460" viewBox="0 0 1100 460" role="img" aria-labelledby="title desc">
+<title id="title">逻辑专家、副本与物理槽位</title><desc id="desc">Router 选 A 与 C，A 有三个物理副本但本次只选择其中一份执行，C 在另一个槽位。EPLB 改变放置而不是逻辑专家身份。</desc>
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#5c7789" stroke-width="1.5"/></marker></defs>
+<rect width="1100" height="460" rx="16" fill="#f4f7fb"/>
+<g font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" fill="#18354c">
+<text x="35" y="45" font-size="25" font-weight="700">先选逻辑专家，再找物理副本</text>
+<text x="35" y="78" font-size="18">A 有三份，不表示一条 token 要把 A 算三遍；副本用于分担不同 token 的工作。</text>
+<rect x="35" y="130" width="270" height="170" rx="10" fill="#dfebf2" stroke="#a9bfd0"/>
+<text x="60" y="172" font-size="22" font-weight="700">Router：选 A、C</text>
+<text x="60" y="215" font-size="18">A 的候选位置：0、3、5</text><text x="60" y="251" font-size="18">C 的候选位置：2</text>
+<path d="M305 215 H358" stroke="#5c7789" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="390" y="132" font-size="20" font-weight="700">rank 0</text><text x="390" y="274" font-size="20" font-weight="700">rank 1</text>
+<g stroke="#a9bfd0"><rect x="390" y="151" width="190" height="68" rx="8" fill="#c9dfee"/><rect x="595" y="151" width="190" height="68" rx="8" fill="#eadfcd"/><rect x="800" y="151" width="190" height="68" rx="8" fill="#d7e8db"/>
+<rect x="390" y="293" width="190" height="68" rx="8" fill="#c9dfee"/><rect x="595" y="293" width="190" height="68" rx="8" fill="#eadfcd"/><rect x="800" y="293" width="190" height="68" rx="8" fill="#c9dfee"/></g>
+<g font-size="22" text-anchor="middle"><text x="485" y="192">slot 0：A</text><text x="690" y="192">slot 1：B</text><text x="895" y="192">slot 2：C</text>
+<text x="485" y="334">slot 3：A</text><text x="690" y="334">slot 4：D</text><text x="895" y="334">slot 5：A</text></g>
+<text x="390" y="243" font-size="17">教学选择：本次使用 slot 0 的 A 与 slot 2 的 C</text>
+<text x="35" y="412" font-size="18">正常 forward：搬 token 激活去计算。更新布局：另外搬专家权重并提交新映射。</text>
+<text x="35" y="442" font-size="16">身份与位置关系示意；具体副本选择由部署的 dispatch 策略决定。</text></g></svg>

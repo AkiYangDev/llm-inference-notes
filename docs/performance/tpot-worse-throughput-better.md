@@ -151,3 +151,5 @@ EPLB 迁移有成本，这个问题应该查。但只看到 ON 比 OFF 多了 up
 ```bash
 python examples/tpot-worse-throughput-better/compare_metrics.py --output calculations.json
 ```
+
+[返回 EPLB 专题](../distributed/eplb-study-guide.md)。

@@ -1,0 +1,45 @@
+{
+  "commit": "2914be608009b65099c4c52ba118a597bf1b1421",
+  "files": [
+    {
+      "path": "python/sglang/srt/eplb/eplb_manager.py",
+      "sha256": "731e16230a38dafaa855663762be658f7a06997bba1ff75482359027e870c18e",
+      "lines": 353
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location_updater.py",
+      "sha256": "179f7f2c778d2b6560cdea78a20ea8e31e9fa072a0d3e429838baaa6b6ce8a79",
+      "lines": 697
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location_dispatch.py",
+      "sha256": "19ff435b1ede3a336336c611a444e9767388c96a16093deded4a627bed69c027",
+      "lines": 206
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_distribution.py",
+      "sha256": "eba2e8e5e2f4bc4236faf704db13ea93db207d34f177f09b0b0ea5cad6b523fc",
+      "lines": 1211
+    },
+    {
+      "path": "python/sglang/srt/eplb/expert_location.py",
+      "sha256": "bddf805b123d9fab352f526ce2d2001e97e799da23ffc54722537bff4e8b7ea6",
+      "lines": 884
+    },
+    {
+      "path": "python/sglang/srt/arg_groups/parallel_hook.py",
+      "sha256": "c9def33d9195fddc0693f0ecfe6bd5c0db72fb5efdf2c88f65f75213cdfac433",
+      "lines": 851
+    },
+    {
+      "path": "python/sglang/srt/hardware_backend/npu/eplb.py",
+      "sha256": "13c2a2bb32ea9426ac7ee1bbf72c01a13cc69212901a60d8c4f54715cbe521a9",
+      "lines": 432
+    }
+  ],
+  "scope": "Fixed source snapshot and CPU teaching calculations. No new device experiments.",
+  "measured_sources": [
+    "https://github.com/AkiYangDev/sglang/releases/tag/eplb-spec-decode-window200-20261105",
+    "https://github.com/AkiYangDev/sglang/releases/tag/eplb-pr49701-update-memory-20261111"
+  ]
+}

@@ -1,5 +1,7 @@
 # 分布式推理
 
+[EPLB 专题：从专家热度、权重迁移到服务收益](eplb-study-guide.md)，按问题查阅，也可顺着系列阅读。
+
 TP、DP、EP、PP 与数据归属、通信正确性。
 
 ## 入门与坐标系
@@ -15,6 +17,10 @@ TP、DP、EP、PP 与数据归属、通信正确性。
 - [多卡投机解码：Draft、Verify 与 Accept 怎样保持一致](deepseek-v4-speculative-distributed-consistency-source-analysis.md)：拆分 speculative control、logical layout 与 model-data collective，比较 DSpark SpecTpSync 与 EAGLE Accept broadcast。
 
 ## 专家布局与运行时迁移
+
+- [EPLB 到底改了什么？从一次路由到一次专家搬家](eplb-routing-to-migration-primer.md)：用四位逻辑专家、六个物理槽位，串起路由、副本、统计、规划、权重迁移与映射提交。
+- [热度表到底记录了什么？把 NPZ 里的专家计数读明白](eplb-count-npz-reading.md)：实际读取两份原始 NPZ，解释记录、层、物理槽位、rank 归约、角色与布局映射，并提供完整脚本与数据。
+- [同样的新布局，怎样少搬一点专家权重？](eplb-minimize-weight-movement.md)：区分原槽位保留、本地重排和远端引入，对照现有 updater 的复用与源保护，再看稳定槽位的收益范围。
 
 - [到了更新间隔，为什么不一定要搬专家？](eplb-skip-unnecessary-migration.md)：从均衡度阈值到整层及本卡筛选，解释更新流程的退出条件。
 - [16 个冗余专家怎么分：从专家热度到副本，再到物理布局](eplb-redundant-expert-allocation.md)：用完整小例子走过逐次副本分配、固定槽位 packing 和映射生成，再核对真实 16 个额外位置的分配。

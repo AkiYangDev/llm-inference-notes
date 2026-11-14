@@ -18,6 +18,12 @@ Engineering notes on LLM inference, with an emphasis on SGLang and Ascend NPU.
 | [投机解码](docs/speculative-decoding/README.md) | Draft / Verify、接受逻辑与缓存状态 |
 | [性能分析](docs/performance/README.md) | TTFT、TPOT、吞吐、显存与 Profiling |
 
+## EPLB 专题
+
+[从专家热度、权重迁移到服务收益](docs/distributed/eplb-study-guide.md)：按入门、统计与决策、存储与正确性、性能验证串起文章，也可沿 PR #49701 的实际提交查看优化与取舍。
+
+本轮新增：路由与副本入门、NPZ 原始计数读取、P/D 参数设计、减少搬运、收益上限、迁移字节预算，以及 commit 演进复盘。专题内附原始数据、图表和可运行算例。
+
 ## 专题文章
 
 - [同样的输入，换个 batch，为什么答案会变？](docs/performance/same-prompt-different-batch-numerics.md)：用可运行舍入算例解释 seed、确定性与 batch 不变性，再沿第一处分叉定位精度问题。
